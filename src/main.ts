@@ -58,6 +58,7 @@ const hudCanvas = document.getElementById('hud-canvas') as HTMLCanvasElement;
 const overlay = document.getElementById('overlay') as HTMLElement;
 const stageFade = document.getElementById('stage-fade') as HTMLElement;
 const mobileMenuButton = document.getElementById('mobile-menu-button') as HTMLButtonElement | null;
+const controlModeField = document.getElementById('control-mode-field') as HTMLElement | null;
 const controlModeSelect = document.getElementById('control-mode') as HTMLSelectElement | null;
 const gyroRecalibrateButton = document.getElementById('gyro-recalibrate') as HTMLButtonElement | null;
 const gyroHelper = document.getElementById('gyro-helper') as HTMLElement | null;
@@ -646,6 +647,8 @@ function bindVolumeControl(
 function renderFrame(now: number) {
   requestAnimationFrame(renderFrame);
 
+  updateGyroHelper();
+
   if (!running || !viewerInput || !camera) {
     lastTime = now;
     return;
@@ -679,7 +682,6 @@ function renderFrame(now: number) {
   resizeCanvasToDisplaySize(canvas);
   resizeCanvasToDisplaySize(hudCanvas);
   hudRenderer.resize(hudCanvas.width, hudCanvas.height);
-  updateGyroHelper();
 
   if (game.loadingStage) {
     const hudDelta = now - lastHudTime;
@@ -735,8 +737,12 @@ function updateGyroHelper() {
   if (!controlModeSelect || !gyroHelper || !gyroHelperFrame) {
     return;
   }
-  const showGyro = controlModeSelect.value === 'gyro';
+  const hasGyroOption = Array.from(controlModeSelect.options).some((opt) => opt.value === 'gyro');
+  const showGyro = hasGyroOption && controlModeSelect.value === 'gyro';
   gyroHelper.classList.toggle('hidden', !showGyro);
+  if (controlModeField) {
+    controlModeField.classList.toggle('hidden', controlModeSelect.options.length === 0);
+  }
   if (!showGyro) {
     return;
   }
@@ -745,8 +751,10 @@ function updateGyroHelper() {
     gyroHelperFrame.style.opacity = '0.5';
     return;
   }
-  const x = clamp(-sample.beta, -30, 30);
-  const y = clamp(sample.gamma, -30, 30);
+  const deltaBeta = sample.baselineSet ? sample.beta - sample.baseBeta : sample.beta;
+  const deltaGamma = sample.baselineSet ? sample.gamma - sample.baseGamma : sample.gamma;
+  const x = clamp(-deltaBeta, -30, 30);
+  const y = clamp(deltaGamma, -30, 30);
   gyroHelperFrame.style.opacity = '1';
   gyroHelperFrame.style.setProperty('--gyro-x', `${x}deg`);
   gyroHelperFrame.style.setProperty('--gyro-y', `${y}deg`);

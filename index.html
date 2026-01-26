@@ -174,56 +174,60 @@
     if (!field || !select || (!hasTouch && !hasGyro)) {
       field?.classList.add('hidden');
     } else {
-      field.classList.remove('hidden');
-
       const options = [];
       if (hasGyro) options.push({ value: 'gyro', label: 'Gyro' });
       if (hasTouch) options.push({ value: 'touch', label: 'Touchscreen' });
 
-      select.replaceChildren(...options.map((opt) => {
-        const el = document.createElement('option');
-        el.value = opt.value;
-        el.textContent = opt.label;
-        return el;
-      }));
-
-      const key = 'smb_control_mode';
-      const saved = localStorage.getItem(key);
-      if (saved && options.some((o) => o.value === saved)) {
-        select.value = saved;
+      if (options.length === 0) {
+        field.classList.add('hidden');
       } else {
-        select.value = hasTouch ? 'touch' : 'gyro';
-        localStorage.setItem(key, select.value);
-      }
+        field.classList.remove('hidden');
+        select.innerHTML = '';
+        for (const opt of options) {
+          const el = document.createElement('option');
+          el.value = opt.value;
+          el.textContent = opt.label;
+          select.appendChild(el);
+        }
 
-      const syncGyroUi = () => {
-        const showGyro = select.value === 'gyro';
-        gyroButton?.classList.toggle('hidden', !showGyro);
-        gyroHelper?.classList.toggle('hidden', !showGyro);
-      };
+        const key = 'smb_control_mode';
+        const saved = localStorage.getItem(key);
+        if (saved && options.some((o) => o.value === saved)) {
+          select.value = saved;
+        } else {
+          select.value = hasTouch ? 'touch' : 'gyro';
+          localStorage.setItem(key, select.value);
+        }
 
-      syncGyroUi();
+        const syncGyroUi = () => {
+          const showGyro = select.value === 'gyro';
+          gyroButton?.classList.toggle('hidden', !showGyro);
+          gyroHelper?.classList.toggle('hidden', !showGyro);
+        };
 
-      select.addEventListener('change', async () => {
-        let next = select.value;
+        syncGyroUi();
 
-        // iOS: gyro requires a user-gesture permission prompt.
-        if (next === 'gyro' && typeof window.DeviceOrientationEvent?.requestPermission === 'function') {
-          try {
-            const result = await window.DeviceOrientationEvent.requestPermission();
-            if (result !== 'granted') {
+        select.addEventListener('change', async () => {
+          let next = select.value;
+
+          // iOS: gyro requires a user-gesture permission prompt.
+          if (next === 'gyro' && typeof window.DeviceOrientationEvent?.requestPermission === 'function') {
+            try {
+              const result = await window.DeviceOrientationEvent.requestPermission();
+              if (result !== 'granted') {
+                next = hasTouch ? 'touch' : 'gyro';
+                select.value = next;
+              }
+            } catch {
               next = hasTouch ? 'touch' : 'gyro';
               select.value = next;
             }
-          } catch {
-            next = hasTouch ? 'touch' : 'gyro';
-            select.value = next;
           }
-        }
 
-        localStorage.setItem(key, next);
-        syncGyroUi();
-      });
+          localStorage.setItem(key, next);
+          syncGyroUi();
+        });
+      }
     }
   </script>
 

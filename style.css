@@ -126,7 +126,7 @@ body.gameplay-active {
 }
 
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 .panel {
@@ -209,13 +209,13 @@ body.gameplay-active {
 
 .gyro-helper-ghost {
   background: rgba(255, 255, 255, 0.06);
-  transform: rotateX(60deg) rotateZ(45deg);
+  transform: rotateX(60deg);
 }
 
 .gyro-helper-device {
   background: rgba(255, 159, 28, 0.2);
   border-color: rgba(255, 159, 28, 0.65);
-  transform: rotateX(calc(60deg + var(--gyro-x))) rotateZ(45deg) rotateY(var(--gyro-y));
+  transform: rotateX(calc(60deg + var(--gyro-x))) rotateY(var(--gyro-y));
   transition: transform 80ms linear;
 }
 

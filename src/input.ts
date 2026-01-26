@@ -169,7 +169,7 @@ export class Input {
 
         const MAX_ANGLE = 25;
         const x = (gamma - this.gyro.baseGamma) / MAX_ANGLE;
-        const y = (this.gyro.baseBeta - beta) / MAX_ANGLE;
+        const y = (beta - this.gyro.baseBeta) / MAX_ANGLE;
         this.gyro.value.x = clamp(x, -1, 1);
         this.gyro.value.y = clamp(y, -1, 1);
       },
