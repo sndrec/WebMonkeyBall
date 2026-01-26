@@ -711,7 +711,8 @@ function updateControlModeSettingsVisibility() {
   }
   const hasOptions = controlModeSelect.options.length > 0;
   const pads = navigator.getGamepads?.() ?? navigator.webkitGetGamepads?.();
-  const hasController = !!pads && Array.from(pads).some((pad) => pad?.connected);
+  const hasConnectedPad = !!pads && Array.from(pads).some((pad) => pad?.connected);
+  const hasController = hasConnectedPad || !!game.input?.getActiveGamepad?.();
   const showSettings = hasOptions || hasController;
   controlModeSettings.classList.toggle('hidden', !showSettings);
   if (!hasOptions) {
