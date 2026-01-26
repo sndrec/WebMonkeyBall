@@ -18,6 +18,29 @@
   <canvas id="hud-canvas"></canvas>
   <div id="stage-fade" class="stage-fade"></div>
   <div id="overlay" class="overlay">
+    
+    <div class="credits-menu" id="credits-menu">
+      <button class="credits-label" id="credits-toggle" type="button" aria-haspopup="true" aria-expanded="false">
+        Credits
+      </button>
+
+      <div class="credits-panel" id="credits-panel">
+        <div>
+          <a href="https://ko-fi.com/twilightpb" target="_blank" rel="noopener">TwilightPB</a>
+          <span>— Porting</span>
+        </div>
+        <div>
+          <a href="https://complexplane.dev" target="_blank" rel="noopener">ComplexPlane</a>
+          <span>— Renderer</span>
+        </div>
+        <div>
+          camthesaxman <span>— Decompilation</span>
+        </div>
+        <div>
+          Amusement Vision <span>— Original game</span>
+        </div>
+      </div>
+    </div>
     <div class="panel">
       <h1>Super Monkey Ball 1</h1>
       <p>Standard gameplay (Beginner / Advanced / Expert).</p>
@@ -112,8 +135,9 @@
         <button id="resume" class="ghost" disabled>Resume</button>
       </div>
       <div class="hint">
-        <div>Controls: WASD / Arrow Keys = tilt, R = reset stage, N = skip stage, M = toggle render mode</div>
-        <div>Run a local server (example: <code>python -m http.server</code> from repo root).</div>
+        <div>Controls: WASD / Arrow Keys = tilt, R = reset stage, N = skip stage</div>
+        <div>If you have a controller plugged in, it should work too.</div>
+        <div>Don't worry about reporting bugs. I probably already know about it - it'll get fixed.</div>
       </div>
     </div>
   </div>
