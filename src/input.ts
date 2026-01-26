@@ -36,7 +36,7 @@ export class Input {
 
     this.gyroSensitivity = 25;
     this.joystickScale = 1;
-    this.inputFalloff = 1.5;
+    this.inputFalloff = 1;
     this.touchPreview = false;
     this.padGate = loadPadGate() ?? DEFAULT_STICK_GATE.map((point) => [point[0], point[1]]);
 

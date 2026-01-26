@@ -1107,7 +1107,7 @@ bindRangeControl(
   inputFalloffInput,
   inputFalloffValue,
   'smb_input_falloff',
-  1.5,
+  1,
   (value) => value.toFixed(2).replace(/\.00$/, ''),
   (value) => {
     game.input?.setInputFalloff?.(value);
@@ -1116,7 +1116,7 @@ bindRangeControl(
 );
 
 updateControlModeSettingsVisibility();
-updateFalloffCurve(game.input?.inputFalloff ?? 1.5);
+updateFalloffCurve(game.input?.inputFalloff ?? 1);
 syncTouchPreviewVisibility();
 
 smb2ModeSelect?.addEventListener('change', () => {
