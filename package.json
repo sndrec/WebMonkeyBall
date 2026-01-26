@@ -9,6 +9,7 @@
     "playwright": "^1.44.0"
   },
   "scripts": {
+    "start-server": "npx http-server --port 27016",
     "build": "esbuild src/main.ts --bundle --format=esm --target=es2022 --outdir=dist --sourcemap --define:process.env.NODE_ENV=\\\"production\\\" --external:gl-matrix",
     "build:watch": "esbuild src/main.ts --bundle --format=esm --target=es2022 --outdir=dist --sourcemap --define:process.env.NODE_ENV=\\\"development\\\" --external:gl-matrix --watch",
     "test:e2e": "node tests/e2e.mjs"
