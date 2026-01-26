@@ -44,6 +44,17 @@ function clamp(value: number, min: number, max: number) {
   return value;
 }
 
+const DEFAULT_PAD_GATE = [
+  [84, 0],
+  [59, 59],
+  [0, 84],
+  [-59, 59],
+  [-84, 0],
+  [-59, -59],
+  [0, -84],
+  [59, -59],
+];
+
 const STAGE_BASE_PATH = STAGE_BASE_PATHS[GAME_SOURCES.SMB1];
 const NAOMI_STAGE_IDS = new Set([
   10, 19, 20, 30, 49, 50, 60, 70, 80, 92, 96, 97, 98, 99, 100, 114, 115, 116, 117, 118, 119, 120,
@@ -68,6 +79,7 @@ const controlModeSettings = document.getElementById('control-mode-settings') as 
 const gyroSettings = document.getElementById('gyro-settings') as HTMLElement | null;
 const touchSettings = document.getElementById('touch-settings') as HTMLElement | null;
 const inputFalloffBlock = document.getElementById('input-falloff-block') as HTMLElement | null;
+const gamepadCalibrationBlock = document.getElementById('gamepad-calibration-block') as HTMLElement | null;
 const gyroSensitivityInput = document.getElementById('gyro-sensitivity') as HTMLInputElement | null;
 const gyroSensitivityValue = document.getElementById('gyro-sensitivity-value') as HTMLOutputElement | null;
 const joystickSizeInput = document.getElementById('joystick-size') as HTMLInputElement | null;
@@ -79,6 +91,10 @@ const inputFalloffPath = document.getElementById('input-falloff-path') as SVGPat
 const inputPreview = document.getElementById('input-preview') as HTMLElement | null;
 const inputRawDot = document.getElementById('input-raw-dot') as HTMLElement | null;
 const inputProcessedDot = document.getElementById('input-processed-dot') as HTMLElement | null;
+const gamepadCalibrationOverlay = document.getElementById('gamepad-calibration') as HTMLElement | null;
+const gamepadCalibrationMap = document.getElementById('gamepad-calibration-map') as HTMLCanvasElement | null;
+const gamepadCalibrationButton = document.getElementById('gamepad-calibrate') as HTMLButtonElement | null;
+const gamepadCalibrationCtx = gamepadCalibrationMap?.getContext('2d') ?? null;
 const startButton = document.getElementById('start') as HTMLButtonElement;
 const resumeButton = document.getElementById('resume') as HTMLButtonElement;
 const difficultySelect = document.getElementById('difficulty') as HTMLSelectElement;
@@ -362,6 +378,11 @@ let lastTime = performance.now();
 let lastRenderTime = lastTime;
 let lastHudTime = lastTime;
 let lastControlModeSettingsCheck = lastTime;
+let calibrationActive = false;
+let calibrationSamples: Array<{ x: number; y: number }> = [];
+let calibrationSectorMax: number[] = new Array(8).fill(0);
+let calibrationGate: number[][] = [];
+let calibrationFallbackGate: number[][] = [];
 let stageLoadToken = 0;
 let renderReady = false;
 let activeGameSource: GameSource = GAME_SOURCES.SMB1;
@@ -734,6 +755,144 @@ function updateInputPreview() {
   placeDot(inputProcessedDot, processed);
 }
 
+function getConnectedGamepad() {
+  const active = game.input?.getActiveGamepad?.();
+  if (active?.connected) {
+    return active;
+  }
+  const pads = navigator.getGamepads?.() ?? navigator.webkitGetGamepads?.();
+  if (!pads) {
+    return null;
+  }
+  for (const pad of pads) {
+    if (pad?.connected) {
+      return pad;
+    }
+  }
+  return null;
+}
+
+function rebuildCalibrationGate() {
+  const sectorAngle = (Math.PI * 2) / 8;
+  calibrationGate = calibrationSectorMax.map((length, i) => {
+    const fallback = calibrationFallbackGate[i] ?? DEFAULT_PAD_GATE[i];
+    const fallbackLength = Math.hypot(fallback[0], fallback[1]);
+    const use = clamp(length > 10 ? length : fallbackLength, 0, 127);
+    const angle = i * sectorAngle;
+    return [Math.cos(angle) * use, Math.sin(angle) * use];
+  });
+}
+
+function drawCalibrationMap() {
+  if (!gamepadCalibrationCtx || !gamepadCalibrationMap) {
+    return;
+  }
+  const { width, height } = gamepadCalibrationMap;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const scale = (Math.min(width, height) / 2 - 14) / 128;
+  gamepadCalibrationCtx.clearRect(0, 0, width, height);
+
+  gamepadCalibrationCtx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+  gamepadCalibrationCtx.lineWidth = 1;
+  gamepadCalibrationCtx.beginPath();
+  gamepadCalibrationCtx.moveTo(centerX, 12);
+  gamepadCalibrationCtx.lineTo(centerX, height - 12);
+  gamepadCalibrationCtx.moveTo(12, centerY);
+  gamepadCalibrationCtx.lineTo(width - 12, centerY);
+  gamepadCalibrationCtx.stroke();
+
+  gamepadCalibrationCtx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+  for (const sample of calibrationSamples) {
+    const x = centerX + sample.x * scale;
+    const y = centerY + sample.y * scale;
+    gamepadCalibrationCtx.fillRect(x - 1, y - 1, 2, 2);
+  }
+
+  if (calibrationGate.length === 8) {
+    gamepadCalibrationCtx.strokeStyle = 'rgba(255, 159, 28, 0.9)';
+    gamepadCalibrationCtx.lineWidth = 2;
+    gamepadCalibrationCtx.beginPath();
+    calibrationGate.forEach((point, index) => {
+      const x = centerX + point[0] * scale;
+      const y = centerY + point[1] * scale;
+      if (index === 0) {
+        gamepadCalibrationCtx.moveTo(x, y);
+      } else {
+        gamepadCalibrationCtx.lineTo(x, y);
+      }
+    });
+    gamepadCalibrationCtx.closePath();
+    gamepadCalibrationCtx.stroke();
+  }
+}
+
+function startGamepadCalibration() {
+  if (!gamepadCalibrationOverlay) {
+    return;
+  }
+  calibrationActive = true;
+  calibrationSamples = [];
+  calibrationSectorMax = new Array(8).fill(0);
+  calibrationFallbackGate = game.input?.getPadGate?.() ?? DEFAULT_PAD_GATE.map((point) => [point[0], point[1]]);
+  calibrationGate = calibrationFallbackGate.map((point) => [point[0], point[1]]);
+  gamepadCalibrationOverlay.classList.remove('hidden');
+  gamepadCalibrationOverlay.setAttribute('aria-hidden', 'false');
+  drawCalibrationMap();
+}
+
+function stopGamepadCalibration() {
+  if (!calibrationActive) {
+    return;
+  }
+  calibrationActive = false;
+  if (calibrationGate.length === 8) {
+    game.input?.setPadGate?.(calibrationGate);
+  }
+  gamepadCalibrationOverlay?.classList.add('hidden');
+  gamepadCalibrationOverlay?.setAttribute('aria-hidden', 'true');
+}
+
+function updateGamepadCalibration() {
+  if (!calibrationActive) {
+    return;
+  }
+  const pad = getConnectedGamepad();
+  if (!pad) {
+    drawCalibrationMap();
+    return;
+  }
+  if (pad.buttons?.some((button) => button.pressed)) {
+    stopGamepadCalibration();
+    return;
+  }
+  const rawX = clamp((pad.axes[0] ?? 0) * 127, -128, 127);
+  const rawY = clamp((pad.axes[1] ?? 0) * 127, -128, 127);
+  const magnitude = Math.hypot(rawX, rawY);
+  if (magnitude > 6) {
+    calibrationSamples.push({ x: rawX, y: rawY });
+    if (calibrationSamples.length > 600) {
+      calibrationSamples.shift();
+    }
+    const sectorAngle = (Math.PI * 2) / 8;
+    let angle = Math.atan2(rawY, rawX);
+    if (angle < 0) {
+      angle += Math.PI * 2;
+    }
+    const sector = Math.floor((angle + sectorAngle / 2) / sectorAngle) % 8;
+    const axisAngle = sector * sectorAngle;
+    const axisX = Math.cos(axisAngle);
+    const axisY = Math.sin(axisAngle);
+    const projection = rawX * axisX + rawY * axisY;
+    const length = Math.abs(projection);
+    if (length > calibrationSectorMax[sector]) {
+      calibrationSectorMax[sector] = length;
+      rebuildCalibrationGate();
+    }
+  }
+  drawCalibrationMap();
+}
+
 function updateControlModeSettingsVisibility() {
   if (!controlModeSelect || !controlModeSettings) {
     return;
@@ -750,6 +909,7 @@ function updateControlModeSettingsVisibility() {
     inputFalloffBlock?.classList.toggle('hidden', !hasController);
     inputFalloffCurveWrap?.classList.toggle('hidden', !hasController);
     inputPreview?.classList.toggle('hidden', !hasController);
+    gamepadCalibrationBlock?.classList.toggle('hidden', !hasController);
     return;
   }
   const mode = controlModeSelect.value;
@@ -760,6 +920,7 @@ function updateControlModeSettingsVisibility() {
   const hideCurve = mode === 'gyro';
   inputFalloffCurveWrap?.classList.toggle('hidden', hideCurve);
   inputPreview?.classList.toggle('hidden', hideCurve);
+  gamepadCalibrationBlock?.classList.toggle('hidden', !hasController);
 }
 
 function maybeUpdateControlModeSettings(now: number) {
@@ -783,6 +944,7 @@ function renderFrame(now: number) {
   updateGyroHelper();
   maybeUpdateControlModeSettings(now);
   updateInputPreview();
+  updateGamepadCalibration();
 
   if (!running || !viewerInput || !camera) {
     lastTime = now;
@@ -976,6 +1138,14 @@ gameSourceSelect?.addEventListener('change', () => {
 controlModeSelect?.addEventListener('change', () => {
   updateControlModeSettingsVisibility();
   syncTouchPreviewVisibility();
+});
+
+gamepadCalibrationButton?.addEventListener('click', () => {
+  startGamepadCalibration();
+});
+
+gamepadCalibrationOverlay?.addEventListener('click', () => {
+  stopGamepadCalibration();
 });
 
 window.addEventListener('gamepadconnected', () => {

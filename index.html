@@ -101,6 +101,9 @@
             A lower value makes joystick input more linear. Higher makes small adjustments more precise.
           </div>
         </div>
+        <div id="gamepad-calibration-block" class="control-mode-block hidden">
+          <button id="gamepad-calibrate" class="ghost compact" type="button">Calibrate Stick</button>
+        </div>
       </div>
       <div id="smb1-fields">
         <label class="field">
@@ -197,6 +200,15 @@
   <button id="mobile-menu-button" class="mobile-menu-button hidden" type="button">
     Level Select
   </button>
+
+  <div id="gamepad-calibration" class="modal hidden" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-card">
+      <h2>Stick Calibration</h2>
+      <p>Move the left stick in slow circles to map the gate. Use the full range.</p>
+      <canvas id="gamepad-calibration-map" width="240" height="240"></canvas>
+      <div class="control-hint">Click anywhere or press any controller button to close.</div>
+    </div>
+  </div>
 
   <script type="module">
     const field = document.getElementById('control-mode-field');

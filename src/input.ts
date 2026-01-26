@@ -38,6 +38,7 @@ export class Input {
     this.joystickScale = 1;
     this.inputFalloff = 1.5;
     this.touchPreview = false;
+    this.padGate = loadPadGate() ?? DEFAULT_STICK_GATE.map((point) => [point[0], point[1]]);
 
     this.touchRoot = document.getElementById('touch-controls');
     this.joystickEl = this.touchRoot?.querySelector?.('.joystick') ?? null;
@@ -399,6 +400,18 @@ export class Input {
     this.inputFalloff = clamp(value, 1, 2);
   }
 
+  setPadGate(points) {
+    if (!Array.isArray(points) || points.length !== 8) {
+      return;
+    }
+    this.padGate = points.map((point) => [point[0], point[1]]);
+    savePadGate(this.padGate);
+  }
+
+  getPadGate() {
+    return this.padGate.map((point) => [point[0], point[1]]);
+  }
+
   setTouchPreview(enabled) {
     this.touchPreview = !!enabled;
     this.syncTouchLayer(this.getControlMode());
@@ -500,7 +513,7 @@ export class Input {
       return null;
     }
 
-    const primary = readPadStick(pad);
+    const primary = readPadStick(pad, this.padGate);
     if (primary.magnitudeSq > GAMEPAD_SWITCH_THRESHOLD) {
       return primary.value;
     }
@@ -510,7 +523,7 @@ export class Input {
       if (!candidate?.connected || candidate.axes.length < 2) {
         continue;
       }
-      const result = readPadStick(candidate);
+      const result = readPadStick(candidate, this.padGate);
       if (result.magnitudeSq > best.magnitudeSq) {
         best = result;
         this.gamepadIndex = candidate.index;
@@ -575,6 +588,46 @@ const DEFAULT_STICK_GATE = [
   [0, -84],
   [59, -59],
 ];
+
+const PAD_GATE_KEY = 'smb_pad_gate';
+
+function loadPadGate() {
+  try {
+    const raw = localStorage.getItem(PAD_GATE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length !== 8) {
+      return null;
+    }
+    const gate = parsed.map((point) => {
+      if (!Array.isArray(point) || point.length !== 2) {
+        return null;
+      }
+      const x = Number(point[0]);
+      const y = Number(point[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return null;
+      }
+      return [x, y];
+    });
+    if (gate.some((point) => point === null)) {
+      return null;
+    }
+    return gate;
+  } catch {
+    return null;
+  }
+}
+
+function savePadGate(gate) {
+  try {
+    localStorage.setItem(PAD_GATE_KEY, JSON.stringify(gate));
+  } catch {
+    // Ignore storage failures.
+  }
+}
 
 const STICK_SHAPE_POINTS = [
   [105, 0],
@@ -652,13 +705,13 @@ function applyStickGate(x, y, gate) {
 
 const GAMEPAD_SWITCH_THRESHOLD = 0.0025;
 
-function readPadStick(pad) {
+function readPadStick(pad, gate) {
   const rawX = pad.axes[0] ?? 0;
   const rawY = pad.axes[1] ?? 0;
   const { x, y } = applyStickGate(
     clamp(Math.round(rawX * 127), -128, 127),
     clamp(Math.round(rawY * 127), -128, 127),
-    DEFAULT_STICK_GATE,
+    gate,
   );
   const value = {
     x: clamp(x / STICK_RANGE, -1, 1),

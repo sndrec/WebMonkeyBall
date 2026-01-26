@@ -142,6 +142,52 @@ body.gameplay-active {
   display: none;
 }
 
+.modal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  z-index: 20;
+  padding: 16px;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-card {
+  width: min(460px, 92vw);
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 20px;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+.modal-card h2 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+
+.modal-card p {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#gamepad-calibration-map {
+  width: 100%;
+  max-width: 260px;
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(8, 8, 12, 0.6);
+  display: block;
+  margin: 0 auto 12px;
+}
+
 .hidden {
   display: none !important;
 }
