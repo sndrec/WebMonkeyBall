@@ -300,8 +300,12 @@ function maybeStartSmb2LikeStageFade() {
 }
 
 function resizeCanvasToDisplaySize(canvasElem: HTMLCanvasElement) {
-  const width = Math.floor(canvasElem.clientWidth * window.devicePixelRatio);
-  const height = Math.floor(canvasElem.clientHeight * window.devicePixelRatio);
+  const dpr = window.devicePixelRatio || 1;
+  const viewport = window.visualViewport;
+  const cssWidth = viewport?.width || canvasElem.clientWidth || window.innerWidth;
+  const cssHeight = viewport?.height || canvasElem.clientHeight || window.innerHeight;
+  const width = Math.floor(cssWidth * dpr);
+  const height = Math.floor(cssHeight * dpr);
   if (canvasElem.width !== width || canvasElem.height !== height) {
     canvasElem.width = width;
     canvasElem.height = height;
