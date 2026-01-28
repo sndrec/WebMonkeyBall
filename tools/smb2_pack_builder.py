@@ -503,6 +503,7 @@ def build_pack(
     zip_output: bool,
     courses_data: Optional[Dict[str, object]] = None,
     lst_path: Optional[Path] = None,
+    stage_time_overrides: Optional[Dict[int, int]] = None,
 ) -> None:
     main_loop_rel = rom_dir / 'mkb2.main_loop.rel'
     stgname = rom_dir / 'stgname' / 'usa.str'
@@ -623,15 +624,19 @@ def build_pack(
     if not referenced_bgs:
         warnings.append('no backgrounds referenced from stage env data')
 
+    content = {
+        'stages': stage_ids,
+        'stageNames': {str(k): v for k, v in stage_names.items()},
+    }
+    if stage_time_overrides:
+        content['stageTimeOverrides'] = {str(k): v for k, v in stage_time_overrides.items()}
+
     pack_manifest = {
         'id': pack_id,
         'name': pack_name,
         'gameSource': 'smb2',
         'version': 1,
-        'content': {
-            'stages': stage_ids,
-            'stageNames': {str(k): v for k, v in stage_names.items()},
-        },
+        'content': content,
         'courses': courses,
         'stageEnv': stage_env,
     }
@@ -760,6 +765,7 @@ def run_gui() -> None:
     story_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
     challenge_courses: Dict[str, List[Tuple[int, bool]]] = {}
+    stage_time_overrides: Dict[int, int] = {}
     selected_course_name = tk.StringVar()
 
     course_list = tk.Listbox(challenge_frame, height=8)
@@ -822,7 +828,9 @@ def run_gui() -> None:
         if not name:
             return
         for stage_id, bonus in challenge_courses.get(name, []):
-            label = f'{stage_id} {"(bonus)" if bonus else ""}'
+            time_override = stage_time_overrides.get(stage_id)
+            time_label = f' ({time_override // 60}s)' if time_override else ''
+            label = f'{stage_id}{time_label} {"(bonus)" if bonus else ""}'
             stage_list.insert(tk.END, label.strip())
 
     stage_controls = ttk.Frame(challenge_frame)
@@ -830,8 +838,13 @@ def run_gui() -> None:
 
     stage_id_var = tk.StringVar()
     stage_bonus_var = tk.BooleanVar(value=False)
-    ttk.Entry(stage_controls, textvariable=stage_id_var, width=8).pack(side=tk.LEFT, padx=(0, 6))
+    stage_time_var = tk.StringVar()
+    stage_id_entry = ttk.Entry(stage_controls, textvariable=stage_id_var, width=8)
+    stage_id_entry.pack(side=tk.LEFT, padx=(0, 6))
     ttk.Checkbutton(stage_controls, text='Bonus', variable=stage_bonus_var).pack(side=tk.LEFT, padx=(0, 6))
+    stage_time_entry = ttk.Entry(stage_controls, textvariable=stage_time_var, width=6)
+    stage_time_entry.pack(side=tk.LEFT, padx=(0, 6))
+    ttk.Label(stage_controls, text='sec').pack(side=tk.LEFT, padx=(0, 6))
 
     def add_stage():
         name = selected_course_name.get()
@@ -842,12 +855,29 @@ def run_gui() -> None:
         if not raw.isdigit():
             messagebox.showerror('Invalid stage', 'Stage ID must be a number.')
             return
+        raw_time = stage_time_var.get().strip()
+        if raw_time:
+            if not raw_time.isdigit():
+                messagebox.showerror('Invalid time', 'Time must be a number of seconds.')
+                return
+            stage_time_overrides[int(raw)] = int(raw_time) * 60
         stage_id = int(raw)
         bonus = bool(stage_bonus_var.get())
         challenge_courses[name].append((stage_id, bonus))
         stage_id_var.set('')
+        stage_time_var.set('')
         stage_bonus_var.set(False)
         refresh_stage_list()
+        stage_id_entry.focus_set()
+
+    def stage_in_use(stage_id: int) -> bool:
+        for entries in challenge_courses.values():
+            if any(stage_id == sid for sid, _ in entries):
+                return True
+        for world in story_worlds:
+            if stage_id in world:
+                return True
+        return False
 
     def remove_stage():
         name = selected_course_name.get()
@@ -857,7 +887,9 @@ def run_gui() -> None:
         idx = selection[0]
         items = challenge_courses.get(name, [])
         if 0 <= idx < len(items):
-            items.pop(idx)
+            stage_id, _ = items.pop(idx)
+            if not stage_in_use(stage_id):
+                stage_time_overrides.pop(stage_id, None)
         refresh_stage_list()
 
     def toggle_bonus():
@@ -875,6 +907,8 @@ def run_gui() -> None:
     ttk.Button(stage_controls, text='Add stage', command=add_stage).pack(side=tk.LEFT, padx=(0, 6))
     ttk.Button(stage_controls, text='Remove', command=remove_stage).pack(side=tk.LEFT, padx=(0, 6))
     ttk.Button(stage_controls, text='Toggle bonus', command=toggle_bonus).pack(side=tk.LEFT)
+    stage_id_entry.bind('<Return>', lambda _event: add_stage())
+    stage_time_entry.bind('<Return>', lambda _event: add_stage())
 
     story_worlds: List[List[int]] = []
     world_list = tk.Listbox(story_frame, height=8)
@@ -926,7 +960,12 @@ def run_gui() -> None:
     world_stage_controls.pack(fill=tk.X)
 
     world_stage_id_var = tk.StringVar()
-    ttk.Entry(world_stage_controls, textvariable=world_stage_id_var, width=8).pack(side=tk.LEFT, padx=(0, 6))
+    world_stage_time_var = tk.StringVar()
+    world_stage_entry = ttk.Entry(world_stage_controls, textvariable=world_stage_id_var, width=8)
+    world_stage_entry.pack(side=tk.LEFT, padx=(0, 6))
+    world_stage_time_entry = ttk.Entry(world_stage_controls, textvariable=world_stage_time_var, width=6)
+    world_stage_time_entry.pack(side=tk.LEFT, padx=(0, 6))
+    ttk.Label(world_stage_controls, text='sec').pack(side=tk.LEFT, padx=(0, 6))
 
     def add_world_stage():
         selection = world_list.curselection()
@@ -937,10 +976,18 @@ def run_gui() -> None:
         if not raw.isdigit():
             messagebox.showerror('Invalid stage', 'Stage ID must be a number.')
             return
+        raw_time = world_stage_time_var.get().strip()
+        if raw_time:
+            if not raw_time.isdigit():
+                messagebox.showerror('Invalid time', 'Time must be a number of seconds.')
+                return
+            stage_time_overrides[int(raw)] = int(raw_time) * 60
         idx = selection[0]
         story_worlds[idx].append(int(raw))
         world_stage_id_var.set('')
+        world_stage_time_var.set('')
         refresh_world_stage_list()
+        world_stage_entry.focus_set()
 
     def remove_world_stage():
         selection = world_list.curselection()
@@ -950,11 +997,15 @@ def run_gui() -> None:
         world_idx = selection[0]
         stage_idx = stage_selection[0]
         if 0 <= stage_idx < len(story_worlds[world_idx]):
-            story_worlds[world_idx].pop(stage_idx)
+            stage_id = story_worlds[world_idx].pop(stage_idx)
+            if not stage_in_use(stage_id):
+                stage_time_overrides.pop(stage_id, None)
         refresh_world_stage_list()
 
     ttk.Button(world_stage_controls, text='Add stage', command=add_world_stage).pack(side=tk.LEFT, padx=(0, 6))
     ttk.Button(world_stage_controls, text='Remove', command=remove_world_stage).pack(side=tk.LEFT)
+    world_stage_entry.bind('<Return>', lambda _event: add_world_stage())
+    world_stage_time_entry.bind('<Return>', lambda _event: add_world_stage())
 
     def build_courses_data() -> Dict[str, object]:
         order = {}
@@ -1000,6 +1051,7 @@ def run_gui() -> None:
                 bool(zip_var.get()),
                 courses_data=courses_data,
                 lst_path=Path(lst_var.get().strip()) if lst_var.get().strip() else None,
+                stage_time_overrides=stage_time_overrides,
             )
         except Exception as exc:
             messagebox.showerror('Build failed', str(exc))

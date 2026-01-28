@@ -2,6 +2,7 @@
   "name": "smb-web",
   "private": true,
   "dependencies": {
+    "fflate": "^0.8.2",
     "gl-matrix": "^3.4.3"
   },
   "devDependencies": {
