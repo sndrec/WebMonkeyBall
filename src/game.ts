@@ -336,6 +336,8 @@ export class Game {
   public inputFeed: QuantizedStick[] | null;
   public inputFeedIndex: number;
   public inputRecord: QuantizedStick[] | null;
+  public fixedTickMode: boolean;
+  public fixedTicksPerUpdate: number;
 
   constructor({
     hud,
@@ -429,6 +431,8 @@ export class Game {
     this.inputFeed = null;
     this.inputFeedIndex = 0;
     this.inputRecord = null;
+    this.fixedTickMode = false;
+    this.fixedTicksPerUpdate = 1;
   }
 
   setGameSource(source: GameSource) {
@@ -440,6 +444,11 @@ export class Game {
   setInputFeed(feed: QuantizedStick[] | null) {
     this.inputFeed = feed;
     this.inputFeedIndex = 0;
+  }
+
+  setFixedTickMode(enabled: boolean, ticksPerUpdate = 1) {
+    this.fixedTickMode = enabled;
+    this.fixedTicksPerUpdate = Math.max(1, ticksPerUpdate | 0);
   }
 
   startInputRecording() {
@@ -1774,6 +1783,8 @@ export class Game {
 
     if (this.paused) {
       this.accumulator = 0;
+    } else if (this.fixedTickMode) {
+      this.accumulator = this.fixedStep * this.fixedTicksPerUpdate;
     } else {
       this.accumulator = Math.min(this.accumulator + dtSeconds, this.fixedStep * MAX_FRAME_DELTA);
     }
