@@ -20,6 +20,7 @@ import {
 import {
   MatrixStack,
   atan2S16,
+  atan2S16Safe,
   floor,
   sinS16,
   sqrt,
@@ -33,6 +34,7 @@ import { raycastStageDown } from './collision.js';
 import { updateBallEffects } from './effects.js';
 import { parseGma } from './gma.js';
 import { parseAVTpl } from './tpl.js';
+import { DeterministicRng } from './rng.js';
 
 const TEXT_DECODER = new TextDecoder('utf-8');
 const STAGE_START_POS_SIZE = 0x14;
@@ -65,7 +67,7 @@ const ANIM_LOOP = 0;
 const ANIM_PLAY_ONCE = 1;
 const ANIM_SEESAW = 2;
 const SMB2_STAGE_LOADIN_FRAMES = 0x168;
-const JAMABAR_BOUND_RADIUS = Math.sqrt((1.75 * 1.75) + (0.5 * 0.5) + (0.5 * 0.5));
+const JAMABAR_BOUND_RADIUS = sqrt((1.75 * 1.75) + (0.5 * 0.5) + (0.5 * 0.5));
 const GOAL_BAG_LOCAL_START = { x: 0, y: -1, z: 0.1 };
 const CONFETTI_GRAVITY_SCALE = 0.004;
 const CONFETTI_VEL_DAMP = 0.95;
@@ -118,12 +120,12 @@ const SWITCH_MODEL_SUFFIXES = [
   'BUTTON_FR',
 ];
 
-function randS16() {
-  return Math.trunc(Math.random() * 0x8000);
+function randS16(rng) {
+  return rng.nextS16();
 }
 
-function randFloat() {
-  return Math.random();
+function randFloat(rng) {
+  return rng.nextFloat();
 }
 
 function formatStageId(stageId) {
@@ -1179,7 +1181,7 @@ class StageParserSmb2 extends StageParser {
 }
 
 export class StageRuntime {
-  constructor(stage) {
+  constructor(stage, seed = stage.stageId ?? 0) {
     this.stage = stage;
     this.format = stage.format ?? 'smb1';
     this.timerFrames = 0;
@@ -1208,6 +1210,8 @@ export class StageRuntime {
     this.matrixStack = new MatrixStack();
     this.goalHoldOpen = false;
     this.switchesEnabled = true;
+    this.simRng = new DeterministicRng(seed);
+    this.visualRng = new DeterministicRng((seed ^ 0x9e3779b9) >>> 0);
     this.initAnimGroups();
     this.initObjects();
   }
@@ -1769,10 +1773,10 @@ export class StageRuntime {
       updateGoalTape(tape, animGroups, gravity, stack);
     }
     for (const bag of this.goalBags) {
-      updateGoalBag(bag, animGroups, gravity, this.goalHoldOpen, stack);
+      updateGoalBag(bag, animGroups, gravity, this.goalHoldOpen, stack, this.simRng);
     }
     updateConfetti(this, gravity);
-    updateBallEffects(this.effects, gravity, this);
+    updateBallEffects(this.effects, gravity, this, this.visualRng);
     for (let i = 0; i < animGroups.length; i += 1) {
       const bumperStates = this.bumpers[i];
       for (const bumper of bumperStates) {
@@ -2025,7 +2029,7 @@ export class StageRuntime {
       bag.openFrame = this.timerFrames;
     }
     updateGoalBagTransform(bag, this.matrixStack);
-    spawnGoalBagConfetti(this, bag, ball);
+    spawnGoalBagConfetti(this, bag, ball, this.visualRng);
   }
 
   breakGoalTape(goalId, ball) {
@@ -2182,7 +2186,7 @@ export class StageRuntime {
       y: (max.y - min.y) * 0.5,
       z: (max.z - min.z) * 0.5,
     };
-    this.boundSphere.radius = Math.sqrt((half.x * half.x) + (half.y * half.y) + (half.z * half.z));
+    this.boundSphere.radius = sqrt((half.x * half.x) + (half.y * half.y) + (half.z * half.z));
     if (this.boundSphere.radius < FLY_IN_MIN_RADIUS) {
       this.boundSphere.radius = FLY_IN_MIN_RADIUS;
     }
@@ -2357,7 +2361,7 @@ function updateGoalBagTransform(bag, stack) {
   stack.tfPoint(bag.modelOrigin, bag.position);
 }
 
-function updateGoalBag(bag, animGroups, gravity, holdOpen, stack) {
+function updateGoalBag(bag, animGroups, gravity, holdOpen, stack, rng) {
   bag.prevOpenness = bag.openness;
   bag.prevRotX = bag.rotX;
   bag.prevRotY = bag.rotY;
@@ -2369,7 +2373,7 @@ function updateGoalBag(bag, animGroups, gravity, holdOpen, stack) {
     case 3:
       bag.state = 4;
       bag.counter = -1;
-      bag.unk8 = 0.05 + 0.1 * Math.random();
+      bag.unk8 = 0.05 + 0.1 * randFloat(rng);
     // fall through
     case 4:
       if (bag.counter > 0) {
@@ -2397,7 +2401,7 @@ function updateGoalBag(bag, animGroups, gravity, holdOpen, stack) {
     case 6:
       bag.state = 7;
       bag.counter = 60;
-      bag.unk8 = 0.05 + 0.1 * Math.random();
+      bag.unk8 = 0.05 + 0.1 * randFloat(rng);
     // fall through
     case 7:
       bag.counter -= 1;
@@ -2519,8 +2523,18 @@ function updateGoalBag(bag, animGroups, gravity, holdOpen, stack) {
   stack.fromRotateY(-bag.rotY);
   stack.rotateX(0);
   stack.tfVec(rotVec, rotVec);
-  bag.rotX = atan2S16(rotVec.z, rotVec.y) - 0x8000;
-  bag.rotZ = atan2S16(rotVec.x, sqrt(sumSq2(rotVec.z, rotVec.y)));
+  const debug = (globalThis as any).__DETERMINISM_DEBUG__;
+  if (debug) {
+    debug.source = 'goalBagRotX';
+  }
+  bag.rotX = atan2S16Safe(rotVec.z, rotVec.y) - 0x8000;
+  if (debug) {
+    debug.source = 'goalBagRotZ';
+  }
+  bag.rotZ = atan2S16Safe(rotVec.x, sqrt(sumSq2(rotVec.z, rotVec.y)));
+  if (debug) {
+    debug.source = null;
+  }
 
   updateGoalBagTransform(bag, stack);
 }
@@ -2819,7 +2833,7 @@ function createConfettiParticle(modelIndex, pos, vel, rotX, rotY, rotZ, scale, l
   };
 }
 
-function spawnGoalBagConfetti(stageRuntime, bag, ball) {
+function spawnGoalBagConfetti(stageRuntime, bag, ball, rng) {
   const animGroup = stageRuntime.animGroups[bag.animGroupId];
   const stack = stageRuntime.matrixStack;
   const vel = { x: ball.vel.x, y: ball.vel.y, z: ball.vel.z };
@@ -2859,22 +2873,22 @@ function spawnGoalBagConfetti(stageRuntime, bag, ball) {
   const spawnPos = { x: 0, y: 0, z: 0 };
   const spawnCount = 160;
   for (let i = 0; i < spawnCount; i += 1) {
-    localPos.z = 0.5 * (baseRadius * (1.0 + randFloat()));
-    stack.rotateY(randS16());
-    stack.rotateX(randS16());
+    localPos.z = 0.5 * (baseRadius * (1.0 + randFloat(rng)));
+    stack.rotateY(randS16(rng));
+    stack.rotateX(randS16(rng));
     localPos.x = 0;
     localPos.y = 0;
     stack.tfPoint(localPos, spawnPos);
 
-    const rotX = randS16();
-    const rotY = randS16();
-    const rotZ = randS16();
-    const scale = 0.5 + 0.5 * randFloat();
-    const life = Math.trunc(CONFETTI_LIFE_BASE + CONFETTI_LIFE_RANGE * randFloat());
+    const rotX = randS16(rng);
+    const rotY = randS16(rng);
+    const rotZ = randS16(rng);
+    const scale = 0.5 + 0.5 * randFloat(rng);
+    const life = Math.trunc(CONFETTI_LIFE_BASE + CONFETTI_LIFE_RANGE * randFloat(rng));
     const modelIndex = (modelIndexBase + (i % CONFETTI_MODEL_COUNT)) % CONFETTI_MODEL_COUNT;
 
     const frag = createConfettiParticle(modelIndex, spawnPos, vel, rotX, rotY, rotZ, scale, life);
-    frag.groundBias = 0.0001 * randFloat();
+    frag.groundBias = 0.0001 * randFloat(rng);
     stageRuntime.confetti.push(frag);
   }
 }
@@ -3089,7 +3103,7 @@ function computeGmaBoundSphere(gma, modelNames = null) {
     y: (max.y - min.y) * 0.5,
     z: (max.z - min.z) * 0.5,
   };
-  const radius = Math.sqrt((half.x * half.x) + (half.y * half.y) + (half.z * half.z));
+  const radius = sqrt((half.x * half.x) + (half.y * half.y) + (half.z * half.z));
   return { pos, radius: Math.max(radius, FLY_IN_MIN_RADIUS) };
 }
 

@@ -14,8 +14,9 @@ import {
   type GameSource,
 } from './constants.js';
 import { intersectsMovingSpheres, tfPhysballToAnimGroupSpace } from './collision.js';
-import { MatrixStack, toS16 } from './math.js';
+import { MatrixStack, sqrt, toS16 } from './math.js';
 import { GameplayCamera } from './camera.js';
+import { dequantizeStick, quantizeStick, type QuantizedStick } from './determinism.js';
 import {
   checkBallEnteredGoal,
   createBallState,
@@ -95,7 +96,7 @@ function nlerpQuat(out: { x: number; y: number; z: number; w: number }, a: any, 
   out.y = a.y + (by - a.y) * t;
   out.z = a.z + (bz - a.z) * t;
   out.w = a.w + (bw - a.w) * t;
-  const len = Math.sqrt((out.x * out.x) + (out.y * out.y) + (out.z * out.z) + (out.w * out.w));
+  const len = sqrt((out.x * out.x) + (out.y * out.y) + (out.z * out.z) + (out.w * out.w));
   if (len > 0) {
     out.x /= len;
     out.y /= len;
@@ -331,6 +332,10 @@ export class Game {
     tickMs: number;
     lastTickMs: number;
   };
+  public simTick: number;
+  public inputFeed: QuantizedStick[] | null;
+  public inputFeedIndex: number;
+  public inputRecord: QuantizedStick[] | null;
 
   constructor({
     hud,
@@ -420,12 +425,31 @@ export class Game {
       tickMs: 0,
       lastTickMs: 0,
     };
+    this.simTick = 0;
+    this.inputFeed = null;
+    this.inputFeedIndex = 0;
+    this.inputRecord = null;
   }
 
   setGameSource(source: GameSource) {
     this.gameSource = source;
     this.stageBasePath = STAGE_BASE_PATHS[source] ?? STAGE_BASE_PATH;
     this.audio?.stopMusic();
+  }
+
+  setInputFeed(feed: QuantizedStick[] | null) {
+    this.inputFeed = feed;
+    this.inputFeedIndex = 0;
+  }
+
+  startInputRecording() {
+    this.inputRecord = [];
+  }
+
+  stopInputRecording() {
+    const record = this.inputRecord;
+    this.inputRecord = null;
+    return record;
   }
 
   init() {
@@ -759,7 +783,7 @@ export class Game {
           renderPoint.normal.x = lerp(point.prevNormal?.x ?? point.normal.x, point.normal.x, alpha);
           renderPoint.normal.y = lerp(point.prevNormal?.y ?? point.normal.y, point.normal.y, alpha);
           renderPoint.normal.z = lerp(point.prevNormal?.z ?? point.normal.z, point.normal.z, alpha);
-          const normalLen = Math.sqrt(
+          const normalLen = sqrt(
             (renderPoint.normal.x * renderPoint.normal.x)
             + (renderPoint.normal.y * renderPoint.normal.y)
             + (renderPoint.normal.z * renderPoint.normal.z)
@@ -1193,6 +1217,8 @@ export class Game {
       this.stage = stage;
       this.stageAttempts = isRestart ? this.stageAttempts + 1 : 1;
       this.stageRuntime = new StageRuntime(stage);
+      this.simTick = 0;
+      this.inputFeedIndex = 0;
       this.animGroupTransforms = this.stageRuntime.animGroups.map((group) => group.transform);
       this.interpolatedAnimGroupTransforms = null;
       this.bananaGroups = new Array(this.stage.animGroupCount);
@@ -1716,6 +1742,25 @@ export class Game {
     }
   }
 
+  private readDeterministicStick(inputEnabled: boolean) {
+    let frame = null;
+    if (this.inputFeed && this.inputFeedIndex < this.inputFeed.length) {
+      frame = this.inputFeed[this.inputFeedIndex];
+      this.inputFeedIndex += 1;
+    }
+    if (!inputEnabled) {
+      return { x: 0, y: 0 };
+    }
+    if (!frame) {
+      const raw = this.input?.getStick?.() ?? { x: 0, y: 0 };
+      frame = quantizeStick(raw);
+      if (this.inputRecord) {
+        this.inputRecord.push({ x: frame.x, y: frame.y });
+      }
+    }
+    return dequantizeStick(frame);
+  }
+
   update(dtSeconds: number) {
     if (!this.running) {
       return;
@@ -1741,6 +1786,10 @@ export class Game {
       }
       this.stageRuntime.goalHoldOpen = this.goalTimerFrames > 0;
       while (!this.pendingAdvance && this.accumulator >= this.fixedStep) {
+        const debug = (globalThis as any).__DETERMINISM_DEBUG__;
+        if (debug) {
+          debug.tick = this.simTick;
+        }
         const tickStart = this.simPerf.enabled ? nowMs() : 0;
         try {
         const ringoutActive = this.ringoutTimerFrames > 0;
@@ -1763,7 +1812,7 @@ export class Game {
           ? this.introTimerFrames
           : null;
         this.stageRuntime.switchesEnabled = switchesEnabled;
-        const stick = inputEnabled ? this.input?.getStick?.() ?? { x: 0, y: 0 } : { x: 0, y: 0 };
+        const stick = this.readDeterministicStick(inputEnabled);
         this.world.updateInput(stick, this.cameraController.rotY);
         const stagePaused = this.paused || timeoverActive;
         this.stageRuntime.advance(
@@ -1911,6 +1960,7 @@ export class Game {
             this.simPerf.tickMs += tickMs;
             this.simPerf.tickCount += 1;
           }
+          this.simTick += 1;
         }
       }
       if (this.simPerf.enabled && this.simPerf.tickCount >= this.simPerf.logEvery) {

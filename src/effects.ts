@@ -1,5 +1,5 @@
 import { raycastStageDown } from './collision.js';
-import { atan2S16, sumSq2, toS16, vecDot } from './math.js';
+import { atan2S16, sqrt, sumSq2, toS16, vecDot } from './math.js';
 
 const SPARK_GRAVITY_SCALE = 0.008;
 const SPARK_DAMP = 0.992;
@@ -27,8 +27,8 @@ const LEVITATE_DRIFT = 0.0012;
 const LEVITATE_DAMP = 0.98;
 const STAR_SCALE_TARGET = 0.015;
 
-const randFloat = () => Math.random();
-const randS16 = () => Math.trunc(Math.random() * 0x8000);
+const randFloat = (rng) => rng.nextFloat();
+const randS16 = (rng) => rng.nextS16();
 
 type Vec3 = { x: number; y: number; z: number };
 
@@ -156,7 +156,7 @@ function updateEffectGround(
   effect.glowPos.y = effect.pos.y - (dist - 0.02) * hitNormal.y;
   effect.glowPos.z = effect.pos.z - (dist - 0.02) * hitNormal.z;
   const rotY = atan2S16(hitNormal.x, hitNormal.z) - 0x8000;
-  const rotX = atan2S16(hitNormal.y, Math.sqrt(sumSq2(hitNormal.x, hitNormal.z)));
+  const rotX = atan2S16(hitNormal.y, sqrt(sumSq2(hitNormal.x, hitNormal.z)));
   effect.glowRotY = rotY;
   effect.glowRotX = rotX;
 }
@@ -167,6 +167,7 @@ function applyEffectGroundResponse(
   bounceScale: number,
   surfaceBlend: number,
   randomizeRot = false,
+  rng = null,
 ): void {
   const normal = effect.groundNormal;
   const dx = effect.pos.x - effect.groundPos.x;
@@ -193,10 +194,10 @@ function applyEffectGroundResponse(
   effect.vel.x += (effect.groundVel.x - effect.vel.x) * surfaceBlend;
   effect.vel.y += (effect.groundVel.y - effect.vel.y) * surfaceBlend;
   effect.vel.z += (effect.groundVel.z - effect.vel.z) * surfaceBlend;
-  if (randomizeRot) {
-    effect.rotVelX = toS16(effect.rotVelX + impulse * (randFloat() - 0.5) * STAR_ROT_KICK_XZ);
-    effect.rotVelY = toS16(effect.rotVelY + impulse * (randFloat() - 0.5) * STAR_ROT_KICK_Y);
-    effect.rotVelZ = toS16(effect.rotVelZ + impulse * (randFloat() - 0.5) * STAR_ROT_KICK_XZ);
+  if (randomizeRot && rng) {
+    effect.rotVelX = toS16(effect.rotVelX + impulse * (randFloat(rng) - 0.5) * STAR_ROT_KICK_XZ);
+    effect.rotVelY = toS16(effect.rotVelY + impulse * (randFloat(rng) - 0.5) * STAR_ROT_KICK_Y);
+    effect.rotVelZ = toS16(effect.rotVelZ + impulse * (randFloat(rng) - 0.5) * STAR_ROT_KICK_XZ);
   }
   effect.vel.x += impulse * bounceScale * normal.x;
   effect.vel.y += impulse * bounceScale * normal.y;
@@ -252,12 +253,12 @@ function updateEffectGlow(
   effect.glowPos.y = effect.pos.y - (dist - 0.02) * hit.normal.y;
   effect.glowPos.z = effect.pos.z - (dist - 0.02) * hit.normal.z;
   const rotY = atan2S16(hit.normal.x, hit.normal.z) - 0x8000;
-  const rotX = atan2S16(hit.normal.y, Math.sqrt(sumSq2(hit.normal.x, hit.normal.z)));
+  const rotX = atan2S16(hit.normal.y, sqrt(sumSq2(hit.normal.x, hit.normal.z)));
   effect.glowRotY = rotY;
   effect.glowRotX = rotX;
 }
 
-export function updateBallEffects(effects: BallEffect[], gravity: Vec3, stageRuntime: any): void {
+export function updateBallEffects(effects: BallEffect[], gravity: Vec3, stageRuntime: any, rng: any): void {
   for (let i = effects.length - 1; i >= 0; i -= 1) {
     const effect = effects[i];
     effect.prevPos.x = effect.pos.x;
@@ -291,7 +292,7 @@ export function updateBallEffects(effects: BallEffect[], gravity: Vec3, stageRun
       const nx = -normal.x;
       const nz = -normal.z;
       const rotY = atan2S16(nx, nz);
-      const rotX = toS16(atan2S16(normal.y, Math.sqrt(sumSq2(nx, nz))) - 0x8000);
+      const rotX = toS16(atan2S16(normal.y, sqrt(sumSq2(nx, nz))) - 0x8000);
       effect.rotY = rotY;
       effect.rotX = rotX;
       if (effect.life < 8) {
@@ -334,6 +335,7 @@ export function updateBallEffects(effects: BallEffect[], gravity: Vec3, stageRun
           1.0,
           STAR_GROUND_BLEND,
           true,
+          rng,
         );
       }
     } else {
@@ -361,11 +363,11 @@ export function updateBallEffects(effects: BallEffect[], gravity: Vec3, stageRun
   }
 }
 
-export function spawnMovementSparks(effects: BallEffect[], ball: any, onGround: boolean): void {
+export function spawnMovementSparks(effects: BallEffect[], ball: any, onGround: boolean, rng: any): void {
   if (!onGround) {
     return;
   }
-  const speed = Math.sqrt(ball.vel.x * ball.vel.x + ball.vel.y * ball.vel.y + ball.vel.z * ball.vel.z);
+  const speed = sqrt(ball.vel.x * ball.vel.x + ball.vel.y * ball.vel.y + ball.vel.z * ball.vel.z);
   const intensity = speed * 5.0;
   if (intensity <= 1.5) {
     return;
@@ -390,12 +392,12 @@ export function spawnMovementSparks(effects: BallEffect[], ball: any, onGround: 
       'coli',
       basePos,
       baseVel,
-      Math.trunc(SPARK_LIFE_MIN + SPARK_LIFE_RANGE * randFloat()),
+      Math.trunc(SPARK_LIFE_MIN + SPARK_LIFE_RANGE * randFloat(rng)),
     );
-    const spread = randFloat() * intensity * 0.1;
-    spark.vel.x += (normal.x + (randFloat() * 1.5 - 0.75)) * spread;
-    spark.vel.y += (normal.y + (randFloat() * 1.5 - 0.75)) * spread;
-    spark.vel.z += (normal.z + (randFloat() * 1.5 - 0.75)) * spread;
+    const spread = randFloat(rng) * intensity * 0.1;
+    spark.vel.x += (normal.x + (randFloat(rng) * 1.5 - 0.75)) * spread;
+    spark.vel.y += (normal.y + (randFloat(rng) * 1.5 - 0.75)) * spread;
+    spark.vel.z += (normal.z + (randFloat(rng) * 1.5 - 0.75)) * spread;
     spark.scale = 1.0;
     spark.scaleTarget = 1.0;
     spark.colorR = 1.1;
@@ -410,6 +412,7 @@ export function spawnCollisionStars(
   effects: BallEffect[],
   ball: any,
   hardestColiSpeed: number,
+  rng: any,
 ): void {
   const surfaceNormal = { x: ball.unk114.x, y: ball.unk114.y, z: ball.unk114.z };
   const normal = { x: -surfaceNormal.x, y: -surfaceNormal.y, z: -surfaceNormal.z };
@@ -428,7 +431,7 @@ export function spawnCollisionStars(
   let count = Math.min(32, Math.trunc(rawCount));
   const scaleBoost = Math.abs(hardestColiSpeed / 0.33) + 1.0;
 
-  const flashScale = Math.sqrt(Math.abs(hardestColiSpeed * 10.0));
+  const flashScale = sqrt(Math.abs(hardestColiSpeed * 10.0));
   const flash = createEffect('coliflash', basePos, { x: 0, y: 0, z: 0 }, 12);
   flash.scale = flashScale * 0.25;
   flash.scaleTarget = flashScale;
@@ -443,22 +446,22 @@ export function spawnCollisionStars(
       'colistar',
       basePos,
       baseVel,
-      Math.trunc(STAR_LIFE_MIN + STAR_LIFE_RANGE * randFloat()),
+      Math.trunc(STAR_LIFE_MIN + STAR_LIFE_RANGE * randFloat(rng)),
     );
     const jitter = {
-      x: scaleBoost * (randFloat() * 0.05 - 0.025),
-      y: scaleBoost * (randFloat() * 0.05 - 0.025),
-      z: scaleBoost * (randFloat() * 0.05 - 0.025),
+      x: scaleBoost * (randFloat(rng) * 0.05 - 0.025),
+      y: scaleBoost * (randFloat(rng) * 0.05 - 0.025),
+      z: scaleBoost * (randFloat(rng) * 0.05 - 0.025),
     };
-    const push = scaleBoost * (randFloat() * 0.055 + 0.015);
+    const push = scaleBoost * (randFloat(rng) * 0.055 + 0.015);
     star.vel.x += jitter.x + push * normal.x;
     star.vel.y += jitter.y + push * normal.y;
     star.vel.z += jitter.z + push * normal.z;
     star.rotX = 0;
-    star.rotY = randS16();
-    star.rotZ = randS16();
+    star.rotY = randS16(rng);
+    star.rotZ = randS16(rng);
     star.rotVelX = 0;
-    star.rotVelY = (randS16() & 0xfff) + 0x1000;
+    star.rotVelY = (randS16(rng) & 0xfff) + 0x1000;
     star.rotVelZ = 0;
     star.scale = 0;
     star.scaleTarget = STAR_SCALE_TARGET;
@@ -472,14 +475,14 @@ export function spawnCollisionStars(
       'coli',
       basePos,
       { x: baseVel.x * 0.5, y: baseVel.y * 0.5, z: baseVel.z * 0.5 },
-      Math.trunc(SPARK_LIFE_MIN + SPARK_LIFE_RANGE * randFloat()),
+      Math.trunc(SPARK_LIFE_MIN + SPARK_LIFE_RANGE * randFloat(rng)),
     );
     const jitter = {
-      x: scaleBoost * (randFloat() * 0.05 - 0.025),
-      y: scaleBoost * (randFloat() * 0.05 - 0.025),
-      z: scaleBoost * (randFloat() * 0.05 - 0.025),
+      x: scaleBoost * (randFloat(rng) * 0.05 - 0.025),
+      y: scaleBoost * (randFloat(rng) * 0.05 - 0.025),
+      z: scaleBoost * (randFloat(rng) * 0.05 - 0.025),
     };
-    const push = scaleBoost * (randFloat() * 0.05 + 0.06);
+    const push = scaleBoost * (randFloat(rng) * 0.05 + 0.06);
     spark.vel.x += jitter.x + push * normal.x;
     spark.vel.y += jitter.y + push * normal.y;
     spark.vel.z += jitter.z + push * normal.z;
@@ -491,28 +494,28 @@ export function spawnCollisionStars(
   }
 }
 
-export function spawnPostGoalSparkle(effects: BallEffect[], ball: any): void {
+export function spawnPostGoalSparkle(effects: BallEffect[], ball: any, rng: any): void {
   const sparkle = createEffect(
     'levitate',
     ball.pos,
     {
-      x: (randFloat() - 0.5) * LEVITATE_DRIFT,
-      y: LEVITATE_START_VEL + randFloat() * LEVITATE_START_VEL,
-      z: (randFloat() - 0.5) * LEVITATE_DRIFT,
+      x: (randFloat(rng) - 0.5) * LEVITATE_DRIFT,
+      y: LEVITATE_START_VEL + randFloat(rng) * LEVITATE_START_VEL,
+      z: (randFloat(rng) - 0.5) * LEVITATE_DRIFT,
     },
-    Math.trunc(LEVITATE_LIFE_MIN + LEVITATE_LIFE_RANGE * randFloat()),
+    Math.trunc(LEVITATE_LIFE_MIN + LEVITATE_LIFE_RANGE * randFloat(rng)),
   );
-  sparkle.pos.x += (randFloat() - 0.5) * LEVITATE_OFFSET_RADIUS;
-  sparkle.pos.y += (randFloat() - 0.5) * LEVITATE_OFFSET_RADIUS;
-  sparkle.pos.z += (randFloat() - 0.5) * LEVITATE_OFFSET_RADIUS;
+  sparkle.pos.x += (randFloat(rng) - 0.5) * LEVITATE_OFFSET_RADIUS;
+  sparkle.pos.y += (randFloat(rng) - 0.5) * LEVITATE_OFFSET_RADIUS;
+  sparkle.pos.z += (randFloat(rng) - 0.5) * LEVITATE_OFFSET_RADIUS;
   sparkle.prevPos.x = sparkle.pos.x;
   sparkle.prevPos.y = sparkle.pos.y;
   sparkle.prevPos.z = sparkle.pos.z;
   sparkle.baseY = sparkle.pos.y;
   sparkle.scale = LEVITATE_SCALE;
   sparkle.scaleTarget = sparkle.scale;
-  sparkle.rotX = randS16();
-  sparkle.rotY = randS16();
-  sparkle.rotZ = randS16();
+  sparkle.rotX = randS16(rng);
+  sparkle.rotY = randS16(rng);
+  sparkle.rotZ = randS16(rng);
   effects.push(sparkle);
 }

@@ -1,5 +1,5 @@
 import { mat3, vec3 } from 'gl-matrix';
-import { MatrixStack, atan2S16, clamp, sqrt, sumSq2, sumSq3, rsqrt, toS16 } from './math.js';
+import { MatrixStack, atan2S16, atan2S16Detail, atan2S16Safe, clamp, sqrt, sumSq2, sumSq3, rsqrt, toS16 } from './math.js';
 import { smoothstep } from './animation.js';
 import { BALL_FLAGS, CAMERA_STATE, COLI_FLAGS } from './constants.js';
 
@@ -49,7 +49,14 @@ function applyMat3ToVec(out, mtx) {
 
 function cameraFaceDirection(camera, lookDir) {
   camera.rotY = atan2S16(lookDir.x, lookDir.z) - 0x8000;
-  camera.rotX = atan2S16(lookDir.y, sqrt(sumSq2(lookDir.x, lookDir.z)));
+  const debug = (globalThis as any).__DETERMINISM_DEBUG__;
+  if (debug) {
+    debug.source = 'cameraRotX';
+  }
+  camera.rotX = atan2S16Safe(lookDir.y, sqrt(sumSq2(lookDir.x, lookDir.z)));
+  if (debug) {
+    debug.source = null;
+  }
   camera.rotZ = 0;
 }
 
@@ -208,6 +215,7 @@ export class GameplayCamera {
   }
 
   initReady(stageRuntime, startRotY, startPos, flyInFrames = 90) {
+    const debug = (globalThis as any).__DETERMINISM_DEBUG__;
     if (stageRuntime?.stage?.format === 'smb2') {
       this.initReadySmb2(stageRuntime, startRotY, startPos, flyInFrames);
       return;
@@ -232,7 +240,13 @@ export class GameplayCamera {
     tmpVec.y = this.unk54.y - tmpVec.y;
     tmpVec.z = this.unk54.z - tmpVec.z;
     this.unk6C = toS16(atan2S16(tmpVec.x, tmpVec.z) - 0x8000);
-    this.unk68 = atan2S16(tmpVec.y, sqrt(sumSq2(tmpVec.x, tmpVec.z)));
+    if (debug) {
+      debug.source = 'cameraUnk68';
+    }
+    this.unk68 = atan2S16Safe(tmpVec.y, sqrt(sumSq2(tmpVec.x, tmpVec.z)));
+    if (debug) {
+      debug.source = null;
+    }
     this.unk70 = 0;
 
     this.unk74.x = startPos.x;
@@ -248,7 +262,23 @@ export class GameplayCamera {
     tmpVec.y = this.unk74.y - tmpVec.y;
     tmpVec.z = this.unk74.z - tmpVec.z;
     this.unk8C = toS16(atan2S16(tmpVec.x, tmpVec.z) - 0x8000) + 0x10000;
-    this.unk88 = atan2S16(tmpVec.y, sqrt(sumSq2(tmpVec.x, tmpVec.z)));
+    if (debug) {
+      debug.source = 'cameraUnk88';
+    }
+    this.unk88 = atan2S16Safe(tmpVec.y, sqrt(sumSq2(tmpVec.x, tmpVec.z)));
+    if (debug) {
+      debug.source = null;
+    }
+    if (debug?.cameraInit) {
+      debug.cameraInit.push({
+        mode: 'smb1',
+        stageId: stageRuntime?.stage?.stageId ?? null,
+        unk6C: this.unk6C,
+        unk68: this.unk68,
+        unk8C: this.unk8C,
+        unk88: this.unk88,
+      });
+    }
     this.unk90 = 0;
     this.flags |= 1;
     this.timerCurr = flyInFrames;
@@ -258,6 +288,7 @@ export class GameplayCamera {
   }
 
   initReadySmb2(stageRuntime, startRotY, startPos, flyInFrames = 90) {
+    const debug = (globalThis as any).__DETERMINISM_DEBUG__;
     this.reset();
     this.readyMode = 'smb2';
     const stageId = stageRuntime?.stage?.stageId ?? -1;
@@ -288,7 +319,13 @@ export class GameplayCamera {
     tmpVec.y = this.unk54.y - tmpVec.y;
     tmpVec.z = this.unk54.z - tmpVec.z;
     this.unk6C = toS16(atan2S16(tmpVec.x, tmpVec.z) - 0x8000 + preset.yawOffset);
-    this.unk68 = atan2S16(tmpVec.y, sqrt(sumSq2(tmpVec.x, tmpVec.z)));
+    if (debug) {
+      debug.source = 'cameraUnk68';
+    }
+    this.unk68 = atan2S16Safe(tmpVec.y, sqrt(sumSq2(tmpVec.x, tmpVec.z)));
+    if (debug) {
+      debug.source = null;
+    }
     this.unk70 = 0;
 
     const pivotYOffset = (stageId === 0x15a ? 0 : 0.18) + 0.8;
@@ -302,6 +339,16 @@ export class GameplayCamera {
     this.timerCurr = flyInFrames;
     this.timerMax = flyInFrames;
     this.state = CAMERA_STATE.READY_MAIN;
+    if (debug?.cameraInit) {
+      debug.cameraInit.push({
+        mode: 'smb2',
+        stageId,
+        unk6C: this.unk6C,
+        unk68: this.unk68,
+        unk8C: this.unk8C,
+        unk88: this.unk88,
+      });
+    }
     this.updateReadyMain(false, false);
   }
 
@@ -338,6 +385,7 @@ export class GameplayCamera {
   }
 
   updateLevelMain(ball, paused) {
+    const debug = (globalThis as any).__DETERMINISM_DEBUG__;
     if (paused) {
       return;
     }
@@ -373,7 +421,34 @@ export class GameplayCamera {
 
     let pitch = 0;
     if (ball.unk80 >= 60) {
-      pitch = atan2S16(tmpVec.y, sqrt(sumSq2(tmpVec.x, tmpVec.z)));
+      if (debug) {
+        debug.source = 'cameraPitch';
+      }
+      pitch = atan2S16Safe(tmpVec.y, sqrt(sumSq2(tmpVec.x, tmpVec.z)));
+      if (debug) {
+        debug.source = null;
+      }
+    }
+    if (debug?.cameraPitch) {
+      if (this._debugPrevPitch === undefined) {
+        this._debugPrevPitch = pitch;
+      } else {
+        const delta = toS16(pitch - this._debugPrevPitch);
+        if (Math.abs(delta) >= 128) {
+          const denom = sqrt(sumSq2(tmpVec.x, tmpVec.z));
+          const detail = atan2S16Detail(tmpVec.y, denom);
+          debug.cameraPitch.push({
+            tick: debug.tick ?? null,
+            pitch,
+            prev: this._debugPrevPitch,
+            delta,
+            tmpVec: { x: tmpVec.x, y: tmpVec.y, z: tmpVec.z },
+            denom,
+            detail,
+          });
+        }
+        this._debugPrevPitch = pitch;
+      }
     }
 
     let yaw = toS16(atan2S16(tmpVec.x, tmpVec.z) - 0x8000);
@@ -431,6 +506,21 @@ export class GameplayCamera {
     this.unk10C = toS16(yaw - this.rotY);
     this.rotY = yaw;
     this.rotX = toS16(pitchSmoothed + 62208);
+    if (debug?.cameraYaw) {
+      if (this._debugYawCount === undefined) {
+        this._debugYawCount = 0;
+      }
+      if (this._debugYawCount < 200) {
+        debug.cameraYaw.push({
+          tick: debug.tick ?? null,
+          yaw,
+          rotY: this.rotY,
+          deltaYaw,
+          tmpVec: { x: tmpVec.x, y: tmpVec.y, z: tmpVec.z },
+        });
+        this._debugYawCount += 1;
+      }
+    }
 
     stack.fromTranslate(this.lookAt);
     stack.rotateY(this.rotY);
@@ -450,6 +540,7 @@ export class GameplayCamera {
   }
 
   updateLevelMainSmb2(ball, stageRuntime, paused) {
+    const debug = (globalThis as any).__DETERMINISM_DEBUG__;
     if (paused) {
       return;
     }
@@ -491,7 +582,13 @@ export class GameplayCamera {
 
     let pitchRaw = 0;
     if (ball.unk80 >= 60) {
-      pitchRaw = atan2S16(tmpVec.y, sqrt(sumSq2(tmpVec.x, tmpVec.z)));
+      if (debug) {
+        debug.source = 'cameraPitchRaw';
+      }
+      pitchRaw = atan2S16Safe(tmpVec.y, sqrt(sumSq2(tmpVec.x, tmpVec.z)));
+      if (debug) {
+        debug.source = null;
+      }
     }
 
     let yaw = toS16(atan2S16(tmpVec.x, tmpVec.z) - 0x8000);

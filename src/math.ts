@@ -1,8 +1,30 @@
-const PI = Math.PI;
-const ANGLE_SCALE = 0x8000 / PI;
-const ANGLE_INV_SCALE = PI / 0x8000;
+import { ATAN_TABLE, SIN_TABLE } from './math_lut.js';
 
 export const EPSILON = 1e-7;
+
+const f32View = new Float32Array(1);
+const u32View = new Uint32Array(f32View.buffer);
+
+function f32(value) {
+  return Math.fround(value);
+}
+
+function f32Bits(value) {
+  f32View[0] = value;
+  return u32View[0];
+}
+
+function roundToNearestEven(value) {
+  const base = Math.floor(value);
+  const frac = value - base;
+  if (frac > 0.5) {
+    return base + 1;
+  }
+  if (frac < 0.5) {
+    return base;
+  }
+  return (base & 1) === 0 ? base : base + 1;
+}
 
 export function toS16(value) {
   const v = Math.trunc(value);
@@ -11,15 +33,215 @@ export function toS16(value) {
 }
 
 export function sinS16(angle) {
-  return Math.sin(angle * ANGLE_INV_SCALE);
+  const a = angle & 0xffff;
+  let index = a & 0x3fff;
+  if (a & 0x4000) {
+    index = 0x4000 - index;
+  }
+  const result = SIN_TABLE[index];
+  return (a & 0x8000) ? -result : result;
 }
 
 export function cosS16(angle) {
-  return Math.cos(angle * ANGLE_INV_SCALE);
+  return sinS16((angle + 0x4000) & 0xffff);
+}
+
+function atanIndex(x) {
+  const bits = f32Bits(x);
+  let r5 = bits & 0x7fffff;
+  r5 |= 0x00800000;
+  const exp = (bits >>> 23) & 0xff;
+  if (exp <= 0x67) {
+    return 0;
+  }
+  let r4 = (0x87 - exp) & 0xffffffff;
+  if ((r4 & ~0x1f) === 0) {
+    r4 |= 0x20;
+  }
+  const shift = r4 & 31;
+  const shifted = r5 >>> shift;
+  const offset = shifted & 0x7ff8;
+  return offset >>> 3;
+}
+
+function atanS16(value) {
+  if (value === 0) {
+    return 0;
+  }
+  let sign = 1;
+  let x = value;
+  if (x < 0) {
+    sign = -1;
+    x = -x;
+  }
+  if (x === 1) {
+    return sign * 0x2000;
+  }
+  let invert = false;
+  if (x > 1) {
+    x = 1 / x;
+    invert = true;
+  }
+  x = f32(x);
+  const index = atanIndex(x);
+  const slope = ATAN_TABLE[index * 2];
+  const intercept = ATAN_TABLE[index * 2 + 1];
+  const angle = f32(f32(x * slope) + intercept);
+  let result = roundToNearestEven(angle);
+  if (invert) {
+    result = 0x4000 - result;
+  }
+  return result * sign;
+}
+
+function atanS16WithDetail(value) {
+  if (value === 0) {
+    return { angle: 0, index: 0, raw: 0 };
+  }
+  let sign = 1;
+  let x = value;
+  if (x < 0) {
+    sign = -1;
+    x = -x;
+  }
+  if (x === 1) {
+    return { angle: sign * 0x2000, index: 0, raw: 0x2000 };
+  }
+  let invert = false;
+  if (x > 1) {
+    x = 1 / x;
+    invert = true;
+  }
+  x = f32(x);
+  const index = atanIndex(x);
+  const slope = ATAN_TABLE[index * 2];
+  const intercept = ATAN_TABLE[index * 2 + 1];
+  const angle = f32(f32(x * slope) + intercept);
+  let result = roundToNearestEven(angle);
+  if (invert) {
+    result = 0x4000 - result;
+  }
+  return { angle: result * sign, index, raw: angle };
 }
 
 export function atan2S16(y, x) {
-  return toS16(Math.atan2(y, x) * ANGLE_SCALE);
+  const yy = f32(y);
+  const xx = f32(x);
+  if (yy === 0 && xx === 0) {
+    return 0;
+  }
+  const ay = Math.abs(yy);
+  const ax = Math.abs(xx);
+  let angle;
+  let ratio = 0;
+  let atanIndexUsed = -1;
+  let atanRaw = 0;
+  if (ay === ax) {
+    angle = ay === 0 ? 0 : 0x2000;
+  } else if (ay > ax) {
+    ratio = ax / ay;
+    const atanDetail = atanS16WithDetail(ratio);
+    atanIndexUsed = atanDetail.index;
+    atanRaw = atanDetail.raw;
+    angle = atanDetail.angle;
+    angle = 0x4000 - angle;
+  } else {
+    ratio = ay / ax;
+    const atanDetail = atanS16WithDetail(ratio);
+    atanIndexUsed = atanDetail.index;
+    atanRaw = atanDetail.raw;
+    angle = atanDetail.angle;
+  }
+  if (xx < 0) {
+    if (yy >= 0) {
+      angle = 0x8000 - angle;
+    } else {
+      angle = angle - 0x8000;
+    }
+  } else if (yy < 0) {
+    angle = -angle;
+  }
+  const result = toS16(angle);
+  const debug = (globalThis as any).__DETERMINISM_DEBUG__;
+  if (debug?.atan2 && debug.remaining > 0) {
+    const sum = Math.abs(yy) + Math.abs(xx);
+    if (sum <= (debug.eps ?? 0)) {
+      debug.remaining -= 1;
+      if (debug.records) {
+        const stack = debug.stack ? new Error().stack : null;
+        debug.records.push({
+          tick: debug.tick ?? null,
+          source: debug.source ?? null,
+          x: xx,
+          y: yy,
+          angle: result,
+          sum,
+          ratio,
+          atanIndexUsed,
+          atanRaw,
+          stack,
+        });
+      }
+    }
+  }
+  return result;
+}
+
+export function atan2S16Safe(y, x, eps = EPSILON) {
+  if (Math.abs(y) + Math.abs(x) <= eps) {
+    return 0;
+  }
+  return atan2S16(y, x);
+}
+
+export function atan2S16Detail(y, x) {
+  const yy = f32(y);
+  const xx = f32(x);
+  if (yy === 0 && xx === 0) {
+    return {
+      angle: 0,
+      ratio: 0,
+      atanIndexUsed: 0,
+      atanRaw: 0,
+    };
+  }
+  const ay = Math.abs(yy);
+  const ax = Math.abs(xx);
+  let angle;
+  let ratio = 0;
+  let atanIndexUsed = -1;
+  let atanRaw = 0;
+  if (ay === ax) {
+    angle = ay === 0 ? 0 : 0x2000;
+  } else if (ay > ax) {
+    ratio = ax / ay;
+    const atanDetail = atanS16WithDetail(ratio);
+    atanIndexUsed = atanDetail.index;
+    atanRaw = atanDetail.raw;
+    angle = 0x4000 - atanDetail.angle;
+  } else {
+    ratio = ay / ax;
+    const atanDetail = atanS16WithDetail(ratio);
+    atanIndexUsed = atanDetail.index;
+    atanRaw = atanDetail.raw;
+    angle = atanDetail.angle;
+  }
+
+  if (xx < 0) {
+    if (yy >= 0) {
+      angle = 0x8000 - angle;
+    } else {
+      angle = angle - 0x8000;
+    }
+  } else if (yy < 0) {
+    angle = -angle;
+  }
+  return {
+    angle: toS16(angle),
+    ratio,
+    atanIndexUsed,
+    atanRaw,
+  };
 }
 
 export function sumSq2(x, y) {
@@ -31,11 +253,46 @@ export function sumSq3(x, y, z) {
 }
 
 export function sqrt(value) {
-  return Math.sqrt(value);
+  const v = f32(value);
+  if (Number.isNaN(v)) {
+    return NaN;
+  }
+  if (v <= 0) {
+    return 0;
+  }
+  if (!Number.isFinite(v)) {
+    return v;
+  }
+  const inv = rsqrtSmb1(v);
+  return f32(v * inv);
 }
 
 export function rsqrt(value) {
-  return 1 / Math.sqrt(value);
+  const v = f32(value);
+  if (Number.isNaN(v)) {
+    return NaN;
+  }
+  if (v <= 0) {
+    return Infinity;
+  }
+  if (!Number.isFinite(v)) {
+    return 0;
+  }
+  return rsqrtSmb1(v);
+}
+
+function rsqrtSmb1(value) {
+  const v = f32(value);
+  // Deterministic approximation using fixed Newton iterations, mirroring SMB1 flow.
+  let x = f32(1 / Math.sqrt(v));
+  const half = f32(0.5);
+  const onePointFive = f32(1.5);
+  for (let i = 0; i < 3; i += 1) {
+    const xx = f32(x * x);
+    const term = f32(onePointFive - f32(half * f32(v * xx)));
+    x = f32(x * term);
+  }
+  return x;
 }
 
 export function floor(value) {
@@ -56,7 +313,7 @@ export function vecDotNormalized(a, b) {
 }
 
 export function vecLen(a) {
-  return Math.sqrt(sumSq3(a.x, a.y, a.z));
+  return sqrt(sumSq3(a.x, a.y, a.z));
 }
 
 export function vecNormalizeLen(a) {
@@ -96,7 +353,7 @@ export function vecCross(a, b, out) {
 }
 
 export function vecDistance(a, b) {
-  return Math.sqrt(sumSq3(a.x - b.x, a.y - b.y, a.z - b.z));
+  return sqrt(sumSq3(a.x - b.x, a.y - b.y, a.z - b.z));
 }
 
 export function quatFromAxisAngle(axis, angleS16, out) {
@@ -491,7 +748,7 @@ export class MatrixStack {
     const m = this.mtxA;
     const trace = m[0] + m[5] + m[10];
     if (trace > 0) {
-      const s = Math.sqrt(trace + 1.0) * 2;
+      const s = sqrt(trace + 1.0) * 2;
       out.w = 0.25 * s;
       out.x = (m[9] - m[6]) / s;
       out.y = (m[2] - m[8]) / s;
@@ -499,7 +756,7 @@ export class MatrixStack {
       return;
     }
     if (m[0] > m[5] && m[0] > m[10]) {
-      const s = Math.sqrt(1.0 + m[0] - m[5] - m[10]) * 2;
+      const s = sqrt(1.0 + m[0] - m[5] - m[10]) * 2;
       out.w = (m[9] - m[6]) / s;
       out.x = 0.25 * s;
       out.y = (m[1] + m[4]) / s;
@@ -507,14 +764,14 @@ export class MatrixStack {
       return;
     }
     if (m[5] > m[10]) {
-      const s = Math.sqrt(1.0 + m[5] - m[0] - m[10]) * 2;
+      const s = sqrt(1.0 + m[5] - m[0] - m[10]) * 2;
       out.w = (m[2] - m[8]) / s;
       out.x = (m[1] + m[4]) / s;
       out.y = 0.25 * s;
       out.z = (m[6] + m[9]) / s;
       return;
     }
-    const s = Math.sqrt(1.0 + m[10] - m[0] - m[5]) * 2;
+    const s = sqrt(1.0 + m[10] - m[0] - m[5]) * 2;
     out.w = (m[4] - m[1]) / s;
     out.x = (m[2] + m[8]) / s;
     out.y = (m[6] + m[9]) / s;

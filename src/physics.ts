@@ -786,12 +786,13 @@ export function stepBall(ball, stageRuntime, world) {
 
   if (stageRuntime.effects) {
     const onGround = (physBall.flags & COLI_FLAGS.OCCURRED) !== 0 && physBall.hardestColiPlane.normal.y > 0;
-    spawnMovementSparks(stageRuntime.effects, ball, onGround);
+    const rng = stageRuntime.visualRng;
+    spawnMovementSparks(stageRuntime.effects, ball, onGround, rng);
     if ((physBall.flags & COLI_FLAGS.OCCURRED) && physBall.hardestColiSpeed < -0.06) {
-      spawnCollisionStars(stageRuntime.effects, ball, physBall.hardestColiSpeed);
+      spawnCollisionStars(stageRuntime.effects, ball, physBall.hardestColiSpeed, rng);
     }
     if (ball.state === BALL_STATES.GOAL_MAIN && (ball.unk80 & 1)) {
-      spawnPostGoalSparkle(stageRuntime.effects, ball);
+      spawnPostGoalSparkle(stageRuntime.effects, ball, rng);
     }
   }
 
