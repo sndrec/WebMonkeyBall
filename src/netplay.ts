@@ -60,6 +60,15 @@ export class LobbyClient {
 
   openSignal(roomId: string, playerId: number, onMessage: (msg: SignalMessage) => void, onClose: () => void) {
     const ws = new WebSocket(`${this.baseUrl.replace('http', 'ws')}/room/${roomId}?playerId=${playerId}`);
+    const pending: SignalMessage[] = [];
+    ws.addEventListener('open', () => {
+      while (pending.length > 0) {
+        const msg = pending.shift();
+        if (msg) {
+          ws.send(JSON.stringify(msg));
+        }
+      }
+    });
     ws.addEventListener('message', (event) => {
       try {
         const msg = JSON.parse(event.data) as SignalMessage;
@@ -72,7 +81,13 @@ export class LobbyClient {
     });
     ws.addEventListener('close', () => onClose());
     return {
-      send: (msg: SignalMessage) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg)),
+      send: (msg: SignalMessage) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(msg));
+        } else if (ws.readyState === WebSocket.CONNECTING) {
+          pending.push(msg);
+        }
+      },
       close: () => ws.close(),
     };
   }
@@ -84,7 +99,11 @@ export class HostRelay {
 
   constructor(private onMessage: (playerId: number, msg: ClientToHostMessage) => void) {}
 
-  createPeer(playerId: number): RTCPeerConnection {
+  getPeer(playerId: number): RTCPeerConnection {
+    const existing = this.peers.get(playerId);
+    if (existing) {
+      return existing;
+    }
     const pc = new RTCPeerConnection({ iceServers: DEFAULT_STUN });
     pc.addEventListener('icecandidate', (ev) => {
       if (ev.candidate) {
@@ -240,7 +259,7 @@ export class ClientPeer {
 }
 
 export async function createHostOffer(host: HostRelay, playerId: number) {
-  const pc = host.createPeer(playerId);
+  const pc = host.getPeer(playerId);
   const channel = pc.createDataChannel('game');
   host.attachChannel(playerId, channel);
   const offer = await pc.createOffer();
@@ -249,7 +268,7 @@ export async function createHostOffer(host: HostRelay, playerId: number) {
 }
 
 export async function applyHostSignal(host: HostRelay, playerId: number, payload: any) {
-  const pc = host.createPeer(playerId);
+  const pc = host.getPeer(playerId);
   if (payload?.sdp) {
     await pc.setRemoteDescription(payload.sdp);
     if (payload.sdp.type === 'answer') {
