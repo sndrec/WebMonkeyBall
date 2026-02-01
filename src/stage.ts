@@ -1594,6 +1594,52 @@ export class StageRuntime {
       this.visualRng.state = state.visualRngState ?? this.visualRng.state;
     }
 
+    const ensureMtx = (target, key = 'transform') => {
+      if (!target || !target[key]) {
+        return;
+      }
+      if (!(target[key] instanceof Float32Array)) {
+        const next = new Float32Array(12);
+        next.set(target[key] as ArrayLike<number>);
+        target[key] = next;
+      }
+    };
+
+    for (const group of this.animGroups) {
+      if (group?.transform && !(group.transform instanceof Float32Array)) {
+        const next = new Float32Array(12);
+        next.set(group.transform as ArrayLike<number>);
+        group.transform = next;
+      }
+      if (group?.prevTransform && !(group.prevTransform instanceof Float32Array)) {
+        const nextPrev = new Float32Array(12);
+        nextPrev.set(group.prevTransform as ArrayLike<number>);
+        group.prevTransform = nextPrev;
+      }
+      if (group?.seesawState) {
+        ensureMtx(group.seesawState);
+        ensureMtx(group.seesawState, 'invTransform');
+      }
+    }
+
+    for (const goal of this.goals) {
+      ensureMtx(goal);
+    }
+    for (const bumperGroup of this.bumpers) {
+      for (const bumper of bumperGroup) {
+        ensureMtx(bumper);
+      }
+    }
+    for (const jamabarGroup of this.jamabars) {
+      for (const jamabar of jamabarGroup) {
+        ensureMtx(jamabar);
+      }
+    }
+    for (const seesaw of this.seesaws) {
+      ensureMtx(seesaw);
+      ensureMtx(seesaw, 'invTransform');
+    }
+
     const count = this.stage.animGroupCount ?? 0;
     this.goalBagsByGroup.length = count;
     this.goalTapesByGroup.length = count;

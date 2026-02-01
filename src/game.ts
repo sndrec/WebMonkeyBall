@@ -625,7 +625,7 @@ export class Game {
   }
 
   getLocalPlayer() {
-    return this.players[this.localPlayerId] ?? null;
+    return this.players.find((player) => player.id === this.localPlayerId) ?? null;
   }
 
   private allActivePlayersFinished() {
@@ -811,7 +811,8 @@ export class Game {
           }
         }
         if (saved.ball) {
-          player.ball = structuredClone(saved.ball);
+          this.applyBallState(player.ball, saved.ball);
+          player.ball.playerId = player.id;
           if (player.id === this.localPlayerId) {
             this.ball = player.ball;
           }
@@ -824,6 +825,122 @@ export class Game {
     }
     if (state.stageRuntime) {
       this.stageRuntime.setState(state.stageRuntime);
+    }
+  }
+
+  private copyVec3(target, source) {
+    if (!target || !source) {
+      return;
+    }
+    target.x = source.x ?? target.x ?? 0;
+    target.y = source.y ?? target.y ?? 0;
+    target.z = source.z ?? target.z ?? 0;
+  }
+
+  private copyQuat(target, source) {
+    if (!target || !source) {
+      return;
+    }
+    target.x = source.x ?? target.x ?? 0;
+    target.y = source.y ?? target.y ?? 0;
+    target.z = source.z ?? target.z ?? 0;
+    target.w = source.w ?? target.w ?? 1;
+  }
+
+  private copyMat12(target, source) {
+    if (!source) {
+      return;
+    }
+    if (target && typeof target.set === 'function') {
+      target.set(source as ArrayLike<number>);
+      return;
+    }
+    const next = new Float32Array(12);
+    next.set(source as ArrayLike<number>);
+    return next;
+  }
+
+  private applyBallState(target, source) {
+    if (!target || !source) {
+      return;
+    }
+    target.playerId = source.playerId ?? target.playerId ?? 0;
+    this.copyVec3(target.pos, source.pos);
+    this.copyVec3(target.prevPos, source.prevPos);
+    this.copyVec3(target.vel, source.vel);
+    target.rotX = source.rotX ?? target.rotX ?? 0;
+    target.rotY = source.rotY ?? target.rotY ?? 0;
+    target.rotZ = source.rotZ ?? target.rotZ ?? 0;
+    target.flags = source.flags ?? target.flags ?? 0;
+    target.state = source.state ?? target.state ?? 0;
+    this.copyVec3(target.startPos, source.startPos);
+    target.startRotY = source.startRotY ?? target.startRotY ?? 0;
+    target.goalTimer = source.goalTimer ?? target.goalTimer ?? 0;
+    target.currRadius = source.currRadius ?? target.currRadius ?? 0.5;
+    target.accel = source.accel ?? target.accel ?? 0;
+    target.restitution = source.restitution ?? target.restitution ?? 0;
+    target.unk60 = source.unk60 ?? target.unk60 ?? 0;
+    target.unk62 = source.unk62 ?? target.unk62 ?? 0;
+    target.unk64 = source.unk64 ?? target.unk64 ?? 0;
+    target.unk80 = source.unk80 ?? target.unk80 ?? 0;
+    target.unk92 = source.unk92 ?? target.unk92 ?? 0;
+    target.apeYaw = source.apeYaw ?? target.apeYaw ?? 0;
+    this.copyQuat(target.unkA8, source.unkA8);
+    this.copyVec3(target.unkB8, source.unkB8);
+    target.unkC4 = source.unkC4 ?? target.unkC4 ?? 0;
+    target.unkF8 = source.unkF8 ?? target.unkF8 ?? 0;
+    this.copyQuat(target.apeQuat, source.apeQuat);
+    target.apeFlags = source.apeFlags ?? target.apeFlags ?? 0;
+    const nextTransform = this.copyMat12(target.transform, source.transform);
+    if (nextTransform) {
+      target.transform = nextTransform;
+    }
+    const nextPrevTransform = this.copyMat12(target.prevTransform, source.prevTransform);
+    if (nextPrevTransform) {
+      target.prevTransform = nextPrevTransform;
+    }
+    this.copyVec3(target.unk114, source.unk114);
+    this.copyQuat(target.deltaQuat, source.deltaQuat);
+    this.copyQuat(target.orientation, source.orientation);
+    this.copyQuat(target.prevOrientation, source.prevOrientation);
+    target.speed = source.speed ?? target.speed ?? 0;
+    target.bananas = source.bananas ?? target.bananas ?? 0;
+    if (target.audio && source.audio) {
+      target.audio.lastImpactFrame = source.audio.lastImpactFrame ?? target.audio.lastImpactFrame ?? 0;
+      target.audio.rollingVol = source.audio.rollingVol ?? target.audio.rollingVol ?? 0;
+      target.audio.rollingPitch = source.audio.rollingPitch ?? target.audio.rollingPitch ?? 0;
+      target.audio.bumperHit = source.audio.bumperHit ?? target.audio.bumperHit ?? false;
+      target.audio.lastColiSpeed = source.audio.lastColiSpeed ?? target.audio.lastColiSpeed ?? 0;
+      target.audio.lastColiFlags = source.audio.lastColiFlags ?? target.audio.lastColiFlags ?? 0;
+    }
+    target.wormholeCooldown = source.wormholeCooldown ?? target.wormholeCooldown ?? 0;
+    if (source.wormholeTransform) {
+      if (target.wormholeTransform && typeof target.wormholeTransform.set === 'function') {
+        target.wormholeTransform.set(source.wormholeTransform as ArrayLike<number>);
+      } else {
+        const mat = new Float32Array(16);
+        mat.set(source.wormholeTransform as ArrayLike<number>);
+        target.wormholeTransform = mat;
+      }
+    } else {
+      target.wormholeTransform = null;
+    }
+    if (target.physBall && source.physBall) {
+      const phys = target.physBall;
+      const srcPhys = source.physBall;
+      phys.flags = srcPhys.flags ?? phys.flags ?? 0;
+      this.copyVec3(phys.pos, srcPhys.pos);
+      this.copyVec3(phys.prevPos, srcPhys.prevPos);
+      this.copyVec3(phys.vel, srcPhys.vel);
+      phys.radius = srcPhys.radius ?? phys.radius ?? 0.5;
+      phys.gravityAccel = srcPhys.gravityAccel ?? phys.gravityAccel ?? 0;
+      phys.restitution = srcPhys.restitution ?? phys.restitution ?? 0;
+      phys.hardestColiSpeed = srcPhys.hardestColiSpeed ?? phys.hardestColiSpeed ?? 0;
+      if (phys.hardestColiPlane && srcPhys.hardestColiPlane) {
+        this.copyVec3(phys.hardestColiPlane.normal, srcPhys.hardestColiPlane.normal);
+        this.copyVec3(phys.hardestColiPlane.point, srcPhys.hardestColiPlane.point);
+      }
+      phys.hardestColiAnimGroupId = srcPhys.hardestColiAnimGroupId ?? phys.hardestColiAnimGroupId ?? 0;
     }
   }
 
@@ -858,6 +975,9 @@ export class Game {
       ringoutTimerFrames: 0,
       ringoutSkipTimerFrames: 0,
     });
+    if (id === this.localPlayerId) {
+      this.ball = ball;
+    }
     if (!spectator && !pendingSpawn) {
       this.markNoCollideForPlayer(id);
     }

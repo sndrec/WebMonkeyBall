@@ -539,6 +539,19 @@ const game = new Game({
   },
   onStageLoaded: (stageId) => {
     void handleStageLoaded(stageId);
+    if (netplayEnabled && netplayState?.role === 'host' && hostRelay) {
+      const config = getHostCourseConfig();
+      if (config) {
+        netplayState.currentCourse = config;
+        netplayState.currentGameSource = activeGameSource;
+        hostRelay.broadcast({
+          type: 'start',
+          gameSource: activeGameSource,
+          course: config,
+          stageBasePath: getStageBasePath(activeGameSource),
+        });
+      }
+    }
   },
 });
 game.init();
@@ -1173,6 +1186,40 @@ function requestSnapshot(reason: 'mismatch' | 'lag') {
   });
 }
 
+function cloneCourseConfig(config: any) {
+  if (!config || typeof config !== 'object') {
+    return config;
+  }
+  return JSON.parse(JSON.stringify(config));
+}
+
+function getHostCourseConfig() {
+  if (!netplayState?.currentCourse || !game.course) {
+    return netplayState?.currentCourse ?? null;
+  }
+  const config = cloneCourseConfig(netplayState.currentCourse);
+  if (activeGameSource === GAME_SOURCES.SMB1) {
+    const course = game.course as any;
+    if (typeof course.currentFloor === 'number') {
+      config.stageIndex = Math.max(0, course.currentFloor - 1);
+    }
+    if (typeof course.difficulty === 'string') {
+      config.difficulty = course.difficulty;
+    }
+    return config;
+  }
+  const course = game.course as any;
+  if (typeof course.currentIndex === 'number') {
+    if (config.mode === 'story') {
+      config.worldIndex = Math.floor(course.currentIndex / 10);
+      config.stageIndex = course.currentIndex % 10;
+    } else {
+      config.stageIndex = course.currentIndex;
+    }
+  }
+  return config;
+}
+
 function handleHostMessage(msg: HostToClientMessage) {
   const state = netplayState;
   if (!state) {
@@ -1269,9 +1316,14 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
   if (!state) {
     return;
   }
-  const clientState = state.clientStates.get(playerId);
+  let clientState = state.clientStates.get(playerId);
   if (!clientState) {
-    return;
+    clientState = { lastAckedHostFrame: -1, lastAckedClientInput: -1 };
+    state.clientStates.set(playerId, clientState);
+  }
+  if (!game.players.some((player) => player.id === playerId)) {
+    game.addPlayer(playerId, { spectator: false });
+    updateLobbyUi();
   }
   if (msg.type === 'input') {
     if (msg.lastAck !== undefined) {
