@@ -585,6 +585,21 @@ export class Input {
     if (y < -1) y = -1;
     return { x, y };
   }
+
+  static async requestGyroPermission(): Promise<'granted' | 'denied'> {
+    if (typeof window.DeviceOrientationEvent !== 'undefined' && 
+        typeof (window.DeviceOrientationEvent as any).requestPermission === 'function') {
+      try {
+        const response = await (window.DeviceOrientationEvent as any).requestPermission();
+        return response === 'granted' ? 'granted' : 'denied';
+      } catch (e) {
+        console.error('Gyro permission request failed:', e);
+        return 'denied';
+      }
+    }
+    // Non-iOS devices (or older iOS) usually don't need explicit permission or don't support this API
+    return 'granted';
+  }
 }
 
 const DEFAULT_STICK_GATE = [
