@@ -1080,12 +1080,13 @@ export class HudRenderer {
     const timeLeftRaw = (game?.stageTimeLimitFrames ?? 0) - (game?.stageTimerFrames ?? 0);
     const timeLeft = Math.max(0, timeLeftRaw);
     const { seconds, centis } = formatTimerSeconds(timeLeft);
-    const bananasCollected = game?.ball?.bananas ?? 0;
+    const localPlayer = game?.getLocalPlayer?.() ?? null;
+    const bananasCollected = localPlayer?.ball?.bananas ?? 0;
     const bananasLeft = game?.bananasLeft ?? 0;
     const bananaTotal = bananasCollected + bananasLeft;
     const score = String(Math.max(0, Math.trunc(this.scoreDisplay)));
     const lives = Math.max(0, Math.trunc(game?.lives ?? 0));
-    const speedMph = Math.max(0, (game?.ball?.speed ?? 0) * 134.21985);
+    const speedMph = Math.max(0, (localPlayer?.ball?.speed ?? 0) * 134.21985);
     const isBonusStage = game?.isBonusStageActive?.() ?? false;
     const floorInfo = game?.course?.getFloorInfo?.();
     const floorPrefix = floorInfo?.prefix ?? 'FLOOR';

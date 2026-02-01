@@ -90,6 +90,30 @@
       </div>
       <input id="replay-file" class="hidden" type="file" accept=".json" />
 
+      <div class="panel-section">
+        <div class="panel-section-header">
+          <h2>Multiplayer</h2>
+          <button id="lobby-refresh" class="ghost compact" type="button">Refresh</button>
+        </div>
+        <div class="multiplayer-row">
+          <button id="lobby-create" class="ghost compact" type="button">Create Room</button>
+          <label class="checkbox-field">
+            <input id="lobby-public" type="checkbox" checked />
+            <span>Public</span>
+          </label>
+        </div>
+        <div class="multiplayer-row">
+          <input id="lobby-code" class="text-input" type="text" placeholder="Room code" />
+          <button id="lobby-join" class="ghost compact" type="button">Join</button>
+        </div>
+        <div class="multiplayer-row">
+          <button id="lobby-leave" class="ghost compact hidden" type="button">Leave Room</button>
+        </div>
+        <div id="lobby-status" class="pack-status">Lobby: idle</div>
+        <div id="lobby-players" class="lobby-players hidden"></div>
+        <div id="lobby-list" class="lobby-list"></div>
+      </div>
+
       <label id="control-mode-field" class="field hidden">
         <span>Control Mode</span>
         <div class="control-mode-row">
@@ -334,6 +358,10 @@
         });
       }
     }
+  </script>
+
+  <script>
+    window.LOBBY_URL = "https://webmonkeyball-lobby.sndrec32exe.workers.dev";
   </script>
 
   <script type="module" src="./dist/main.js"></script>

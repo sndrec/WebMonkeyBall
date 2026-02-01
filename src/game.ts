@@ -16,13 +16,15 @@ import {
 import { intersectsMovingSpheres, tfPhysballToAnimGroupSpace } from './collision.js';
 import { MatrixStack, sqrt, toS16 } from './math.js';
 import { GameplayCamera } from './camera.js';
-import { dequantizeStick, quantizeStick, type QuantizedStick } from './determinism.js';
+import { dequantizeStick, quantizeInput, quantizeStick, type QuantizedInput, type QuantizedStick } from './determinism.js';
 import { createReplayData, type ReplayData } from './replay.js';
+import { RollbackSession } from './rollback.js';
 import {
   checkBallEnteredGoal,
   createBallState,
   initBallForStage,
   resetBall,
+  resolveBallBallCollision,
   startBallDrop,
   startGoal,
   stepBall,
@@ -58,6 +60,7 @@ const BONUS_CLEAR_SEQUENCE_FRAMES = 180;
 const GOAL_SKIP_TOTAL_FRAMES = 210;
 const RINGOUT_TOTAL_FRAMES = 270;
 const RINGOUT_BONUS_CUTOFF_FRAMES = 260;
+const PLAYER_NO_COLLIDE_CLEAR_EPS = 0.02;
 const RINGOUT_BONUS_REMAINING_FRAMES = 110;
 const RINGOUT_SKIP_DELAY_FRAMES = 60;
 const RINGOUT_STATUS_TEXT = 'Fall out!';
@@ -71,6 +74,23 @@ const SPEED_BAR_MAX_MPH = 70;
 const fallOutStack = new MatrixStack();
 const fallOutLocal = { x: 0, y: 0, z: 0 };
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+type PlayerState = {
+  id: number;
+  ball: ReturnType<typeof createBallState>;
+  world: World;
+  cameraRotY: number;
+  isSpectator: boolean;
+  pendingSpawn: boolean;
+  finished: boolean;
+  goalType: string | null;
+  goalTimerFrames: number;
+  goalSkipTimerFrames: number;
+  goalInfo: any;
+  respawnTimerFrames: number;
+  ringoutTimerFrames: number;
+  ringoutSkipTimerFrames: number;
+};
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
@@ -267,6 +287,11 @@ export class Game {
   public input: Input | null;
   public world: World | null;
   public ball: ReturnType<typeof createBallState> | null;
+  public players: PlayerState[];
+  public localPlayerId: number;
+  public maxPlayers: number;
+  public playerCollisionEnabled: boolean;
+  public noCollidePairs: Set<string>;
   public cameraController: GameplayCamera | null;
 
   public tmpPhysBall: {
@@ -294,14 +319,9 @@ export class Game {
   public loadToken: number;
   public pendingAdvance: boolean;
   public introTimerFrames: number;
-  public goalTimerFrames: number;
-  public goalSkipTimerFrames: number;
-  public goalInfo: any;
   public introTotalFrames: number;
   public dropFrames: number;
   public stageAttempts: number;
-  public ringoutTimerFrames: number;
-  public ringoutSkipTimerFrames: number;
   public timeoverTimerFrames: number;
   public bonusClearPending: boolean;
   public readyAnnouncerPlayed: boolean;
@@ -313,6 +333,7 @@ export class Game {
   public bananaGroups: { collected: boolean }[][] | null;
   public bananaCollectedByAnimGroup: boolean[][] | null;
   public renderBallState: BallRenderState | null;
+  public renderBallStates: BallRenderState[] | null;
   public renderBananas: BananaRenderState[] | null;
   public renderGoalBags: GoalBagRenderState[] | null;
   public renderGoalTapes: GoalTapeRenderState[] | null;
@@ -334,9 +355,15 @@ export class Game {
     lastTickMs: number;
   };
   public simTick: number;
-  public inputFeed: QuantizedStick[] | null;
+  public inputFeed: (QuantizedStick | QuantizedInput)[] | null;
   public inputFeedIndex: number;
   public inputRecord: QuantizedStick[] | null;
+  public playerInputFeeds: Map<number, (QuantizedStick | QuantizedInput)[]>;
+  public playerInputFeedIndices: Map<number, number>;
+  public rollbackEnabled: boolean;
+  public rollbackSession: RollbackSession<any> | null;
+  public nextPlayerId: number;
+  public lastLocalInput: QuantizedInput;
   public fixedTickMode: boolean;
   public fixedTicksPerUpdate: number;
   public autoRecordInputs: boolean;
@@ -366,6 +393,11 @@ export class Game {
     this.input = null;
     this.world = null;
     this.ball = null;
+    this.players = [];
+    this.localPlayerId = 0;
+    this.maxPlayers = 8;
+    this.playerCollisionEnabled = true;
+    this.noCollidePairs = new Set();
     this.cameraController = null;
     this.tmpPhysBall = {
       pos: { x: 0, y: 0, z: 0 },
@@ -393,14 +425,9 @@ export class Game {
     this.loadToken = 0;
     this.pendingAdvance = false;
     this.introTimerFrames = 0;
-    this.goalTimerFrames = 0;
-    this.goalSkipTimerFrames = 0;
-    this.goalInfo = null;
     this.introTotalFrames = 120;
     this.dropFrames = 24;
     this.stageAttempts = 0;
-    this.ringoutTimerFrames = 0;
-    this.ringoutSkipTimerFrames = 0;
     this.timeoverTimerFrames = 0;
     this.bonusClearPending = false;
     this.readyAnnouncerPlayed = false;
@@ -412,6 +439,7 @@ export class Game {
     this.bananaGroups = null;
     this.bananaCollectedByAnimGroup = null;
     this.renderBallState = null;
+    this.renderBallStates = null;
     this.renderBananas = null;
     this.renderGoalBags = null;
     this.renderGoalTapes = null;
@@ -436,6 +464,12 @@ export class Game {
     this.inputFeed = null;
     this.inputFeedIndex = 0;
     this.inputRecord = null;
+    this.playerInputFeeds = new Map();
+    this.playerInputFeedIndices = new Map();
+    this.rollbackEnabled = false;
+    this.rollbackSession = null;
+    this.nextPlayerId = 1;
+    this.lastLocalInput = { x: 0, y: 0, buttons: 0 };
     this.fixedTickMode = false;
     this.fixedTicksPerUpdate = 1;
     this.autoRecordInputs = true;
@@ -453,6 +487,69 @@ export class Game {
   setInputFeed(feed: QuantizedStick[] | null) {
     this.inputFeed = feed;
     this.inputFeedIndex = 0;
+  }
+
+  setPlayerInputFeed(playerId: number, feed: (QuantizedStick | QuantizedInput)[] | null) {
+    if (!feed) {
+      this.playerInputFeeds.delete(playerId);
+      this.playerInputFeedIndices.delete(playerId);
+      return;
+    }
+    this.playerInputFeeds.set(playerId, feed);
+    this.playerInputFeedIndices.set(playerId, 0);
+  }
+
+  setLocalPlayerId(playerId: number) {
+    if (this.localPlayerId === playerId) {
+      return;
+    }
+    const existing = this.players.find((player) => player.id === playerId);
+    const current = this.players.find((player) => player.id === this.localPlayerId);
+    if (existing && existing !== current) {
+      this.localPlayerId = playerId;
+      this.ball = existing.ball;
+      return;
+    }
+    if (current) {
+      current.id = playerId;
+      current.ball.playerId = playerId;
+      this.localPlayerId = playerId;
+      this.ball = current.ball;
+      return;
+    }
+    this.localPlayerId = playerId;
+  }
+
+  applyFrameInputs(frameInputs: Map<number, QuantizedInput>) {
+    for (const player of this.players) {
+      const frame = frameInputs.get(player.id);
+      if (frame) {
+        this.setPlayerInputFeed(player.id, [frame]);
+      } else {
+        this.setPlayerInputFeed(player.id, null);
+      }
+    }
+  }
+
+  advanceOneFrame(frameInputs: Map<number, QuantizedInput>) {
+    this.applyFrameInputs(frameInputs);
+    const prevFixed = this.fixedTickMode;
+    const prevTicks = this.fixedTicksPerUpdate;
+    this.setFixedTickMode(true, 1);
+    this.update(this.fixedStep);
+    this.setFixedTickMode(prevFixed, prevTicks);
+  }
+
+  ensureRollbackSession() {
+    if (this.rollbackSession) {
+      return this.rollbackSession;
+    }
+    this.rollbackSession = new RollbackSession({
+      saveState: () => this.saveRollbackState(),
+      loadState: (state) => this.loadRollbackState(state),
+      advanceFrame: (inputs) => this.advanceOneFrame(inputs),
+    }, 30);
+    return this.rollbackSession;
   }
 
   setFixedTickMode(enabled: boolean, ticksPerUpdate = 1) {
@@ -504,8 +601,288 @@ export class Game {
     this.input = new Input();
     this.world = new World();
     this.ball = createBallState();
+    this.ball.playerId = this.localPlayerId;
+    this.players = [
+      {
+        id: this.localPlayerId,
+        ball: this.ball,
+        world: new World(),
+        cameraRotY: 0,
+        isSpectator: false,
+        pendingSpawn: false,
+        finished: false,
+        goalType: null,
+        goalTimerFrames: 0,
+        goalSkipTimerFrames: 0,
+        goalInfo: null,
+        respawnTimerFrames: 0,
+        ringoutTimerFrames: 0,
+        ringoutSkipTimerFrames: 0,
+      },
+    ];
     this.cameraController = new GameplayCamera();
     this.running = true;
+  }
+
+  getLocalPlayer() {
+    return this.players[this.localPlayerId] ?? null;
+  }
+
+  private allActivePlayersFinished() {
+    let hasActive = false;
+    for (const player of this.players) {
+      if (player.isSpectator || player.pendingSpawn) {
+        continue;
+      }
+      hasActive = true;
+      if (!player.finished) {
+        return false;
+      }
+    }
+    return hasActive;
+  }
+
+  private getAdvanceGoalType() {
+    for (const player of this.players) {
+      if (player.goalType) {
+        return player.goalType;
+      }
+    }
+    return this.stage?.goals?.[0]?.type ?? 'B';
+  }
+
+  private getPairKey(a: number, b: number) {
+    return a < b ? `${a}:${b}` : `${b}:${a}`;
+  }
+
+  private markNoCollideForPlayer(playerId: number) {
+    for (const player of this.players) {
+      if (player.id === playerId) {
+        continue;
+      }
+      this.noCollidePairs.add(this.getPairKey(playerId, player.id));
+    }
+  }
+
+  private resolvePlayerCollisions() {
+    if (!this.playerCollisionEnabled || this.players.length < 2) {
+      return;
+    }
+    for (let i = 0; i < this.players.length; i += 1) {
+      const playerA = this.players[i];
+      if (playerA.isSpectator || playerA.pendingSpawn) {
+        continue;
+      }
+      const ballA = playerA.ball;
+      if (ballA.state !== BALL_STATES.PLAY || (ballA.flags & BALL_FLAGS.INVISIBLE)) {
+        continue;
+      }
+      for (let j = i + 1; j < this.players.length; j += 1) {
+        const playerB = this.players[j];
+        if (playerB.isSpectator || playerB.pendingSpawn) {
+          continue;
+        }
+        const ballB = playerB.ball;
+        if (ballB.state !== BALL_STATES.PLAY || (ballB.flags & BALL_FLAGS.INVISIBLE)) {
+          continue;
+        }
+        const pairKey = this.getPairKey(playerA.id, playerB.id);
+        if (this.noCollidePairs.has(pairKey)) {
+          if (this.introTimerFrames > 0) {
+            continue;
+          }
+          const dx = ballB.pos.x - ballA.pos.x;
+          const dy = ballB.pos.y - ballA.pos.y;
+          const dz = ballB.pos.z - ballA.pos.z;
+          const minDist = ballA.currRadius + ballB.currRadius + PLAYER_NO_COLLIDE_CLEAR_EPS;
+          if ((dx * dx + dy * dy + dz * dz) < minDist * minDist) {
+            continue;
+          }
+          this.noCollidePairs.delete(pairKey);
+        }
+        resolveBallBallCollision(ballA, ballB);
+      }
+    }
+  }
+
+  saveRollbackState() {
+    if (!this.stageRuntime) {
+      return null;
+    }
+    return {
+      simTick: this.simTick,
+      stageTimerFrames: this.stageTimerFrames,
+      stageTimeLimitFrames: this.stageTimeLimitFrames,
+      introTimerFrames: this.introTimerFrames,
+      introTotalFrames: this.introTotalFrames,
+      timeoverTimerFrames: this.timeoverTimerFrames,
+      bonusClearPending: this.bonusClearPending,
+      hurryUpAnnouncerPlayed: this.hurryUpAnnouncerPlayed,
+      timeOverAnnouncerPlayed: this.timeOverAnnouncerPlayed,
+      pendingAdvance: this.pendingAdvance,
+      world: this.world
+        ? {
+          xrot: this.world.xrot,
+          zrot: this.world.zrot,
+          xrotPrev: this.world.xrotPrev,
+          zrotPrev: this.world.zrotPrev,
+          gravity: structuredClone(this.world.gravity),
+        }
+        : null,
+      players: this.players.map((player) => ({
+        id: player.id,
+        isSpectator: player.isSpectator,
+        pendingSpawn: player.pendingSpawn,
+        finished: player.finished,
+        goalType: player.goalType,
+        goalTimerFrames: player.goalTimerFrames,
+        goalSkipTimerFrames: player.goalSkipTimerFrames,
+        goalInfo: structuredClone(player.goalInfo),
+        respawnTimerFrames: player.respawnTimerFrames,
+        ringoutTimerFrames: player.ringoutTimerFrames,
+        ringoutSkipTimerFrames: player.ringoutSkipTimerFrames,
+        cameraRotY: player.cameraRotY,
+        world: {
+          xrot: player.world.xrot,
+          zrot: player.world.zrot,
+          xrotPrev: player.world.xrotPrev,
+          zrotPrev: player.world.zrotPrev,
+          gravity: structuredClone(player.world.gravity),
+        },
+        ball: structuredClone(player.ball),
+      })),
+      noCollidePairs: Array.from(this.noCollidePairs),
+      playerCollisionEnabled: this.playerCollisionEnabled,
+      stageRuntime: this.stageRuntime.getState(),
+    };
+  }
+
+  loadRollbackState(state) {
+    if (!state || !this.stageRuntime) {
+      return;
+    }
+    this.simTick = state.simTick ?? this.simTick;
+    this.stageTimerFrames = state.stageTimerFrames ?? this.stageTimerFrames;
+    this.stageTimeLimitFrames = state.stageTimeLimitFrames ?? this.stageTimeLimitFrames;
+    this.introTimerFrames = state.introTimerFrames ?? this.introTimerFrames;
+    this.introTotalFrames = state.introTotalFrames ?? this.introTotalFrames;
+    this.timeoverTimerFrames = state.timeoverTimerFrames ?? this.timeoverTimerFrames;
+    this.bonusClearPending = !!state.bonusClearPending;
+    this.hurryUpAnnouncerPlayed = !!state.hurryUpAnnouncerPlayed;
+    this.timeOverAnnouncerPlayed = !!state.timeOverAnnouncerPlayed;
+    this.pendingAdvance = !!state.pendingAdvance;
+    if (state.world && this.world) {
+      this.world.xrot = state.world.xrot ?? this.world.xrot;
+      this.world.zrot = state.world.zrot ?? this.world.zrot;
+      this.world.xrotPrev = state.world.xrotPrev ?? this.world.xrotPrev;
+      this.world.zrotPrev = state.world.zrotPrev ?? this.world.zrotPrev;
+      if (state.world.gravity) {
+        this.world.gravity.x = state.world.gravity.x;
+        this.world.gravity.y = state.world.gravity.y;
+        this.world.gravity.z = state.world.gravity.z;
+      }
+    }
+    if (Array.isArray(state.players)) {
+      for (const saved of state.players) {
+        const player = this.players.find((p) => p.id === saved.id);
+        if (!player) {
+          continue;
+        }
+        player.isSpectator = !!saved.isSpectator;
+        player.pendingSpawn = !!saved.pendingSpawn;
+        player.finished = !!saved.finished;
+        player.goalType = saved.goalType ?? null;
+        player.goalTimerFrames = saved.goalTimerFrames ?? 0;
+        player.goalSkipTimerFrames = saved.goalSkipTimerFrames ?? 0;
+        player.goalInfo = structuredClone(saved.goalInfo);
+        player.respawnTimerFrames = saved.respawnTimerFrames ?? 0;
+        player.ringoutTimerFrames = saved.ringoutTimerFrames ?? 0;
+        player.ringoutSkipTimerFrames = saved.ringoutSkipTimerFrames ?? 0;
+        player.cameraRotY = saved.cameraRotY ?? 0;
+        if (saved.world) {
+          player.world.xrot = saved.world.xrot ?? player.world.xrot;
+          player.world.zrot = saved.world.zrot ?? player.world.zrot;
+          player.world.xrotPrev = saved.world.xrotPrev ?? player.world.xrotPrev;
+          player.world.zrotPrev = saved.world.zrotPrev ?? player.world.zrotPrev;
+          if (saved.world.gravity) {
+            player.world.gravity.x = saved.world.gravity.x;
+            player.world.gravity.y = saved.world.gravity.y;
+            player.world.gravity.z = saved.world.gravity.z;
+          }
+        }
+        if (saved.ball) {
+          player.ball = structuredClone(saved.ball);
+          if (player.id === this.localPlayerId) {
+            this.ball = player.ball;
+          }
+        }
+      }
+    }
+    this.noCollidePairs = new Set(state.noCollidePairs ?? []);
+    if (state.playerCollisionEnabled !== undefined) {
+      this.playerCollisionEnabled = !!state.playerCollisionEnabled;
+    }
+    if (state.stageRuntime) {
+      this.stageRuntime.setState(state.stageRuntime);
+    }
+  }
+
+  addPlayer(id: number, { spectator = false } = {}) {
+    if (this.players.some((player) => player.id === id)) {
+      return;
+    }
+    const ball = createBallState();
+    ball.playerId = id;
+    const world = new World();
+    const hasActiveStage = !!this.stage && !!this.stageRuntime;
+    const pendingSpawn = !spectator && hasActiveStage && this.stageTimerFrames > 0;
+    if (hasActiveStage && !pendingSpawn && !spectator) {
+      const start = this.stage?.startPositions?.[0];
+      const startPos = start?.pos ?? { x: 0, y: 0, z: 0 };
+      const startRotY = start?.rot?.y ?? 0;
+      initBallForStage(ball, startPos, startRotY);
+    }
+    this.players.push({
+      id,
+      ball,
+      world,
+      cameraRotY: 0,
+      isSpectator: spectator,
+      pendingSpawn,
+      finished: false,
+      goalType: null,
+      goalTimerFrames: 0,
+      goalSkipTimerFrames: 0,
+      goalInfo: null,
+      respawnTimerFrames: 0,
+      ringoutTimerFrames: 0,
+      ringoutSkipTimerFrames: 0,
+    });
+    if (!spectator && !pendingSpawn) {
+      this.markNoCollideForPlayer(id);
+    }
+  }
+
+  createPlayer({ spectator = false } = {}) {
+    const id = this.nextPlayerId++;
+    this.addPlayer(id, { spectator });
+    return id;
+  }
+
+  removePlayer(id: number) {
+    const idx = this.players.findIndex((player) => player.id === id);
+    if (idx < 0) {
+      return;
+    }
+    if (this.players[idx].id === this.localPlayerId) {
+      return;
+    }
+    this.players.splice(idx, 1);
+    for (const key of this.noCollidePairs) {
+      if (key.startsWith(`${id}:`) || key.endsWith(`:${id}`)) {
+        this.noCollidePairs.delete(key);
+      }
+    }
   }
 
   private ensureCameraPose() {
@@ -735,6 +1112,54 @@ export class Game {
     renderState.radius = this.ball.currRadius;
     renderState.visible = (this.ball.flags & BALL_FLAGS.INVISIBLE) === 0;
     return this.renderBallState;
+  }
+
+  getBallRenderStates(alpha = 1): BallRenderState[] | null {
+    if (!this.players.length) {
+      return null;
+    }
+    const useInterpolation = alpha < 1;
+    if (!this.renderBallStates || this.renderBallStates.length !== this.players.length) {
+      this.renderBallStates = new Array(this.players.length);
+      for (let i = 0; i < this.players.length; i += 1) {
+        const ball = this.players[i].ball;
+        this.renderBallStates[i] = {
+          pos: { x: ball.pos.x, y: ball.pos.y, z: ball.pos.z },
+          orientation: {
+            x: ball.orientation.x,
+            y: ball.orientation.y,
+            z: ball.orientation.z,
+            w: ball.orientation.w,
+          },
+          radius: ball.currRadius,
+          visible: (ball.flags & BALL_FLAGS.INVISIBLE) === 0,
+        };
+      }
+    }
+    for (let i = 0; i < this.players.length; i += 1) {
+      const player = this.players[i];
+      const ball = player.ball;
+      const renderState = this.renderBallStates[i];
+      if (useInterpolation) {
+        renderState.pos.x = lerp(ball.prevPos.x, ball.pos.x, alpha);
+        renderState.pos.y = lerp(ball.prevPos.y, ball.pos.y, alpha);
+        renderState.pos.z = lerp(ball.prevPos.z, ball.pos.z, alpha);
+        nlerpQuat(renderState.orientation, ball.prevOrientation, ball.orientation, alpha);
+      } else {
+        renderState.pos.x = ball.pos.x;
+        renderState.pos.y = ball.pos.y;
+        renderState.pos.z = ball.pos.z;
+        renderState.orientation.x = ball.orientation.x;
+        renderState.orientation.y = ball.orientation.y;
+        renderState.orientation.z = ball.orientation.z;
+        renderState.orientation.w = ball.orientation.w;
+      }
+      renderState.radius = ball.currRadius;
+      renderState.visible = !player.isSpectator
+        && !player.pendingSpawn
+        && (ball.flags & BALL_FLAGS.INVISIBLE) === 0;
+    }
+    return this.renderBallStates;
   }
 
   getGoalBagRenderState(alpha = 1): GoalBagRenderState[] | null {
@@ -1151,16 +1576,18 @@ export class Game {
   }
 
   getStageTiltRenderState(alpha = 1): StageTiltRenderState | null {
-    if (!this.world) {
+    const localPlayer = this.getLocalPlayer();
+    const tiltWorld = localPlayer?.world ?? this.world;
+    if (!tiltWorld) {
       return null;
     }
     const useInterpolation = alpha < 1;
     const xrot = useInterpolation
-      ? lerpS16(this.world.xrotPrev, this.world.xrot, alpha)
-      : this.world.xrot;
+      ? lerpS16(tiltWorld.xrotPrev, tiltWorld.xrot, alpha)
+      : tiltWorld.xrot;
     const zrot = useInterpolation
-      ? lerpS16(this.world.zrotPrev, this.world.zrot, alpha)
-      : this.world.zrot;
+      ? lerpS16(tiltWorld.zrotPrev, tiltWorld.zrot, alpha)
+      : tiltWorld.zrot;
     if (!this.renderStageTilt) {
       this.renderStageTilt = {
         xrot,
@@ -1306,6 +1733,19 @@ export class Game {
       this.timeoverTimerFrames = 0;
       this.hurryUpAnnouncerPlayed = false;
       this.timeOverAnnouncerPlayed = false;
+      for (const player of this.players) {
+        player.finished = false;
+        player.goalType = null;
+        player.goalTimerFrames = 0;
+        player.goalSkipTimerFrames = 0;
+        player.goalInfo = null;
+        player.respawnTimerFrames = 0;
+        player.ringoutTimerFrames = 0;
+        player.ringoutSkipTimerFrames = 0;
+        if (!player.isSpectator) {
+          player.pendingSpawn = false;
+        }
+      }
       this.pendingAdvance = false;
       if (this.autoRecordInputs) {
         this.startInputRecording();
@@ -1316,8 +1756,9 @@ export class Game {
         const startTick = Math.max(0, this.replayInputStartTick);
         this.introTotalFrames = startTick;
         this.introTimerFrames = startTick;
-        if (this.ball) {
-          this.cameraController?.initForStage(this.ball, this.ball.startRotY, this.stageRuntime);
+        const localPlayer = this.getLocalPlayer();
+        if (localPlayer) {
+          this.cameraController?.initForStage(localPlayer.ball, localPlayer.ball.startRotY, this.stageRuntime);
         }
         this.replayAutoFastForward = true;
         this.setFixedTickMode(true, 1);
@@ -1340,30 +1781,64 @@ export class Game {
   }
 
   resetBallForStage({ withIntro = false }: { withIntro?: boolean } = {}) {
-    if (!this.ball || !this.stage) {
+    if (!this.stage) {
       return;
     }
-    if (this.ball.audio) {
-      this.ball.audio.lastImpactFrame = -9999;
-      this.ball.audio.rollingVol = 0;
-      this.ball.audio.rollingPitch = 0;
-      this.ball.audio.bumperHit = false;
+    const localPlayer = this.getLocalPlayer();
+    if (localPlayer) {
+      localPlayer.finished = false;
+      localPlayer.goalType = null;
+      localPlayer.goalTimerFrames = 0;
+      localPlayer.goalSkipTimerFrames = 0;
+      localPlayer.goalInfo = null;
+      localPlayer.respawnTimerFrames = 0;
+      localPlayer.ringoutTimerFrames = 0;
+      localPlayer.ringoutSkipTimerFrames = 0;
     }
     this.world?.reset();
     const start = this.stage.startPositions?.[0];
     const startPos = start?.pos ?? { x: 0, y: 0, z: 0 };
     const startRotY = start?.rot?.y ?? 0;
+    for (const player of this.players) {
+      if (player.isSpectator) {
+        continue;
+      }
+      player.world.reset();
+      player.pendingSpawn = false;
+      if (player.ball.audio) {
+        player.ball.audio.lastImpactFrame = -9999;
+        player.ball.audio.rollingVol = 0;
+        player.ball.audio.rollingPitch = 0;
+        player.ball.audio.bumperHit = false;
+      }
+      player.finished = false;
+      player.goalType = null;
+      player.goalTimerFrames = 0;
+      player.goalSkipTimerFrames = 0;
+      player.goalInfo = null;
+      player.respawnTimerFrames = 0;
+      player.ringoutTimerFrames = 0;
+      player.ringoutSkipTimerFrames = 0;
+      if (withIntro) {
+        initBallForStage(player.ball, startPos, startRotY);
+      } else {
+        resetBall(player.ball, startPos, startRotY);
+      }
+      player.ball.bananas = 0;
+    }
+    this.noCollidePairs.clear();
+    for (const player of this.players) {
+      if (player.isSpectator) {
+        continue;
+      }
+      this.markNoCollideForPlayer(player.id);
+    }
     if (withIntro) {
       const isFirstAttempt = this.stageAttempts <= 1;
       const introFrames = isFirstAttempt ? 360 : 120;
       const flyInFrames = isFirstAttempt ? 350 : 90;
-      initBallForStage(this.ball, startPos, startRotY);
-      this.ball.bananas = 0;
       this.introTotalFrames = introFrames;
       this.introTimerFrames = introFrames;
-      this.goalTimerFrames = 0;
-      this.goalSkipTimerFrames = 0;
-      this.goalInfo = null;
       this.bonusClearPending = false;
       this.readyAnnouncerPlayed = false;
       this.goAnnouncerPlayed = false;
@@ -1374,32 +1849,55 @@ export class Game {
       }
       this.cameraController?.initReady(this.stageRuntime, startRotY, startPos, flyInFrames);
     } else {
-      resetBall(this.ball, startPos, startRotY);
       this.introTimerFrames = 0;
-      this.goalTimerFrames = 0;
-      this.goalSkipTimerFrames = 0;
-      this.goalInfo = null;
       this.bonusClearPending = false;
       this.readyAnnouncerPlayed = false;
       this.goAnnouncerPlayed = false;
       this.goalWooshPlayed = false;
-      this.cameraController?.initForStage(this.ball, startRotY, this.stageRuntime);
+      if (localPlayer) {
+        this.cameraController?.initForStage(localPlayer.ball, startRotY, this.stageRuntime);
+      }
     }
-    this.syncCameraPose();
-    this.ringoutTimerFrames = 0;
-    this.ringoutSkipTimerFrames = 0;
+    if (localPlayer) {
+      this.syncCameraPose();
+    }
     this.timeoverTimerFrames = 0;
     this.hurryUpAnnouncerPlayed = false;
     this.timeOverAnnouncerPlayed = false;
     this.accumulator = 0;
   }
 
-  beginFalloutSequence(isBonusStage: boolean) {
-    if (!this.ball || this.ringoutTimerFrames > 0) {
+  private respawnPlayerBall(player: PlayerState) {
+    if (!this.stage) {
       return;
     }
-    this.ringoutTimerFrames = RINGOUT_TOTAL_FRAMES;
-    this.ringoutSkipTimerFrames = RINGOUT_SKIP_DELAY_FRAMES;
+    const start = this.stage.startPositions?.[0];
+    const startPos = start?.pos ?? { x: 0, y: 0, z: 0 };
+    const startRotY = start?.rot?.y ?? 0;
+    resetBall(player.ball, startPos, startRotY);
+    player.finished = false;
+    player.goalType = null;
+    player.goalTimerFrames = 0;
+    player.goalSkipTimerFrames = 0;
+    player.goalInfo = null;
+    player.ringoutTimerFrames = 0;
+    player.ringoutSkipTimerFrames = 0;
+    player.respawnTimerFrames = 0;
+    this.markNoCollideForPlayer(player.id);
+    if (player.id === this.localPlayerId) {
+      this.cameraController?.initForStage(player.ball, startRotY, this.stageRuntime);
+      this.syncCameraPose();
+    }
+  }
+
+  beginFalloutSequence(isBonusStage: boolean) {
+    const localPlayer = this.getLocalPlayer();
+    const localBall = localPlayer?.ball ?? null;
+    if (!localBall || !localPlayer || localPlayer.ringoutTimerFrames > 0) {
+      return;
+    }
+    localPlayer.ringoutTimerFrames = RINGOUT_TOTAL_FRAMES;
+    localPlayer.ringoutSkipTimerFrames = RINGOUT_SKIP_DELAY_FRAMES;
     this.statusText = RINGOUT_STATUS_TEXT;
     if (!isBonusStage && this.lives > 0) {
       this.lives -= 1;
@@ -1408,25 +1906,27 @@ export class Game {
     if (isBonusStage) {
       void this.audio?.playAnnouncerBonusFinish();
     }
-    this.cameraController?.initFalloutReplay(this.ball);
+    this.cameraController?.initFalloutReplay(localBall);
     this.updateHud();
   }
 
   beginTimeoverSequence(isBonusStage: boolean) {
-    if (!this.ball || this.timeoverTimerFrames > 0) {
+    const localPlayer = this.getLocalPlayer();
+    const localBall = localPlayer?.ball ?? null;
+    if (!localBall || this.timeoverTimerFrames > 0) {
       return;
     }
     this.timeoverTimerFrames = TIMEOVER_TOTAL_FRAMES;
     this.statusText = TIMEOVER_STATUS_TEXT;
-    this.ball.state = BALL_STATES.READY;
-    this.ball.flags |= BALL_FLAGS.TIMEOVER;
-    this.ball.vel.x = 0;
-    this.ball.vel.y = 0;
-    this.ball.vel.z = 0;
-    this.ball.prevPos.x = this.ball.pos.x;
-    this.ball.prevPos.y = this.ball.pos.y;
-    this.ball.prevPos.z = this.ball.pos.z;
-    this.ball.speed = 0;
+    localBall.state = BALL_STATES.READY;
+    localBall.flags |= BALL_FLAGS.TIMEOVER;
+    localBall.vel.x = 0;
+    localBall.vel.y = 0;
+    localBall.vel.z = 0;
+    localBall.prevPos.x = localBall.pos.x;
+    localBall.prevPos.y = localBall.pos.y;
+    localBall.prevPos.z = localBall.pos.z;
+    localBall.speed = 0;
     if (!isBonusStage && this.lives > 0) {
       this.lives -= 1;
     }
@@ -1438,48 +1938,54 @@ export class Game {
   }
 
   beginBonusClearSequence() {
-    if (!this.ball || this.goalTimerFrames > 0) {
+    const localPlayer = this.getLocalPlayer();
+    const localBall = localPlayer?.ball ?? null;
+    if (!localBall || !localPlayer || localPlayer.goalTimerFrames > 0) {
       return;
     }
     this.bonusClearPending = true;
-    this.goalTimerFrames = BONUS_CLEAR_SEQUENCE_FRAMES;
-    this.goalSkipTimerFrames = GOAL_SKIP_TOTAL_FRAMES;
-    this.goalInfo = null;
-    startGoal(this.ball);
+    localPlayer.goalTimerFrames = BONUS_CLEAR_SEQUENCE_FRAMES;
+    localPlayer.goalSkipTimerFrames = GOAL_SKIP_TOTAL_FRAMES;
+    localPlayer.goalInfo = null;
+    startGoal(localBall);
     void this.audio?.playAnnouncerPerfect();
   }
 
   updateRingout(isBonusStage: boolean) {
-    if (this.paused || this.ringoutTimerFrames <= 0) {
+    const localPlayer = this.getLocalPlayer();
+    if (this.paused || !localPlayer || localPlayer.ringoutTimerFrames <= 0) {
       return false;
     }
-    this.ringoutTimerFrames -= 1;
-    if (this.ringoutSkipTimerFrames > 0) {
-      this.ringoutSkipTimerFrames -= 1;
+    localPlayer.ringoutTimerFrames -= 1;
+    if (localPlayer.ringoutSkipTimerFrames > 0) {
+      localPlayer.ringoutSkipTimerFrames -= 1;
     }
-    if (isBonusStage && this.ringoutTimerFrames === RINGOUT_BONUS_CUTOFF_FRAMES) {
-      this.ringoutTimerFrames = RINGOUT_BONUS_REMAINING_FRAMES;
+    if (isBonusStage && localPlayer.ringoutTimerFrames === RINGOUT_BONUS_CUTOFF_FRAMES) {
+      localPlayer.ringoutTimerFrames = RINGOUT_BONUS_REMAINING_FRAMES;
     }
     const canSkip = !isBonusStage
-      && this.ringoutSkipTimerFrames <= 0
+      && localPlayer.ringoutSkipTimerFrames <= 0
+      && this.players.length <= 1
       && this.input?.isPrimaryActionDown?.();
     if (canSkip) {
-      this.ringoutTimerFrames = 0;
+      localPlayer.ringoutTimerFrames = 0;
     }
-    if (this.ringoutTimerFrames > 0) {
+    if (localPlayer.ringoutTimerFrames > 0) {
       return false;
     }
 
-    this.ringoutSkipTimerFrames = 0;
+    localPlayer.ringoutSkipTimerFrames = 0;
     this.statusText = '';
     if (isBonusStage) {
       this.accumulator = 0;
       void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.FALLOUT));
       return true;
     }
-    if (this.stage) {
-      this.accumulator = 0;
+    this.accumulator = 0;
+    if (this.players.length <= 1 && this.stage) {
       void this.loadStage(this.stage.stageId);
+    } else {
+      this.respawnPlayerBall(localPlayer);
     }
     return true;
   }
@@ -1498,34 +2004,36 @@ export class Game {
       void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.TIMEOVER));
       return true;
     }
-    if (this.stage) {
-      this.accumulator = 0;
+    this.accumulator = 0;
+    if (this.players.length <= 1 && this.stage) {
       void this.loadStage(this.stage.stageId);
+    } else {
+      void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.TIMEOVER));
     }
     return true;
   }
 
-  isBallFallout(): boolean {
-    if (!this.ball || !this.stage || !this.stageRuntime) {
+  isBallFalloutForBall(ball: ReturnType<typeof createBallState>): boolean {
+    if (!ball || !this.stage || !this.stageRuntime) {
       return false;
     }
-    if (this.ball.pos.y < this.stage.fallOutY) {
+    if (ball.pos.y < this.stage.fallOutY) {
       return true;
     }
 
     const stage = this.stage;
     const animGroups = this.stageRuntime.animGroups;
     const physBall = this.tmpPhysBall;
-    physBall.pos.x = this.ball.pos.x;
-    physBall.pos.y = this.ball.pos.y;
-    physBall.pos.z = this.ball.pos.z;
-    physBall.prevPos.x = this.ball.prevPos.x;
-    physBall.prevPos.y = this.ball.prevPos.y;
-    physBall.prevPos.z = this.ball.prevPos.z;
-    physBall.vel.x = this.ball.vel.x;
-    physBall.vel.y = this.ball.vel.y;
-    physBall.vel.z = this.ball.vel.z;
-    physBall.animGroupId = this.ball.physBall?.animGroupId ?? 0;
+    physBall.pos.x = ball.pos.x;
+    physBall.pos.y = ball.pos.y;
+    physBall.pos.z = ball.pos.z;
+    physBall.prevPos.x = ball.prevPos.x;
+    physBall.prevPos.y = ball.prevPos.y;
+    physBall.prevPos.z = ball.prevPos.z;
+    physBall.vel.x = ball.vel.x;
+    physBall.vel.y = ball.vel.y;
+    physBall.vel.z = ball.vel.z;
+    physBall.animGroupId = ball.physBall?.animGroupId ?? 0;
 
     for (let animGroupId = 0; animGroupId < stage.animGroupCount; animGroupId += 1) {
       const stageAg = stage.animGroups[animGroupId];
@@ -1583,9 +2091,16 @@ export class Game {
   }
 
   makeAdvanceInfo(flags: number, goalType: string | null = null) {
+    let resolvedGoalType = goalType;
+    if (this.players.length > 1) {
+      const normalized = normalizeGoalType(goalType);
+      if (normalized === 'G' || normalized === 'R') {
+        resolvedGoalType = 'B';
+      }
+    }
     return {
       flags,
-      goalType,
+      goalType: resolvedGoalType,
       timerCurr: this.stageTimerFrames,
       u_currStageId: this.course?.currentStageId ?? 0,
     };
@@ -1611,22 +2126,11 @@ export class Game {
   }
 
   collectBananas(): boolean {
-    if (!this.stageRuntime || !this.ball) {
+    if (!this.stageRuntime || !this.players.length) {
       return false;
     }
     const animGroups = this.stageRuntime.animGroups;
     const physBall = this.tmpPhysBall;
-    physBall.pos.x = this.ball.pos.x;
-    physBall.pos.y = this.ball.pos.y;
-    physBall.pos.z = this.ball.pos.z;
-    physBall.prevPos.x = this.ball.prevPos.x;
-    physBall.prevPos.y = this.ball.prevPos.y;
-    physBall.prevPos.z = this.ball.prevPos.z;
-    physBall.vel.x = this.ball.vel.x;
-    physBall.vel.y = this.ball.vel.y;
-    physBall.vel.z = this.ball.vel.z;
-    physBall.radius = this.ball.currRadius;
-    physBall.animGroupId = 0;
     let collectedAny = false;
     for (const banana of this.stageRuntime.bananas) {
       if (banana.collected) {
@@ -1635,43 +2139,61 @@ export class Game {
       if (!(banana.flags & ITEM_FLAG_COLLIDABLE) || banana.cooldown > 0) {
         continue;
       }
-      if (physBall.animGroupId !== banana.animGroupId) {
-        tfPhysballToAnimGroupSpace(physBall, banana.animGroupId, animGroups);
+      for (const player of this.players) {
+        if (player.isSpectator || player.pendingSpawn) {
+          continue;
+        }
+        const ball = player.ball;
+        physBall.pos.x = ball.pos.x;
+        physBall.pos.y = ball.pos.y;
+        physBall.pos.z = ball.pos.z;
+        physBall.prevPos.x = ball.prevPos.x;
+        physBall.prevPos.y = ball.prevPos.y;
+        physBall.prevPos.z = ball.prevPos.z;
+        physBall.vel.x = ball.vel.x;
+        physBall.vel.y = ball.vel.y;
+        physBall.vel.z = ball.vel.z;
+        physBall.radius = ball.currRadius;
+        physBall.animGroupId = 0;
+        if (physBall.animGroupId !== banana.animGroupId) {
+          tfPhysballToAnimGroupSpace(physBall, banana.animGroupId, animGroups);
+        }
+        const radius = bananaRadiusForType(banana.type);
+        if (!intersectsMovingSpheres(
+          physBall.prevPos,
+          physBall.pos,
+          banana.prevLocalPos,
+          banana.localPos,
+          physBall.radius,
+          radius,
+        )) {
+          continue;
+        }
+        banana.cooldown = 8;
+        banana.flags &= ~ITEM_FLAG_COLLIDABLE;
+        banana.state = BANANA_STATE_HOLDING;
+        banana.collectTimer = 0;
+        banana.holdTimer = BANANA_HOLD_FRAMES;
+        banana.holdOffset.x = banana.localPos.x - physBall.pos.x;
+        banana.holdOffset.y = banana.localPos.y - physBall.pos.y;
+        banana.holdOffset.z = banana.localPos.z - physBall.pos.z;
+        banana.holdScaleTarget = banana.scale * 0.5;
+        banana.holdRotVel = 0;
+        banana.flyTimer = 0;
+        banana.flyScaleTarget = 0;
+        banana.tiltTimer = 30;
+        banana.vel.x = 0;
+        banana.vel.y = 0;
+        banana.vel.z = 0;
+        if (this.bananasLeft > 0) {
+          this.bananasLeft -= 1;
+        }
+        ball.bananas += bananaValueForType(banana.type);
+        this.score += bananaPointValueForType(banana.type);
+        void this.audio?.playBananaCollect(isBananaBunch(banana.type));
+        collectedAny = true;
+        break;
       }
-      const radius = bananaRadiusForType(banana.type);
-      if (!intersectsMovingSpheres(
-        physBall.prevPos,
-        physBall.pos,
-        banana.prevLocalPos,
-        banana.localPos,
-        physBall.radius,
-        radius,
-      )) {
-        continue;
-      }
-      banana.cooldown = 8;
-      banana.flags &= ~ITEM_FLAG_COLLIDABLE;
-      banana.state = BANANA_STATE_HOLDING;
-      banana.collectTimer = 0;
-      banana.holdTimer = BANANA_HOLD_FRAMES;
-      banana.holdOffset.x = banana.localPos.x - physBall.pos.x;
-      banana.holdOffset.y = banana.localPos.y - physBall.pos.y;
-      banana.holdOffset.z = banana.localPos.z - physBall.pos.z;
-      banana.holdScaleTarget = banana.scale * 0.5;
-      banana.holdRotVel = 0;
-      banana.flyTimer = 0;
-      banana.flyScaleTarget = 0;
-      banana.tiltTimer = 30;
-      banana.vel.x = 0;
-      banana.vel.y = 0;
-      banana.vel.z = 0;
-      if (this.bananasLeft > 0) {
-        this.bananasLeft -= 1;
-      }
-      this.ball.bananas += bananaValueForType(banana.type);
-      this.score += bananaPointValueForType(banana.type);
-      void this.audio?.playBananaCollect(isBananaBunch(banana.type));
-      collectedAny = true;
     }
     return collectedAny;
   }
@@ -1709,18 +2231,22 @@ export class Game {
   }
 
   beginGoalSequence(goalHit: any) {
-    if (this.goalTimerFrames > 0 || !this.stage || !this.ball) {
+    const localPlayer = this.getLocalPlayer();
+    const localBall = localPlayer?.ball ?? null;
+    if (!localPlayer || localPlayer.goalTimerFrames > 0 || !this.stage || !localBall) {
       return;
     }
-    this.goalInfo = goalHit;
+    localPlayer.goalInfo = goalHit;
+    localPlayer.finished = true;
+    localPlayer.goalType = goalHit?.goalType ?? null;
     const timeRemaining = Math.max(0, this.stageTimeLimitFrames - this.stageTimerFrames);
     this.score += computeGoalScore(goalHit?.goalType ?? this.stage.goals?.[0]?.type ?? 'B', timeRemaining, this.stageTimeLimitFrames);
     if (this.score > 999999999) {
       this.score = 999999999;
     }
-    this.goalTimerFrames = GOAL_SEQUENCE_FRAMES;
-    this.goalSkipTimerFrames = GOAL_SKIP_TOTAL_FRAMES;
-    startGoal(this.ball);
+    localPlayer.goalTimerFrames = GOAL_SEQUENCE_FRAMES;
+    localPlayer.goalSkipTimerFrames = GOAL_SKIP_TOTAL_FRAMES;
+    startGoal(localBall);
     void this.audio?.playGoal(this.gameSource);
     void this.audio?.playAnnouncerGoal(0.5);
     if (this.audio && this.stageTimeLimitFrames > 0) {
@@ -1728,35 +2254,51 @@ export class Game {
       const isHigh = timeLeft > (this.stageTimeLimitFrames >> 1);
       void this.audio.playAnnouncerTimeBonus(this.gameSource, isHigh);
     }
-    if (this.stageRuntime && this.stageRuntime.goalBags.length > 0) {
-      const tempBall = this.tmpPhysBall;
-      tempBall.pos.x = this.ball.pos.x;
-      tempBall.pos.y = this.ball.pos.y;
-      tempBall.pos.z = this.ball.pos.z;
-      tempBall.prevPos.x = this.ball.prevPos.x;
-      tempBall.prevPos.y = this.ball.prevPos.y;
-      tempBall.prevPos.z = this.ball.prevPos.z;
-      tempBall.vel.x = this.ball.vel.x;
-      tempBall.vel.y = this.ball.vel.y;
-      tempBall.vel.z = this.ball.vel.z;
-      tempBall.animGroupId = 0;
-      tfPhysballToAnimGroupSpace(tempBall, goalHit.animGroupId, this.stageRuntime.animGroups);
-      this.stageRuntime.breakGoalTape(goalHit.goalId, tempBall);
-    }
+    this.breakGoalTapeForBall(localBall, goalHit);
     this.cameraController?.setGoalMain();
+  }
+
+  private breakGoalTapeForBall(ball: ReturnType<typeof createBallState>, goalHit: any) {
+    if (!this.stageRuntime || this.stageRuntime.goalBags.length === 0 || !goalHit) {
+      return;
+    }
+    const tempBall = this.tmpPhysBall;
+    tempBall.pos.x = ball.pos.x;
+    tempBall.pos.y = ball.pos.y;
+    tempBall.pos.z = ball.pos.z;
+    tempBall.prevPos.x = ball.prevPos.x;
+    tempBall.prevPos.y = ball.prevPos.y;
+    tempBall.prevPos.z = ball.prevPos.z;
+    tempBall.vel.x = ball.vel.x;
+    tempBall.vel.y = ball.vel.y;
+    tempBall.vel.z = ball.vel.z;
+    tempBall.animGroupId = 0;
+    tfPhysballToAnimGroupSpace(tempBall, goalHit.animGroupId, this.stageRuntime.animGroups);
+    this.stageRuntime.breakGoalTape(goalHit.goalId, tempBall);
   }
 
   async finishGoalSequence() {
     if (!this.course || !this.stage) {
       return;
     }
+    const localPlayer = this.getLocalPlayer();
     if (this.bonusClearPending) {
       this.bonusClearPending = false;
-      await this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.BONUS_CLEAR));
+      if (this.players.length <= 1) {
+        await this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.BONUS_CLEAR));
+      } else if (localPlayer) {
+        localPlayer.finished = true;
+      }
       return;
     }
-    const goalType = this.goalInfo?.goalType ?? this.stage.goals?.[0]?.type ?? 'B';
-    await this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.GOAL, goalType));
+    const goalType = localPlayer?.goalInfo?.goalType ?? this.stage.goals?.[0]?.type ?? 'B';
+    if (localPlayer) {
+      localPlayer.finished = true;
+      localPlayer.goalType = goalType;
+    }
+    if (this.players.length <= 1) {
+      await this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.GOAL, goalType));
+    }
   }
 
   updateHud() {
@@ -1780,13 +2322,15 @@ export class Game {
       this.hud.score.textContent = formatScore(this.score);
     }
     if (this.hud.bananas) {
-      this.hud.bananas.textContent = String(this.ball?.bananas ?? 0);
+      const localPlayer = this.getLocalPlayer();
+      this.hud.bananas.textContent = String(localPlayer?.ball?.bananas ?? 0);
     }
     if (this.hud.lives) {
       this.hud.lives.textContent = String(this.lives);
     }
     if (this.hud.speed || this.hud.speedFill) {
-      const speedMph = Math.max(0, (this.ball?.speed ?? 0) * SPEED_MPH_SCALE);
+      const localPlayer = this.getLocalPlayer();
+      const speedMph = Math.max(0, (localPlayer?.ball?.speed ?? 0) * SPEED_MPH_SCALE);
       if (this.hud.speed) {
         this.hud.speed.textContent = `${speedMph.toFixed(1)} mph`;
       }
@@ -1811,6 +2355,9 @@ export class Game {
       frame = this.inputFeed[this.inputFeedIndex] ?? { x: 0, y: 0 };
       this.inputFeedIndex += 1;
     }
+    if (frame && frame.buttons !== undefined) {
+      this.lastLocalInput = { x: frame.x, y: frame.y, buttons: frame.buttons ?? 0 };
+    }
 
     if (!inputEnabled) {
       return { x: 0, y: 0 };
@@ -1822,17 +2369,49 @@ export class Game {
       }
       if (!frame) {
         const raw = this.input?.getStick?.() ?? { x: 0, y: 0 };
-        frame = quantizeStick(raw);
+        const buttons = this.input?.getButtonsBitmask?.() ?? 0;
+        frame = quantizeInput(raw, buttons);
       }
       this.inputRecord.push({ x: frame.x, y: frame.y });
     }
 
     if (!frame) {
       const raw = this.input?.getStick?.() ?? { x: 0, y: 0 };
-      frame = quantizeStick(raw);
+      const buttons = this.input?.getButtonsBitmask?.() ?? 0;
+      frame = quantizeInput(raw, buttons);
     }
 
+    this.lastLocalInput = { x: frame.x, y: frame.y, buttons: frame.buttons ?? 0 };
     return dequantizeStick(frame);
+  }
+
+  sampleLocalInput() {
+    if (!this.input) {
+      return this.lastLocalInput;
+    }
+    const raw = this.input.getStick();
+    const buttons = this.input.getButtonsBitmask?.() ?? 0;
+    const frame = quantizeInput(raw, buttons);
+    this.lastLocalInput = { x: frame.x, y: frame.y, buttons: frame.buttons ?? 0 };
+    return this.lastLocalInput;
+  }
+
+  private readDeterministicStickForPlayer(player: PlayerState, inputEnabled: boolean) {
+    if (!inputEnabled) {
+      return { x: 0, y: 0 };
+    }
+    const feed = this.playerInputFeeds.get(player.id);
+    if (feed && (this.replayInputStartTick === null || this.simTick >= this.replayInputStartTick)) {
+      const idx = this.playerInputFeedIndices.get(player.id) ?? 0;
+      const useSticky = feed.length === 1;
+      const frame = useSticky ? feed[0] : (feed[idx] ?? { x: 0, y: 0 });
+      this.playerInputFeedIndices.set(player.id, useSticky ? 0 : idx + 1);
+      return dequantizeStick(frame);
+    }
+    if (player.id === this.localPlayerId) {
+      return this.readDeterministicStick(inputEnabled);
+    }
+    return { x: 0, y: 0 };
   }
 
   update(dtSeconds: number) {
@@ -1856,24 +2435,28 @@ export class Game {
 
     this.handleInput();
 
-    if (this.stageRuntime && this.stage && this.ball && this.cameraController && this.world) {
+    const localPlayer = this.getLocalPlayer();
+    const localBall = localPlayer?.ball ?? null;
+    if (this.stageRuntime && this.stage && localBall && this.cameraController && this.world && localPlayer) {
       if (this.pendingAdvance) {
         this.accumulator = 0;
       }
-      this.stageRuntime.goalHoldOpen = this.goalTimerFrames > 0;
       while (!this.pendingAdvance && this.accumulator >= this.fixedStep) {
         const tickStart = this.simPerf.enabled ? nowMs() : 0;
         try {
-        const ringoutActive = this.ringoutTimerFrames > 0;
+        const ringoutActive = localPlayer.ringoutTimerFrames > 0;
         const timeoverActive = this.timeoverTimerFrames > 0;
-        const inputEnabled = this.introTimerFrames <= 0
-          && this.goalTimerFrames <= 0
-          && !ringoutActive
-          && !timeoverActive;
-        const switchesEnabled = this.goalTimerFrames <= 0 && !ringoutActive && !timeoverActive;
+        const stageInputEnabled = this.introTimerFrames <= 0 && !timeoverActive;
+        const localInputEnabled = stageInputEnabled
+          && localPlayer.goalTimerFrames <= 0
+          && !ringoutActive;
+        const switchesEnabled = this.players.length <= 1
+          ? (localPlayer.goalTimerFrames <= 0 && !ringoutActive && !timeoverActive)
+          : stageInputEnabled;
         const isBonusStage = this.isBonusStageActive();
-        this.input?.setGyroTapMode?.(inputEnabled ? 'recalibrate' : 'action');
-        const fastForwardIntro = this.stageAttempts === 1
+        this.input?.setGyroTapMode?.(localInputEnabled ? 'recalibrate' : 'action');
+        const fastForwardIntro = this.players.length <= 1
+          && this.stageAttempts === 1
           && this.introTimerFrames > 120
           && this.input?.isPrimaryActionDown?.();
         const isSmb2 = this.stage?.format === 'smb2';
@@ -1884,35 +2467,76 @@ export class Game {
           ? this.introTimerFrames
           : null;
         this.stageRuntime.switchesEnabled = switchesEnabled;
-        const stick = this.readDeterministicStick(inputEnabled);
-        this.world.updateInput(stick, this.cameraController.rotY);
+        this.stageRuntime.goalHoldOpen = this.players.length <= 1
+          ? localPlayer.goalTimerFrames > 0
+          : this.players.some((player) => player.goalTimerFrames > 0);
+        localPlayer.cameraRotY = this.cameraController.rotY;
+        let tiltCount = 0;
+        let avgGravX = 0;
+        let avgGravY = 0;
+        let avgGravZ = 0;
+        for (const player of this.players) {
+          if (player.isSpectator || player.pendingSpawn) {
+            continue;
+          }
+          const playerInputEnabled = stageInputEnabled
+            && player.goalTimerFrames <= 0
+            && player.ringoutTimerFrames <= 0;
+          const stick = this.readDeterministicStickForPlayer(player, playerInputEnabled);
+          tiltCount += 1;
+          player.world.updateInput(stick, player.cameraRotY);
+          avgGravX += player.world.gravity.x;
+          avgGravY += player.world.gravity.y;
+          avgGravZ += player.world.gravity.z;
+        }
+        if (this.world) {
+          if (tiltCount > 0) {
+            const inv = 1 / tiltCount;
+            avgGravX *= inv;
+            avgGravY *= inv;
+            avgGravZ *= inv;
+            const len = sqrt(avgGravX * avgGravX + avgGravY * avgGravY + avgGravZ * avgGravZ);
+            if (len > 1e-6) {
+              this.world.gravity.x = avgGravX / len;
+              this.world.gravity.y = avgGravY / len;
+              this.world.gravity.z = avgGravZ / len;
+            }
+          } else {
+            this.world.gravity.x = 0;
+            this.world.gravity.y = -1;
+            this.world.gravity.z = 0;
+          }
+        }
         const stagePaused = this.paused || timeoverActive;
+        const stageBall = this.players.length <= 1 ? localBall : null;
+        const stageCamera = this.players.length <= 1 ? this.cameraController : null;
         this.stageRuntime.advance(
           1,
           stagePaused,
           this.world,
           animTimerOverride,
           smb2LoadInFrames,
-          this.ball,
-          this.cameraController,
+          stageBall,
+          stageCamera,
         );
-        if (this.goalTimerFrames > 0) {
-          this.goalTimerFrames -= 1;
-          this.goalSkipTimerFrames -= 1;
-          if (!this.goalWooshPlayed && this.ball.goalTimer >= GOAL_FLOAT_FRAMES) {
+        if (localPlayer.goalTimerFrames > 0) {
+          localPlayer.goalTimerFrames -= 1;
+          localPlayer.goalSkipTimerFrames -= 1;
+          if (!this.goalWooshPlayed && localBall.goalTimer >= GOAL_FLOAT_FRAMES) {
             void this.audio?.playSfx('ball_woosh', this.gameSource, 0.85);
             this.goalWooshPlayed = true;
           }
-          const canSkipGoal = this.goalSkipTimerFrames <= 0
-            && (this.ball.flags & BALL_FLAGS.FLAG_09)
+          const canSkipGoal = this.players.length <= 1
+            && localPlayer.goalSkipTimerFrames <= 0
+            && (localBall.flags & BALL_FLAGS.FLAG_09)
             && this.input?.isPrimaryActionDown?.();
           if (canSkipGoal) {
-            this.goalTimerFrames = 0;
+            localPlayer.goalTimerFrames = 0;
             this.accumulator = 0;
             void this.finishGoalSequence();
             break;
           }
-          if (this.goalTimerFrames === 0) {
+          if (localPlayer.goalTimerFrames === 0) {
             this.accumulator = 0;
             void this.finishGoalSequence();
             break;
@@ -1929,19 +2553,45 @@ export class Game {
             this.readyAnnouncerPlayed = true;
           }
           if (this.introTimerFrames === this.dropFrames) {
-            startBallDrop(this.ball, this.dropFrames);
+            for (const player of this.players) {
+              if (player.isSpectator || player.pendingSpawn) {
+                continue;
+              }
+              startBallDrop(player.ball, this.dropFrames);
+            }
           }
           if (this.introTimerFrames === 0) {
-            this.cameraController.initForStage(this.ball, this.ball.startRotY, this.stageRuntime);
+            this.cameraController.initForStage(localBall, localBall.startRotY, this.stageRuntime);
             if (!this.goAnnouncerPlayed) {
               void this.audio?.playAnnouncerGo();
               this.goAnnouncerPlayed = true;
             }
           }
         }
-        if (!timeoverActive
-          && (this.ball.state === BALL_STATES.PLAY || this.ball.state === BALL_STATES.GOAL_MAIN)) {
-          stepBall(this.ball, this.stageRuntime, this.world);
+        if (!timeoverActive) {
+          for (const player of this.players) {
+            if (player.isSpectator || player.pendingSpawn) {
+              continue;
+            }
+            const ball = player.ball;
+            if (ball.state !== BALL_STATES.PLAY && ball.state !== BALL_STATES.GOAL_MAIN) {
+              continue;
+            }
+            stepBall(ball, this.stageRuntime, player.world);
+            if (player.id === this.localPlayerId) {
+              if (ball.wormholeTransform) {
+                this.cameraController.applyWormholeTransform(ball.wormholeTransform);
+                ball.wormholeTransform = null;
+              }
+              if (!ringoutActive && localPlayer.goalTimerFrames <= 0 && this.isBallFalloutForBall(ball)) {
+                this.beginFalloutSequence(isBonusStage);
+              }
+            } else if (player.ringoutTimerFrames <= 0 && this.isBallFalloutForBall(ball)) {
+              player.ringoutTimerFrames = RINGOUT_TOTAL_FRAMES;
+              player.ringoutSkipTimerFrames = 0;
+            }
+          }
+          this.resolvePlayerCollisions();
           const switchPresses = this.stageRuntime.switchPressCount ?? 0;
           if (switchPresses > 0) {
             this.stageRuntime.switchPressCount = 0;
@@ -1949,21 +2599,17 @@ export class Game {
               void this.audio?.playSfx('switch_press', this.gameSource, 0.6);
             }
           }
-          if (this.ball.wormholeTransform) {
-            this.cameraController.applyWormholeTransform(this.ball.wormholeTransform);
-            this.ball.wormholeTransform = null;
-          }
-          if (!ringoutActive && this.goalTimerFrames <= 0 && this.isBallFallout()) {
-            this.beginFalloutSequence(isBonusStage);
-          }
         }
-        if (this.audio && this.ball) {
+        if (this.audio && localBall) {
           const frameCount = this.stageRuntime?.timerFrames ?? 0;
-          void this.audio.updateRollingSound(this.ball, this.gameSource, frameCount);
-          void this.audio.playImpactForBall(this.ball, this.gameSource, frameCount);
-          void this.audio.consumeBallEvents(this.ball, this.gameSource);
+          void this.audio.updateRollingSound(localBall, this.gameSource, frameCount);
+          void this.audio.playImpactForBall(localBall, this.gameSource, frameCount);
+          void this.audio.consumeBallEvents(localBall, this.gameSource);
         }
-        if (inputEnabled && !this.paused && this.ringoutTimerFrames <= 0 && !timeoverActive) {
+        const timerShouldRun = this.players.length <= 1
+          ? (localInputEnabled && !this.paused && localPlayer.ringoutTimerFrames <= 0 && !timeoverActive)
+          : (!this.paused && stageInputEnabled);
+        if (timerShouldRun) {
           this.stageTimerFrames += 1;
           if (this.stageTimeLimitFrames > 0) {
             const timeLeft = this.stageTimeLimitFrames - this.stageTimerFrames;
@@ -1977,32 +2623,61 @@ export class Game {
             }
             if (timeLeft <= 0 && this.timeoverTimerFrames <= 0) {
               this.accumulator = 0;
-              this.beginTimeoverSequence(isBonusStage);
+              if (this.players.length <= 1) {
+                this.beginTimeoverSequence(isBonusStage);
+              } else {
+                void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.TIMEOVER));
+              }
               break;
             }
           }
         }
-        const canCollectBananas = !ringoutActive
-          && !timeoverActive
-          && (this.ball.state === BALL_STATES.PLAY || this.ball.state === BALL_STATES.GOAL_MAIN);
+        let hasPlayableBall = false;
+        for (const player of this.players) {
+          if (player.isSpectator || player.pendingSpawn) {
+            continue;
+          }
+          if (player.ball.state === BALL_STATES.PLAY || player.ball.state === BALL_STATES.GOAL_MAIN) {
+            hasPlayableBall = true;
+            break;
+          }
+        }
+        const canCollectBananas = !ringoutActive && !timeoverActive && hasPlayableBall;
         if (canCollectBananas) {
           const collected = this.collectBananas();
           if (
             collected
             && isBonusStage
             && this.bananasLeft <= 0
-            && inputEnabled
-            && this.ball.state === BALL_STATES.PLAY
+            && stageInputEnabled
+            && localBall.state === BALL_STATES.PLAY
           ) {
             this.accumulator = 0;
             this.beginBonusClearSequence();
             break;
           }
         }
-        if (inputEnabled && this.ball.state === BALL_STATES.PLAY) {
-          const goalHit = checkBallEnteredGoal(this.ball, this.stageRuntime);
-          if (goalHit) {
-            this.beginGoalSequence(goalHit);
+        if (stageInputEnabled) {
+          for (const player of this.players) {
+            if (player.isSpectator || player.pendingSpawn) {
+              continue;
+            }
+            const ball = player.ball;
+            if (ball.state !== BALL_STATES.PLAY) {
+              continue;
+            }
+            const goalHit = checkBallEnteredGoal(ball, this.stageRuntime);
+            if (!goalHit) {
+              continue;
+            }
+            player.finished = true;
+            player.goalType = goalHit?.goalType ?? null;
+            if (player.id === this.localPlayerId) {
+              this.beginGoalSequence(goalHit);
+            } else {
+              startGoal(ball);
+              this.breakGoalTapeForBall(ball, goalHit);
+            }
           }
         }
         if (ringoutActive) {
@@ -2015,12 +2690,30 @@ export class Game {
             break;
           }
         }
+        for (const player of this.players) {
+          if (player.id === this.localPlayerId || player.isSpectator || player.pendingSpawn) {
+            continue;
+          }
+          if (player.ringoutTimerFrames > 0) {
+            player.ringoutTimerFrames -= 1;
+            if (player.ringoutTimerFrames <= 0) {
+              this.respawnPlayerBall(player);
+            }
+          }
+        }
+        if (this.players.length > 1 && this.allActivePlayersFinished()) {
+          if (localPlayer.goalTimerFrames <= 0) {
+            this.accumulator = 0;
+            void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.GOAL, this.getAdvanceGoalType()));
+            break;
+          }
+        }
         const cameraPoses = this.ensureCameraPose();
         if (cameraPoses) {
           this.copyCameraPose(cameraPoses.curr, cameraPoses.prev);
         }
         const cameraPaused = this.paused || timeoverActive;
-        this.cameraController.update(this.ball, this.stageRuntime, cameraPaused, fastForwardIntro);
+        this.cameraController.update(localBall, this.stageRuntime, cameraPaused, fastForwardIntro);
         if (cameraPoses) {
           this.captureCameraPose(cameraPoses.curr);
         }

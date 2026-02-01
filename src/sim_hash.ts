@@ -23,34 +23,48 @@ function hashS16(hash, value) {
   return hashU32(hash, value & 0xffff);
 }
 
-export function hashSimState(ball, world, stageRuntime, { includeVisual = false } = {}) {
+export function hashSimState(ballOrBalls, worldOrWorlds, stageRuntime, { includeVisual = false } = {}) {
   let h = 0x811c9dc5;
-  if (!ball || !world || !stageRuntime) {
+  if (!ballOrBalls || !worldOrWorlds || !stageRuntime) {
     return h >>> 0;
   }
 
-  h = hashVec3(h, ball.pos);
-  h = hashVec3(h, ball.vel);
-  h = hashS16(h, ball.rotX);
-  h = hashS16(h, ball.rotY);
-  h = hashS16(h, ball.rotZ);
-  h = hashU32(h, ball.state | 0);
-  h = hashU32(h, ball.flags | 0);
-  h = hashF32(h, ball.currRadius ?? 0);
-  h = hashF32(h, ball.speed ?? 0);
-  h = hashU32(h, ball.animGroupId | 0);
-  h = hashS16(h, ball.apeYaw ?? 0);
-  if (ball.orientation) {
-    h = hashF32(h, ball.orientation.x);
-    h = hashF32(h, ball.orientation.y);
-    h = hashF32(h, ball.orientation.z);
-    h = hashF32(h, ball.orientation.w);
+  const balls = Array.isArray(ballOrBalls) ? ballOrBalls : [ballOrBalls];
+  h = hashU32(h, balls.length | 0);
+  for (const ball of balls) {
+    if (!ball) {
+      continue;
+    }
+    h = hashVec3(h, ball.pos);
+    h = hashVec3(h, ball.vel);
+    h = hashS16(h, ball.rotX);
+    h = hashS16(h, ball.rotY);
+    h = hashS16(h, ball.rotZ);
+    h = hashU32(h, ball.state | 0);
+    h = hashU32(h, ball.flags | 0);
+    h = hashF32(h, ball.currRadius ?? 0);
+    h = hashF32(h, ball.speed ?? 0);
+    h = hashU32(h, ball.animGroupId | 0);
+    h = hashS16(h, ball.apeYaw ?? 0);
+    if (ball.orientation) {
+      h = hashF32(h, ball.orientation.x);
+      h = hashF32(h, ball.orientation.y);
+      h = hashF32(h, ball.orientation.z);
+      h = hashF32(h, ball.orientation.w);
+    }
   }
 
-  h = hashS16(h, world.xrot ?? 0);
-  h = hashS16(h, world.zrot ?? 0);
-  if (world.gravity) {
-    h = hashVec3(h, world.gravity);
+  const worlds = Array.isArray(worldOrWorlds) ? worldOrWorlds : [worldOrWorlds];
+  h = hashU32(h, worlds.length | 0);
+  for (const world of worlds) {
+    if (!world) {
+      continue;
+    }
+    h = hashS16(h, world.xrot ?? 0);
+    h = hashS16(h, world.zrot ?? 0);
+    if (world.gravity) {
+      h = hashVec3(h, world.gravity);
+    }
   }
 
   h = hashU32(h, stageRuntime.timerFrames | 0);
@@ -76,6 +90,10 @@ export function hashSimState(ball, world, stageRuntime, { includeVisual = false 
   if (stageRuntime.bananas) {
     h = hashU32(h, stageRuntime.bananas.length | 0);
     for (const banana of stageRuntime.bananas) {
+      if (banana.collected || banana.state === 8) {
+        h = hashU32(h, 0);
+        continue;
+      }
       h = hashU32(h, banana.state | 0);
       h = hashVec3(h, banana.localPos);
       h = hashVec3(h, banana.vel ?? { x: 0, y: 0, z: 0 });

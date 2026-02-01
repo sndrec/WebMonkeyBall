@@ -216,6 +216,12 @@ body.gameplay-active {
   letter-spacing: 0.3px;
 }
 
+.panel h2 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0.2px;
+}
+
 .panel p {
   margin: 0 0 16px;
   color: var(--muted);
@@ -303,6 +309,70 @@ body.gameplay-active {
 
 .control-mode-settings {
   margin: 0 0 16px;
+}
+
+.panel-section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.panel-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.multiplayer-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.text-input {
+  flex: 1 1 auto;
+  padding: 10px 12px;
+  background: rgba(12, 12, 18, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.lobby-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.lobby-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(12, 12, 18, 0.55);
+  font-size: 13px;
+}
+
+.lobby-item span {
+  color: var(--muted);
+}
+
+.lobby-players {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(12, 12, 18, 0.35);
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
 }
 
 .control-mode-block {

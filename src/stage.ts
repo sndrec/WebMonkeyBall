@@ -1542,6 +1542,87 @@ export class StageRuntime {
     }
   }
 
+  getState() {
+    return {
+      timerFrames: this.timerFrames,
+      animGroups: structuredClone(this.animGroups),
+      bumpers: structuredClone(this.bumpers),
+      jamabars: structuredClone(this.jamabars),
+      goals: structuredClone(this.goals),
+      goalBags: structuredClone(this.goalBags),
+      goalTapes: structuredClone(this.goalTapes),
+      bananas: structuredClone(this.bananas),
+      confetti: structuredClone(this.confetti),
+      effects: structuredClone(this.effects),
+      switches: structuredClone(this.switches),
+      switchPressCount: this.switchPressCount ?? 0,
+      wormholes: structuredClone(this.wormholes),
+      seesaws: structuredClone(this.seesaws),
+      boundSphere: structuredClone(this.boundSphere),
+      goalHoldOpen: this.goalHoldOpen,
+      switchesEnabled: this.switchesEnabled,
+      simRngState: this.simRng?.state ?? 0,
+      visualRngState: this.visualRng?.state ?? 0,
+    };
+  }
+
+  setState(state) {
+    if (!state) {
+      return;
+    }
+    this.timerFrames = state.timerFrames ?? 0;
+    this.animGroups = structuredClone(state.animGroups ?? []);
+    this.bumpers = structuredClone(state.bumpers ?? []);
+    this.jamabars = structuredClone(state.jamabars ?? []);
+    this.goals = structuredClone(state.goals ?? []);
+    this.goalBags = structuredClone(state.goalBags ?? []);
+    this.goalTapes = structuredClone(state.goalTapes ?? []);
+    this.bananas = structuredClone(state.bananas ?? []);
+    this.confetti = structuredClone(state.confetti ?? []);
+    this.effects = structuredClone(state.effects ?? []);
+    this.switches = structuredClone(state.switches ?? []);
+    this.switchPressCount = state.switchPressCount ?? 0;
+    this.wormholes = structuredClone(state.wormholes ?? []);
+    this.seesaws = structuredClone(state.seesaws ?? []);
+    this.boundSphere = structuredClone(state.boundSphere ?? this.boundSphere);
+    this.goalHoldOpen = !!state.goalHoldOpen;
+    this.switchesEnabled = !!state.switchesEnabled;
+    if (this.simRng) {
+      this.simRng.state = state.simRngState ?? this.simRng.state;
+    }
+    if (this.visualRng) {
+      this.visualRng.state = state.visualRngState ?? this.visualRng.state;
+    }
+
+    const count = this.stage.animGroupCount ?? 0;
+    this.goalBagsByGroup.length = count;
+    this.goalTapesByGroup.length = count;
+    this.switchesByGroup.length = count;
+    for (let i = 0; i < count; i += 1) {
+      this.goalBagsByGroup[i] = [];
+      this.goalTapesByGroup[i] = [];
+      this.switchesByGroup[i] = [];
+    }
+    for (const bag of this.goalBags) {
+      const group = bag.animGroupId ?? 0;
+      if (this.goalBagsByGroup[group]) {
+        this.goalBagsByGroup[group].push(bag);
+      }
+    }
+    for (const tape of this.goalTapes) {
+      const group = tape.animGroupId ?? 0;
+      if (this.goalTapesByGroup[group]) {
+        this.goalTapesByGroup[group].push(tape);
+      }
+    }
+    for (const sw of this.switches) {
+      const group = sw.animGroupIndex ?? sw.animGroupId ?? 0;
+      if (this.switchesByGroup[group]) {
+        this.switchesByGroup[group].push(sw);
+      }
+    }
+  }
+
   updateSwitchesSmb2PreAnim() {
     const stack = this.matrixStack;
     for (const stageSwitch of this.switches) {
@@ -1949,7 +2030,8 @@ export class StageRuntime {
           stack.rigidInvTfPoint(flyTargetLocal, flyTargetLocal);
         }
       }
-      updateBanana(banana, ballLocalPos, flyTargetLocal);
+      const allowFlyToHud = !!flyTargetLocal;
+      updateBanana(banana, ballLocalPos, flyTargetLocal, allowFlyToHud);
     }
     for (const stageSwitch of this.switches) {
       if (stageSwitch.cooldown > 0) {
@@ -2615,7 +2697,7 @@ function updateGoalBag(bag, animGroups, gravity, holdOpen, stack, rng) {
   updateGoalBagTransform(bag, stack);
 }
 
-function updateBanana(banana, ballLocalPos, flyTargetLocal) {
+function updateBanana(banana, ballLocalPos, flyTargetLocal, allowFlyToHud) {
   if (banana.state === 0) {
     return;
   }
@@ -2656,8 +2738,14 @@ function updateBanana(banana, ballLocalPos, flyTargetLocal) {
     return;
   }
   if (banana.state === BANANA_STATE_FLY) {
-    if (!flyTargetLocal) {
-      banana.state = 6;
+    if (!allowFlyToHud) {
+      banana.localPos.y += 0.02;
+      banana.scale -= 0.01;
+      if (banana.scale <= 0) {
+        banana.scale = 0;
+        banana.state = 0;
+        banana.collected = true;
+      }
       return;
     }
     banana.flyTimer -= 1;

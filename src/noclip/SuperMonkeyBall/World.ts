@@ -651,6 +651,7 @@ export class World {
     private background: Background;
     private fgObjects: BgObjectInst[] = [];
     private ball: BallInst;
+    private balls: BallInst[] = [];
     private ballPos = vec3.create();
     private ballRadius = 0;
     private ballVisible = false;
@@ -1083,6 +1084,7 @@ export class World {
         this.background = new stageData.stageInfo.bgInfo.bgConstructor(this.worldState, bgObjects);
         this.fgObjects = fgObjects;
         this.ball = new BallInst(this.worldState.modelCache, stageData);
+        this.balls = [this.ball];
         this.shadowProgram = createShadowProgram(renderCache);
         this.shadowMegaState.depthWrite = false;
         this.streakProgram = createStreakProgram(renderCache);
@@ -1186,6 +1188,51 @@ export class World {
             this.ballRadius = state.radius;
             vec3.set(this.ballPos, state.pos.x, state.pos.y, state.pos.z);
             vec3.set(this.ballPosForTilt, state.pos.x, state.pos.y, state.pos.z);
+            this.hasBallPosForTilt = true;
+        } else {
+            this.hasBallPosForTilt = false;
+            this.hasBallPosForTiltPrev = false;
+            this.ballVisible = false;
+            this.ballRadius = 0;
+        }
+    }
+
+    public setBallsState(states: BallRenderState[] | null): void {
+        if (!states || states.length === 0) {
+            this.balls = [this.ball];
+            this.ball.setState(null);
+            this.hasBallPosForTilt = false;
+            this.hasBallPosForTiltPrev = false;
+            this.ballVisible = false;
+            this.ballRadius = 0;
+            return;
+        }
+        if (this.balls.length !== states.length) {
+            this.balls = new Array(states.length);
+            for (let i = 0; i < states.length; i++) {
+                this.balls[i] = new BallInst(this.worldState.modelCache, this.stageData);
+            }
+        }
+        let primary: BallRenderState | null = null;
+        for (let i = 0; i < states.length; i++) {
+            const state = states[i];
+            this.balls[i].setState(state);
+            if (!primary && state.visible) {
+                primary = state;
+            }
+        }
+        if (!primary) {
+            primary = states[0];
+        }
+        if (primary) {
+            if (this.hasBallPosForTilt) {
+                vec3.copy(this.ballPosForTiltPrev, this.ballPosForTilt);
+                this.hasBallPosForTiltPrev = true;
+            }
+            this.ballVisible = primary.visible;
+            this.ballRadius = primary.radius;
+            vec3.set(this.ballPos, primary.pos.x, primary.pos.y, primary.pos.z);
+            vec3.set(this.ballPosForTilt, primary.pos.x, primary.pos.y, primary.pos.z);
             this.hasBallPosForTilt = true;
         } else {
             this.hasBallPosForTilt = false;
@@ -1346,7 +1393,9 @@ export class World {
             this.fgObjects[i].prepareToRenderWithViewMatrix(this.worldState, stageCtx, viewFromWorldTilted);
         }
         this.background.prepareToRender(this.worldState, bgCtx);
-        this.ball.prepareToRender(this.worldState, stageCtx);
+        for (let i = 0; i < this.balls.length; i++) {
+            this.balls[i].prepareToRender(this.worldState, stageCtx);
+        }
     }
 
     public getMirrorMode(): MirrorMode {

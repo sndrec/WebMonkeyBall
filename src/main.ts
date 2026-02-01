@@ -28,6 +28,10 @@ import { decompressLZ } from './noclip/SuperMonkeyBall/AVLZ.js';
 import * as Nl from './noclip/SuperMonkeyBall/NaomiLib.js';
 import * as Gma from './noclip/SuperMonkeyBall/Gma.js';
 import { GameplaySyncState, Renderer } from './noclip/Render.js';
+import { LobbyClient, HostRelay, ClientPeer, createHostOffer, applyHostSignal } from './netplay.js';
+import type { QuantizedInput } from './determinism.js';
+import { hashSimState } from './sim_hash.js';
+import type { ClientToHostMessage, FrameBundleMessage, HostToClientMessage } from './netcode_protocol.js';
 import { parseStagedefLz } from './noclip/SuperMonkeyBall/Stagedef.js';
 import { StageId, STAGE_INFO_MAP } from './noclip/SuperMonkeyBall/StageInfo.js';
 import type { StageData } from './noclip/SuperMonkeyBall/World.js';
@@ -565,6 +569,7 @@ const syncState: GameplaySyncState = {
   bananaCollectedByAnimGroup: null,
   animGroupTransforms: null,
   ball: null,
+  balls: null,
   goalBags: null,
   goalTapes: null,
   confetti: null,
@@ -572,6 +577,268 @@ const syncState: GameplaySyncState = {
   switches: null,
   stageTilt: null,
 };
+
+type LobbyRoom = {
+  roomId: string;
+  roomCode?: string;
+  isPublic: boolean;
+  hostId: number;
+  courseId: string;
+  settings: { maxPlayers: number; collisionEnabled: boolean };
+};
+
+const lobbyBaseUrl = (window as any).LOBBY_URL ?? "";
+const lobbyClient = lobbyBaseUrl ? new LobbyClient(lobbyBaseUrl) : null;
+
+const lobbyRefreshButton = document.getElementById('lobby-refresh') as HTMLButtonElement | null;
+const lobbyCreateButton = document.getElementById('lobby-create') as HTMLButtonElement | null;
+const lobbyJoinButton = document.getElementById('lobby-join') as HTMLButtonElement | null;
+const lobbyPublicCheckbox = document.getElementById('lobby-public') as HTMLInputElement | null;
+const lobbyCodeInput = document.getElementById('lobby-code') as HTMLInputElement | null;
+const lobbyLeaveButton = document.getElementById('lobby-leave') as HTMLButtonElement | null;
+const lobbyStatus = document.getElementById('lobby-status') as HTMLElement | null;
+const lobbyList = document.getElementById('lobby-list') as HTMLElement | null;
+const lobbyPlayers = document.getElementById('lobby-players') as HTMLElement | null;
+
+let lobbyRoom: LobbyRoom | null = null;
+let lobbySignal: { send: (msg: any) => void; close: () => void } | null = null;
+let hostRelay: HostRelay | null = null;
+let clientPeer: ClientPeer | null = null;
+let netplayEnabled = false;
+let pendingSnapshot: { frame: number; state: any; stageId?: number; gameSource?: GameSource } | null = null;
+let lobbyHeartbeatTimer: number | null = null;
+let netplayAccumulator = 0;
+const NETPLAY_MAX_FRAME_DELTA = 5;
+
+type NetplayRole = 'host' | 'client';
+type NetplayClientState = {
+  lastAckedHostFrame: number;
+  lastAckedClientInput: number;
+};
+type NetplayState = {
+  role: NetplayRole;
+  session: ReturnType<Game['ensureRollbackSession']>;
+  inputHistory: Map<number, Map<number, QuantizedInput>>;
+  lastInputs: Map<number, QuantizedInput>;
+  pendingLocalInputs: Map<number, QuantizedInput>;
+  lastAckedLocalFrame: number;
+  lastReceivedHostFrame: number;
+  hostFrameBuffer: Map<number, FrameBundleMessage>;
+  clientStates: Map<number, NetplayClientState>;
+  maxRollback: number;
+  maxResend: number;
+  hashInterval: number;
+  hashHistory: Map<number, number>;
+  expectedHashes: Map<number, number>;
+  currentCourse: any | null;
+  currentGameSource: GameSource | null;
+  awaitingSnapshot: boolean;
+};
+
+let netplayState: NetplayState | null = null;
+
+function createNetplayId() {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return buf[0] >>> 0;
+}
+
+function quantizedEqual(a: QuantizedInput, b: QuantizedInput) {
+  return a.x === b.x && a.y === b.y && (a.buttons ?? 0) === (b.buttons ?? 0);
+}
+
+function ensureNetplayState(role: NetplayRole) {
+  if (netplayState && netplayState.role === role) {
+    return netplayState;
+  }
+  const session = game.ensureRollbackSession();
+  session.prime(game.simTick);
+  netplayState = {
+    role,
+    session,
+    inputHistory: new Map(),
+    lastInputs: new Map(),
+    pendingLocalInputs: new Map(),
+    lastAckedLocalFrame: -1,
+    lastReceivedHostFrame: game.simTick,
+    hostFrameBuffer: new Map(),
+    clientStates: new Map(),
+    maxRollback: 30,
+    maxResend: 8,
+    hashInterval: 15,
+    hashHistory: new Map(),
+    expectedHashes: new Map(),
+    currentCourse: null,
+    currentGameSource: null,
+    awaitingSnapshot: false,
+  };
+  return netplayState;
+}
+
+function resetNetplaySession() {
+  game.rollbackSession = null;
+  const session = game.ensureRollbackSession();
+  session.prime(game.simTick);
+  if (netplayState) {
+    netplayState.session = session;
+  }
+}
+
+function getSimHash() {
+  if (!game.stageRuntime || !game.world) {
+    return 0;
+  }
+  const balls = game.players.map((player) => player.ball);
+  const worlds = [game.world, ...game.players.map((player) => player.world)];
+  return hashSimState(balls, worlds, game.stageRuntime);
+}
+
+function updateLobbyUi() {
+  if (!lobbyStatus || !lobbyLeaveButton || !lobbyPlayers) {
+    return;
+  }
+  if (!netplayEnabled || !lobbyRoom) {
+    lobbyLeaveButton.classList.add('hidden');
+    lobbyPlayers.classList.add('hidden');
+    lobbyPlayers.textContent = '';
+    return;
+  }
+  lobbyLeaveButton.classList.remove('hidden');
+  const role = netplayState?.role ?? 'offline';
+  const playerIds = game.players.map((player) => player.id);
+  lobbyPlayers.textContent = `Connected (${role}): ${playerIds.join(', ') || 'none'}`;
+  lobbyPlayers.classList.remove('hidden');
+}
+
+function startLobbyHeartbeat(roomId: string) {
+  if (!lobbyClient) {
+    return;
+  }
+  if (lobbyHeartbeatTimer !== null) {
+    window.clearInterval(lobbyHeartbeatTimer);
+  }
+  lobbyHeartbeatTimer = window.setInterval(() => {
+    void lobbyClient.heartbeat(roomId);
+  }, 15000);
+}
+
+function stopLobbyHeartbeat() {
+  if (lobbyHeartbeatTimer !== null) {
+    window.clearInterval(lobbyHeartbeatTimer);
+    lobbyHeartbeatTimer = null;
+  }
+}
+
+function resetNetplayConnections() {
+  lobbySignal?.close();
+  lobbySignal = null;
+  hostRelay?.closeAll();
+  hostRelay = null;
+  clientPeer?.close();
+  clientPeer = null;
+  netplayEnabled = false;
+  netplayState = null;
+  pendingSnapshot = null;
+  netplayAccumulator = 0;
+  stopLobbyHeartbeat();
+  lobbyRoom = null;
+  updateLobbyUi();
+}
+
+function recordInputForFrame(frame: number, playerId: number, input: QuantizedInput) {
+  if (!netplayState) {
+    return false;
+  }
+  let frameInputs = netplayState.inputHistory.get(frame);
+  if (!frameInputs) {
+    frameInputs = new Map();
+    netplayState.inputHistory.set(frame, frameInputs);
+  }
+  const prev = frameInputs.get(playerId);
+  if (prev && quantizedEqual(prev, input)) {
+    return false;
+  }
+  frameInputs.set(playerId, input);
+  netplayState.lastInputs.set(playerId, input);
+  return true;
+}
+
+function buildInputsForFrame(frame: number) {
+  if (!netplayState) {
+    return new Map<number, QuantizedInput>();
+  }
+  let frameInputs = netplayState.inputHistory.get(frame);
+  if (!frameInputs) {
+    frameInputs = new Map();
+    netplayState.inputHistory.set(frame, frameInputs);
+  }
+  for (const player of game.players) {
+    if (!frameInputs.has(player.id)) {
+      const last = netplayState.lastInputs.get(player.id) ?? { x: 0, y: 0, buttons: 0 };
+      frameInputs.set(player.id, last);
+    }
+  }
+  return frameInputs;
+}
+
+function trimNetplayHistory(frame: number) {
+  if (!netplayState) {
+    return;
+  }
+  const minFrame = frame - netplayState.maxRollback;
+  for (const key of Array.from(netplayState.inputHistory.keys())) {
+    if (key < minFrame) {
+      netplayState.inputHistory.delete(key);
+    }
+  }
+  for (const key of Array.from(netplayState.hashHistory.keys())) {
+    if (key < minFrame) {
+      netplayState.hashHistory.delete(key);
+    }
+  }
+  for (const key of Array.from(netplayState.expectedHashes.keys())) {
+    if (key < minFrame) {
+      netplayState.expectedHashes.delete(key);
+    }
+  }
+}
+
+function rollbackAndResim(startFrame: number) {
+  if (!netplayState) {
+    return false;
+  }
+  const session = netplayState.session;
+  const current = session.getFrame();
+  const rollbackFrame = Math.max(0, startFrame - 1);
+  if (!session.rollbackTo(rollbackFrame)) {
+    return false;
+  }
+  for (let frame = rollbackFrame + 1; frame <= current; frame += 1) {
+    const inputs = buildInputsForFrame(frame);
+    session.advanceTo(frame, inputs);
+    if (netplayState.hashInterval > 0 && frame % netplayState.hashInterval === 0) {
+      netplayState.hashHistory.set(frame, getSimHash());
+    }
+    trimNetplayHistory(frame);
+  }
+  return true;
+}
+
+function tryApplyPendingSnapshot(stageId: number) {
+  if (!pendingSnapshot) {
+    return;
+  }
+  if (pendingSnapshot.stageId !== undefined && pendingSnapshot.stageId !== stageId) {
+    return;
+  }
+  game.loadRollbackState(pendingSnapshot.state);
+  resetNetplaySession();
+  if (netplayState) {
+    netplayState.lastReceivedHostFrame = pendingSnapshot.frame;
+    netplayState.awaitingSnapshot = false;
+  }
+  pendingSnapshot = null;
+}
 
 const cameraEye = vec3.create();
 
@@ -678,6 +945,7 @@ async function handleStageLoaded(stageId: number) {
     lastTime = performance.now();
     updateMobileMenuButtonVisibility();
     maybeStartSmb2LikeStageFade();
+    tryApplyPendingSnapshot(stageId);
     return;
   }
 
@@ -704,6 +972,7 @@ async function handleStageLoaded(stageId: number) {
   lastTime = performance.now();
   updateMobileMenuButtonVisibility();
   maybeStartSmb2LikeStageFade();
+  tryApplyPendingSnapshot(stageId);
 }
 
 function setSelectOptions(select: HTMLSelectElement, values: { value: string; label: string }[]) {
@@ -880,6 +1149,310 @@ async function startStage(
     activeGameSource !== GAME_SOURCES.SMB1 && hasSmb2LikeMode(difficulty) ? difficulty.mode : null;
   void audio.resume();
   await game.start(difficulty);
+  if (netplayEnabled && netplayState) {
+    netplayState.inputHistory.clear();
+    netplayState.lastInputs.clear();
+    netplayState.pendingLocalInputs.clear();
+    netplayState.hashHistory.clear();
+    netplayState.expectedHashes.clear();
+    netplayState.lastAckedLocalFrame = -1;
+    netplayState.lastReceivedHostFrame = game.simTick;
+    resetNetplaySession();
+  }
+}
+
+function requestSnapshot(reason: 'mismatch' | 'lag') {
+  if (!clientPeer || !netplayState || netplayState.awaitingSnapshot) {
+    return;
+  }
+  netplayState.awaitingSnapshot = true;
+  clientPeer.send({
+    type: 'snapshot_request',
+    frame: netplayState.session.getFrame(),
+    reason,
+  });
+}
+
+function handleHostMessage(msg: HostToClientMessage) {
+  const state = netplayState;
+  if (!state) {
+    return;
+  }
+  if (msg.type === 'frame') {
+    const frameMsg = msg as FrameBundleMessage;
+    if (frameMsg.lastAck !== undefined) {
+      state.lastAckedLocalFrame = Math.max(state.lastAckedLocalFrame, frameMsg.lastAck);
+      for (const frame of Array.from(state.pendingLocalInputs.keys())) {
+        if (frame <= state.lastAckedLocalFrame) {
+          state.pendingLocalInputs.delete(frame);
+        }
+      }
+    }
+    state.lastReceivedHostFrame = Math.max(state.lastReceivedHostFrame, frameMsg.frame);
+    let changed = false;
+    for (const [id, input] of Object.entries(frameMsg.inputs)) {
+      const playerId = Number(id);
+      if (recordInputForFrame(frameMsg.frame, playerId, input)) {
+        changed = true;
+      }
+    }
+    if (frameMsg.hash !== undefined) {
+      state.expectedHashes.set(frameMsg.frame, frameMsg.hash);
+      const localHash = state.hashHistory.get(frameMsg.frame);
+      if (localHash !== undefined && localHash !== frameMsg.hash) {
+        requestSnapshot('mismatch');
+      }
+    }
+    const currentFrame = state.session.getFrame();
+    if (changed && frameMsg.frame <= currentFrame) {
+      if (!rollbackAndResim(frameMsg.frame)) {
+        requestSnapshot('lag');
+      }
+    }
+    if (state.lastReceivedHostFrame - currentFrame > state.maxRollback) {
+      requestSnapshot('lag');
+    }
+    return;
+  }
+  if (msg.type === 'snapshot') {
+    pendingSnapshot = msg;
+    if (netplayState) {
+      netplayState.inputHistory.clear();
+      netplayState.lastInputs.clear();
+      netplayState.pendingLocalInputs.clear();
+      netplayState.hashHistory.clear();
+      netplayState.expectedHashes.clear();
+      netplayState.lastAckedLocalFrame = msg.frame;
+      netplayState.lastReceivedHostFrame = msg.frame;
+    }
+    if (!msg.stageId || game.stage?.stageId === msg.stageId) {
+      tryApplyPendingSnapshot(game.stage?.stageId ?? 0);
+    }
+    return;
+  }
+  if (msg.type === 'player_join') {
+    game.addPlayer(msg.playerId, { spectator: msg.spectator });
+    const player = game.players.find((p) => p.id === msg.playerId);
+    if (player && msg.pendingSpawn) {
+      player.pendingSpawn = true;
+    }
+    updateLobbyUi();
+    return;
+  }
+  if (msg.type === 'player_leave') {
+    game.removePlayer(msg.playerId);
+    updateLobbyUi();
+    return;
+  }
+  if (msg.type === 'room_update') {
+    game.maxPlayers = msg.room.settings.maxPlayers;
+    game.playerCollisionEnabled = msg.room.settings.collisionEnabled;
+    lobbyRoom = msg.room;
+    updateLobbyUi();
+    return;
+  }
+  if (msg.type === 'start') {
+    activeGameSource = msg.gameSource;
+    game.setGameSource(activeGameSource);
+    game.stageBasePath = msg.stageBasePath ?? getStageBasePath(activeGameSource);
+    currentSmb2LikeMode = activeGameSource !== GAME_SOURCES.SMB1 && msg.course?.mode ? msg.course.mode : null;
+    if (netplayState) {
+      netplayState.currentCourse = msg.course;
+      netplayState.currentGameSource = msg.gameSource;
+    }
+    void startStage(msg.course);
+  }
+}
+
+function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
+  const state = netplayState;
+  if (!state) {
+    return;
+  }
+  const clientState = state.clientStates.get(playerId);
+  if (!clientState) {
+    return;
+  }
+  if (msg.type === 'input') {
+    if (msg.lastAck !== undefined) {
+      clientState.lastAckedHostFrame = Math.max(clientState.lastAckedHostFrame, msg.lastAck);
+    }
+    clientState.lastAckedClientInput = Math.max(clientState.lastAckedClientInput, msg.frame);
+    const changed = recordInputForFrame(msg.frame, playerId, msg.input);
+    const currentFrame = state.session.getFrame();
+    if (changed && msg.frame <= currentFrame) {
+      if (!rollbackAndResim(msg.frame)) {
+        sendSnapshotToClient(playerId);
+      }
+    }
+    return;
+  }
+  if (msg.type === 'ack') {
+    clientState.lastAckedHostFrame = Math.max(clientState.lastAckedHostFrame, msg.frame);
+    return;
+  }
+  if (msg.type === 'snapshot_request') {
+    sendSnapshotToClient(playerId);
+  }
+}
+
+function sendSnapshotToClient(playerId: number) {
+  if (!hostRelay || !netplayState) {
+    return;
+  }
+  const state = game.saveRollbackState();
+  if (!state) {
+    return;
+  }
+  hostRelay.sendTo(playerId, {
+    type: 'snapshot',
+    frame: netplayState.session.getFrame(),
+    state,
+    stageId: game.stage?.stageId,
+    gameSource: game.gameSource,
+  });
+}
+
+function hostResendFrames(currentFrame: number) {
+  if (!hostRelay || !netplayState) {
+    return;
+  }
+  for (const [playerId, clientState] of netplayState.clientStates.entries()) {
+    const start = Math.max(clientState.lastAckedHostFrame + 1, currentFrame - netplayState.maxResend + 1);
+    for (let frame = start; frame <= currentFrame; frame += 1) {
+      const bundle = netplayState.hostFrameBuffer.get(frame);
+      if (!bundle) {
+        continue;
+      }
+      hostRelay.sendTo(playerId, {
+        ...bundle,
+        lastAck: clientState.lastAckedClientInput,
+      });
+    }
+  }
+}
+
+function clientSendInputBuffer(currentFrame: number) {
+  if (!clientPeer || !netplayState) {
+    return;
+  }
+  const start = netplayState.lastAckedLocalFrame + 1;
+  const end = currentFrame;
+  const minFrame = Math.max(start, end - netplayState.maxResend + 1);
+  for (let frame = minFrame; frame <= end; frame += 1) {
+    const input = netplayState.pendingLocalInputs.get(frame);
+    if (!input) {
+      continue;
+    }
+    clientPeer.send({
+      type: 'input',
+      frame,
+      playerId: game.localPlayerId,
+      input,
+      lastAck: netplayState.lastReceivedHostFrame,
+    });
+  }
+  if (start > end) {
+    clientPeer.send({
+      type: 'ack',
+      playerId: game.localPlayerId,
+      frame: netplayState.lastReceivedHostFrame,
+    });
+  }
+}
+
+function netplayStep() {
+  if (!netplayState) {
+    return;
+  }
+  const state = netplayState;
+  const session = state.session;
+  const currentFrame = session.getFrame();
+  let targetFrame = currentFrame;
+  if (state.role === 'client') {
+    targetFrame = Math.max(state.lastReceivedHostFrame, currentFrame);
+  }
+  const drift = targetFrame - currentFrame;
+  if (state.role === 'client' && drift < -2) {
+    clientSendInputBuffer(currentFrame);
+    return;
+  }
+  const frame = session.getFrame() + 1;
+    const localInput = game.sampleLocalInput();
+    recordInputForFrame(frame, game.localPlayerId, localInput);
+    if (state.role === 'client') {
+      state.pendingLocalInputs.set(frame, localInput);
+    }
+    const inputs = buildInputsForFrame(frame);
+    session.advanceTo(frame, inputs);
+    let hash: number | undefined;
+    if (state.hashInterval > 0 && frame % state.hashInterval === 0) {
+      hash = getSimHash();
+      state.hashHistory.set(frame, hash);
+      const expected = state.expectedHashes.get(frame);
+      if (expected !== undefined && expected !== hash) {
+        requestSnapshot('mismatch');
+      }
+    }
+  if (state.role === 'host') {
+    const bundleInputs: Record<number, QuantizedInput> = {};
+    for (const [playerId, input] of inputs.entries()) {
+      bundleInputs[playerId] = input;
+    }
+    state.hostFrameBuffer.set(frame, {
+      type: 'frame',
+      frame,
+      inputs: bundleInputs,
+      hash,
+    });
+    const minFrame = frame - Math.max(state.maxRollback, state.maxResend);
+    for (const key of Array.from(state.hostFrameBuffer.keys())) {
+      if (key < minFrame) {
+        state.hostFrameBuffer.delete(key);
+      }
+    }
+  }
+  trimNetplayHistory(frame);
+  if (state.role === 'host') {
+    hostResendFrames(session.getFrame());
+  } else {
+    clientSendInputBuffer(session.getFrame());
+  }
+}
+
+function netplayTick(dtSeconds: number) {
+  if (!netplayState) {
+    return;
+  }
+  if (!game.stageRuntime || game.loadingStage) {
+    game.update(0);
+    return;
+  }
+  netplayAccumulator = Math.min(netplayAccumulator + dtSeconds, game.fixedStep * NETPLAY_MAX_FRAME_DELTA);
+  const state = netplayState;
+  const session = state.session;
+  const currentFrame = session.getFrame();
+  let targetFrame = currentFrame;
+  if (state.role === 'client') {
+    targetFrame = Math.max(state.lastReceivedHostFrame, currentFrame);
+  }
+  const drift = targetFrame - currentFrame;
+  if (state.role === 'client' && drift < -2) {
+    clientSendInputBuffer(currentFrame);
+    return;
+  }
+  let ticks = Math.floor(netplayAccumulator / game.fixedStep);
+  if (ticks <= 0 && drift > 2) {
+    ticks = 1;
+  }
+  if (drift > 4) {
+    ticks = Math.min(3, Math.max(1, ticks + 1));
+  }
+  for (let i = 0; i < ticks; i += 1) {
+    netplayStep();
+    netplayAccumulator -= game.fixedStep;
+  }
+  game.accumulator = Math.max(0, Math.min(game.fixedStep, netplayAccumulator));
 }
 
 function setReplayStatus(text: string) {
@@ -906,11 +1479,12 @@ async function startReplay(replay: ReplayData) {
   game.course = null;
   void audio.resume();
   await game.loadStage(replay.stageId);
-  if (game.ball && game.stage) {
+  const localPlayer = game.getLocalPlayer?.() ?? null;
+  if (localPlayer?.ball && game.stage) {
     const startTick = Math.max(0, replay.inputStartTick ?? 0);
     game.introTotalFrames = startTick;
     game.introTimerFrames = startTick;
-    game.cameraController?.initForStage(game.ball, game.ball.startRotY, game.stageRuntime);
+    game.cameraController?.initForStage(localPlayer.ball, localPlayer.ball.startRotY, game.stageRuntime);
   }
   game.replayInputStartTick = Math.max(0, replay.inputStartTick ?? 0);
   game.setInputFeed(replay.inputs);
@@ -935,6 +1509,208 @@ function downloadReplay(replay: ReplayData) {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function refreshLobbyList() {
+  if (!lobbyClient || !lobbyList || !lobbyStatus) {
+    return;
+  }
+  lobbyStatus.textContent = 'Lobby: loading...';
+  try {
+    const rooms = await lobbyClient.listRooms();
+    lobbyList.innerHTML = '';
+    for (const room of rooms) {
+      const item = document.createElement('div');
+      item.className = 'lobby-item';
+      const label = document.createElement('span');
+      label.textContent = `${room.courseId} • host ${room.hostId}`;
+      const join = document.createElement('button');
+      join.className = 'ghost compact';
+      join.type = 'button';
+      join.textContent = 'Join';
+      join.addEventListener('click', async () => {
+        await joinRoom(room.roomId);
+      });
+      item.append(label, join);
+      lobbyList.appendChild(item);
+    }
+    lobbyStatus.textContent = `Lobby: ${rooms.length} room(s)`;
+  } catch (err) {
+    console.error(err);
+    lobbyStatus.textContent = 'Lobby: failed';
+  }
+}
+
+async function createRoom() {
+  if (!lobbyClient || !lobbyStatus) {
+    return;
+  }
+  const isPublic = lobbyPublicCheckbox?.checked ?? true;
+  const hostId = game.localPlayerId ?? 0;
+  const room = await lobbyClient.createRoom({
+    isPublic,
+    hostId,
+    courseId: 'smb1-main',
+    settings: { maxPlayers: 8, collisionEnabled: true },
+  });
+  lobbyRoom = room;
+  lobbyStatus.textContent = `Lobby: hosting ${room.roomCode ?? room.roomId}`;
+  startHost(room);
+}
+
+async function joinRoom(roomId: string) {
+  if (!lobbyClient || !lobbyStatus) {
+    return;
+  }
+  const room = await lobbyClient.joinRoom({ roomId });
+  lobbyRoom = room;
+  lobbyStatus.textContent = `Lobby: joining ${room.roomCode ?? room.roomId}`;
+  startClient(room);
+}
+
+async function joinRoomByCode() {
+  if (!lobbyClient || !lobbyStatus) {
+    return;
+  }
+  const code = lobbyCodeInput?.value?.trim();
+  if (!code) {
+    lobbyStatus.textContent = 'Lobby: enter a room code';
+    return;
+  }
+  const room = await lobbyClient.joinRoom({ roomCode: code });
+  lobbyRoom = room;
+  lobbyStatus.textContent = `Lobby: joining ${room.roomCode ?? room.roomId}`;
+  startClient(room);
+}
+
+async function leaveRoom() {
+  if (!lobbyClient) {
+    resetNetplayConnections();
+    return;
+  }
+  const roomId = lobbyRoom?.roomId;
+  const wasHost = netplayState?.role === 'host';
+  resetNetplayConnections();
+  if (roomId && wasHost) {
+    try {
+      await lobbyClient.closeRoom(roomId);
+    } catch {
+      // Ignore.
+    }
+  }
+  if (lobbyStatus) {
+    lobbyStatus.textContent = 'Lobby: idle';
+  }
+}
+
+function startHost(room: LobbyRoom) {
+  if (!lobbyClient) {
+    return;
+  }
+  netplayEnabled = true;
+  ensureNetplayState('host');
+  game.setLocalPlayerId(room.hostId);
+  game.maxPlayers = room.settings.maxPlayers;
+  game.playerCollisionEnabled = room.settings.collisionEnabled;
+  hostRelay = new HostRelay((playerId, msg) => {
+    handleClientMessage(playerId, msg);
+  });
+  hostRelay.hostId = room.hostId;
+  hostRelay.onConnect = (playerId) => {
+    const state = netplayState;
+    if (!state) {
+      return;
+    }
+    if (!state.clientStates.has(playerId)) {
+      state.clientStates.set(playerId, { lastAckedHostFrame: -1, lastAckedClientInput: -1 });
+    }
+    game.addPlayer(playerId, { spectator: false });
+    const player = game.players.find((p) => p.id === playerId);
+    const pendingSpawn = !!player?.pendingSpawn;
+    for (const existing of game.players) {
+      hostRelay?.sendTo(playerId, {
+        type: 'player_join',
+        playerId: existing.id,
+        spectator: existing.isSpectator,
+        pendingSpawn: existing.pendingSpawn,
+      });
+    }
+    hostRelay?.broadcast({ type: 'player_join', playerId, spectator: false, pendingSpawn });
+    hostRelay?.sendTo(playerId, { type: 'room_update', room });
+    if (state.currentCourse && state.currentGameSource) {
+      hostRelay?.sendTo(playerId, {
+        type: 'start',
+        gameSource: state.currentGameSource,
+        course: state.currentCourse,
+        stageBasePath: getStageBasePath(state.currentGameSource),
+      });
+    }
+    sendSnapshotToClient(playerId);
+    updateLobbyUi();
+  };
+  hostRelay.onDisconnect = (playerId) => {
+    game.removePlayer(playerId);
+    netplayState?.clientStates.delete(playerId);
+    hostRelay?.broadcast({ type: 'player_leave', playerId });
+    updateLobbyUi();
+  };
+  lobbySignal?.close();
+  lobbySignal = lobbyClient.openSignal(room.roomId, room.hostId, async (msg) => {
+    if (msg.to !== room.hostId) {
+      return;
+    }
+    if (msg.payload?.join) {
+      const offer = await createHostOffer(hostRelay!, msg.from);
+      hostRelay?.onSignal?.({ type: 'signal', from: room.hostId, to: msg.from, payload: { sdp: offer } });
+      return;
+    }
+    await applyHostSignal(hostRelay!, msg.from, msg.payload);
+  }, () => {
+    lobbyStatus!.textContent = 'Lobby: disconnected';
+    resetNetplayConnections();
+  });
+  hostRelay.onSignal = (signal) => lobbySignal?.send(signal);
+  startLobbyHeartbeat(room.roomId);
+  lobbyStatus!.textContent = `Lobby: hosting ${room.roomCode ?? room.roomId}`;
+  updateLobbyUi();
+}
+
+async function startClient(room: LobbyRoom) {
+  if (!lobbyClient) {
+    return;
+  }
+  netplayEnabled = true;
+  ensureNetplayState('client');
+  const playerId = createNetplayId();
+  game.setLocalPlayerId(playerId);
+  game.maxPlayers = room.settings.maxPlayers;
+  game.playerCollisionEnabled = room.settings.collisionEnabled;
+  game.addPlayer(room.hostId, { spectator: false });
+  clientPeer = new ClientPeer((msg) => {
+    handleHostMessage(msg);
+  });
+  clientPeer.playerId = playerId;
+  clientPeer.hostId = room.hostId;
+  await clientPeer.createConnection();
+  lobbySignal?.close();
+  lobbySignal = lobbyClient.openSignal(room.roomId, playerId, async (msg) => {
+    if (msg.to !== playerId) {
+      return;
+    }
+    await clientPeer?.handleSignal(msg.payload);
+  }, () => {
+    lobbyStatus!.textContent = 'Lobby: disconnected';
+    resetNetplayConnections();
+  });
+  clientPeer.onSignal = (signal) => lobbySignal?.send(signal);
+  clientPeer.onDisconnect = () => {
+    lobbyStatus!.textContent = 'Lobby: disconnected';
+    resetNetplayConnections();
+  };
+  lobbySignal.send({ type: 'signal', from: playerId, to: room.hostId, payload: { join: true } });
+  startLobbyHeartbeat(room.roomId);
+  lobbyStatus!.textContent = `Lobby: connected ${room.roomCode ?? room.roomId}`;
+  updateLobbyUi();
 }
 
 function bindVolumeControl(
@@ -1244,7 +2020,11 @@ function renderFrame(now: number) {
     viewerInput.deltaTime = 0;
   }
 
-  game.update(dtSeconds);
+  if (netplayEnabled) {
+    netplayTick(dtSeconds);
+  } else {
+    game.update(dtSeconds);
+  }
 
   const shouldRender = interpolationEnabled || (now - lastRenderTime) >= RENDER_FRAME_MS;
   if (!shouldRender) {
@@ -1292,6 +2072,7 @@ function renderFrame(now: number) {
   syncState.bananaCollectedByAnimGroup = null;
   syncState.animGroupTransforms = game.getAnimGroupTransforms(interpolationAlpha);
   syncState.ball = game.getBallRenderState(interpolationAlpha);
+  syncState.balls = game.getBallRenderStates(interpolationAlpha);
   syncState.goalBags = game.getGoalBagRenderState(interpolationAlpha);
   syncState.goalTapes = game.getGoalTapeRenderState(interpolationAlpha);
   syncState.confetti = game.getConfettiRenderState(interpolationAlpha);
@@ -1583,6 +2364,12 @@ if (interpolationToggle) {
 }
 
 startButton.addEventListener('click', () => {
+  if (netplayEnabled && netplayState?.role === 'client') {
+    if (hudStatus) {
+      hudStatus.textContent = 'Waiting for host to start...';
+    }
+    return;
+  }
   const resolved = resolveSelectedGameSource();
   activeGameSource = resolved.gameSource;
   const difficulty = activeGameSource === GAME_SOURCES.SMB2
@@ -1590,6 +2377,16 @@ startButton.addEventListener('click', () => {
     : activeGameSource === GAME_SOURCES.MB2WS
       ? buildMb2wsCourseConfig()
       : buildSmb1CourseConfig();
+  if (netplayEnabled && netplayState?.role === 'host') {
+    netplayState.currentCourse = difficulty;
+    netplayState.currentGameSource = activeGameSource;
+    hostRelay?.broadcast({
+      type: 'start',
+      gameSource: activeGameSource,
+      course: difficulty,
+      stageBasePath: getStageBasePath(activeGameSource),
+    });
+  }
   startStage(difficulty).catch((error) => {
     if (hudStatus) {
       hudStatus.textContent = 'Failed to load stage.';
@@ -1619,5 +2416,29 @@ window.addEventListener('keydown', (event) => {
     game.pause();
   }
 });
+
+if (lobbyRefreshButton) {
+  lobbyRefreshButton.addEventListener('click', () => {
+    void refreshLobbyList();
+  });
+}
+if (lobbyCreateButton) {
+  lobbyCreateButton.addEventListener('click', () => {
+    void createRoom();
+  });
+}
+if (lobbyJoinButton) {
+  lobbyJoinButton.addEventListener('click', () => {
+    void joinRoomByCode();
+  });
+}
+if (lobbyLeaveButton) {
+  lobbyLeaveButton.addEventListener('click', () => {
+    void leaveRoom();
+  });
+}
+if (lobbyClient) {
+  void refreshLobbyList();
+}
 
 requestAnimationFrame(renderFrame);

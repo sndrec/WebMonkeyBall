@@ -295,6 +295,45 @@ export function startBallDrop(ball, frames = 24) {
   ball.prevTransform.set(ball.transform);
 }
 
+export function resolveBallBallCollision(ballA, ballB) {
+  const dx = ballB.pos.x - ballA.pos.x;
+  const dy = ballB.pos.y - ballA.pos.y;
+  const dz = ballB.pos.z - ballA.pos.z;
+  const minDist = (ballA.currRadius ?? 0.5) + (ballB.currRadius ?? 0.5);
+  const distSq = dx * dx + dy * dy + dz * dz;
+  if (distSq <= FLT_EPSILON || distSq >= minDist * minDist) {
+    return;
+  }
+  const dist = sqrt(distSq);
+  const nx = dx / dist;
+  const ny = dy / dist;
+  const nz = dz / dist;
+  const overlap = minDist - dist;
+  const correction = overlap * 0.5;
+  ballA.pos.x -= nx * correction;
+  ballA.pos.y -= ny * correction;
+  ballA.pos.z -= nz * correction;
+  ballB.pos.x += nx * correction;
+  ballB.pos.y += ny * correction;
+  ballB.pos.z += nz * correction;
+
+  const rvx = ballB.vel.x - ballA.vel.x;
+  const rvy = ballB.vel.y - ballA.vel.y;
+  const rvz = ballB.vel.z - ballA.vel.z;
+  const relVel = rvx * nx + rvy * ny + rvz * nz;
+  if (relVel >= 0) {
+    return;
+  }
+  const restitution = (ballA.restitution + ballB.restitution) * 0.5;
+  const impulse = -((1 + restitution) * relVel) * 0.5;
+  ballA.vel.x -= impulse * nx;
+  ballA.vel.y -= impulse * ny;
+  ballA.vel.z -= impulse * nz;
+  ballB.vel.x += impulse * nx;
+  ballB.vel.y += impulse * ny;
+  ballB.vel.z += impulse * nz;
+}
+
 function updateBallCameraSteerYaw(ball) {
   const speed = sqrt(sumSq2(ball.vel.x, ball.vel.z));
   let velYaw = ball.apeYaw;

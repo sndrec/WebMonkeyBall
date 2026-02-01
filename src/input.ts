@@ -494,6 +494,14 @@ export class Input {
     return !!button && (button.pressed || button.value > 0.5);
   }
 
+  getButtonsBitmask() {
+    let bits = 0;
+    if (this.isPrimaryActionDown()) {
+      bits |= 1;
+    }
+    return bits;
+  }
+
   getGamepadStick() {
     const gamepads = navigator.getGamepads?.() ?? navigator.webkitGetGamepads?.();
     if (!gamepads) {

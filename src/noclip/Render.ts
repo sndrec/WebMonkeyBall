@@ -140,6 +140,7 @@ export type GameplaySyncState = {
   jamabars?: JamabarRenderState[] | null;
   animGroupTransforms?: Float32Array[] | null;
   ball?: BallRenderState | null;
+  balls?: BallRenderState[] | null;
   goalBags?: GoalBagRenderState[] | null;
   goalTapes?: GoalTapeRenderState[] | null;
   confetti?: ConfettiRenderState[] | null;
@@ -582,7 +583,10 @@ export class Renderer {
     if (state.bananaCollectedByAnimGroup) {
       this.world.setBananaCollectedByAnimGroup(state.bananaCollectedByAnimGroup);
     }
-    if (state.ball !== undefined) {
+    const hasBalls = state.balls !== undefined;
+    if (hasBalls) {
+      this.world.setBallsState(state.balls ?? null);
+    } else if (state.ball !== undefined) {
       this.world.setBallState(state.ball ?? null);
     }
     if (state.goalBags !== undefined) {

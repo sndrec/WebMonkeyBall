@@ -1,4 +1,5 @@
 export type QuantizedStick = { x: number; y: number };
+export type QuantizedInput = { x: number; y: number; buttons?: number };
 
 export function quantizeStickAxis(value: number): number {
   const clamped = Math.max(-1, Math.min(1, value));
@@ -20,6 +21,14 @@ export function quantizeStick(stick: { x: number; y: number }): QuantizedStick {
   return {
     x: quantizeStickAxis(stick.x),
     y: quantizeStickAxis(stick.y),
+  };
+}
+
+export function quantizeInput(stick: { x: number; y: number }, buttons = 0): QuantizedInput {
+  return {
+    x: quantizeStickAxis(stick.x),
+    y: quantizeStickAxis(stick.y),
+    buttons: buttons | 0,
   };
 }
 

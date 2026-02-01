@@ -5,7 +5,9 @@ export function runDeterminismTest(game, tickCount, inputFeed = null, { includeV
   const hashes = [];
   for (let i = 0; i < tickCount; i += 1) {
     game.update(game.fixedStep);
-    hashes.push(hashSimState(game.ball, game.world, game.stageRuntime, { includeVisual }));
+    const balls = game.players ? game.players.map((player) => player.ball) : game.ball;
+    const worlds = game.players ? [game.world, ...game.players.map((player) => player.world)] : game.world;
+    hashes.push(hashSimState(balls, worlds, game.stageRuntime, { includeVisual }));
   }
   return hashes;
 }

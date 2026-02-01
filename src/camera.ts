@@ -584,7 +584,7 @@ export class GameplayCamera {
     this.lookAt.y = ball.pos.y;
     this.lookAt.z = ball.pos.z;
 
-    const randYaw = toS16(Math.floor(Math.random() * 0x10000));
+    const randYaw = toS16(ball.rotY ?? 0);
     stack.fromIdentity();
     stack.rotateY(randYaw);
     tmpVec.x = 3;
