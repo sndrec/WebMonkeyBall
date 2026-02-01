@@ -79,6 +79,7 @@ type PlayerState = {
   id: number;
   ball: ReturnType<typeof createBallState>;
   world: World;
+  camera: GameplayCamera;
   cameraRotY: number;
   isSpectator: boolean;
   pendingSpawn: boolean;
@@ -362,6 +363,7 @@ export class Game {
   public playerInputFeedIndices: Map<number, number>;
   public rollbackEnabled: boolean;
   public rollbackSession: RollbackSession<any> | null;
+  public allowCourseAdvance: boolean;
   public nextPlayerId: number;
   public lastLocalInput: QuantizedInput;
   public fixedTickMode: boolean;
@@ -468,6 +470,7 @@ export class Game {
     this.playerInputFeedIndices = new Map();
     this.rollbackEnabled = false;
     this.rollbackSession = null;
+    this.allowCourseAdvance = true;
     this.nextPlayerId = 1;
     this.lastLocalInput = { x: 0, y: 0, buttons: 0 };
     this.fixedTickMode = false;
@@ -508,6 +511,7 @@ export class Game {
     if (existing && existing !== current) {
       this.localPlayerId = playerId;
       this.ball = existing.ball;
+      this.cameraController = existing.camera;
       return;
     }
     if (current) {
@@ -515,6 +519,7 @@ export class Game {
       current.ball.playerId = playerId;
       this.localPlayerId = playerId;
       this.ball = current.ball;
+      this.cameraController = current.camera;
       return;
     }
     this.localPlayerId = playerId;
@@ -602,11 +607,13 @@ export class Game {
     this.world = new World();
     this.ball = createBallState();
     this.ball.playerId = this.localPlayerId;
+    const localCamera = new GameplayCamera();
     this.players = [
       {
         id: this.localPlayerId,
         ball: this.ball,
         world: new World(),
+        camera: localCamera,
         cameraRotY: 0,
         isSpectator: false,
         pendingSpawn: false,
@@ -620,7 +627,7 @@ export class Game {
         ringoutSkipTimerFrames: 0,
       },
     ];
-    this.cameraController = new GameplayCamera();
+    this.cameraController = localCamera;
     this.running = true;
   }
 
@@ -742,6 +749,7 @@ export class Game {
         ringoutTimerFrames: player.ringoutTimerFrames,
         ringoutSkipTimerFrames: player.ringoutSkipTimerFrames,
         cameraRotY: player.cameraRotY,
+        camera: player.camera?.getState?.() ?? null,
         world: {
           xrot: player.world.xrot,
           zrot: player.world.zrot,
@@ -799,6 +807,9 @@ export class Game {
         player.ringoutTimerFrames = saved.ringoutTimerFrames ?? 0;
         player.ringoutSkipTimerFrames = saved.ringoutSkipTimerFrames ?? 0;
         player.cameraRotY = saved.cameraRotY ?? 0;
+        if (saved.camera && player.camera) {
+          player.camera.setState(saved.camera);
+        }
         if (saved.world) {
           player.world.xrot = saved.world.xrot ?? player.world.xrot;
           player.world.zrot = saved.world.zrot ?? player.world.zrot;
@@ -818,6 +829,10 @@ export class Game {
           }
         }
       }
+    }
+    const localPlayer = this.getLocalPlayer();
+    if (localPlayer) {
+      this.cameraController = localPlayer.camera;
     }
     this.noCollidePairs = new Set(state.noCollidePairs ?? []);
     if (state.playerCollisionEnabled !== undefined) {
@@ -950,6 +965,7 @@ export class Game {
     }
     const ball = createBallState();
     ball.playerId = id;
+    const camera = new GameplayCamera();
     const world = new World();
     const hasActiveStage = !!this.stage && !!this.stageRuntime;
     const pendingSpawn = !spectator && hasActiveStage && this.stageTimerFrames > 0;
@@ -958,11 +974,13 @@ export class Game {
       const startPos = start?.pos ?? { x: 0, y: 0, z: 0 };
       const startRotY = start?.rot?.y ?? 0;
       initBallForStage(ball, startPos, startRotY);
+      camera.initForStage(ball, startRotY, this.stageRuntime);
     }
     this.players.push({
       id,
       ball,
       world,
+      camera,
       cameraRotY: 0,
       isSpectator: spectator,
       pendingSpawn,
@@ -977,6 +995,7 @@ export class Game {
     });
     if (id === this.localPlayerId) {
       this.ball = ball;
+      this.cameraController = camera;
     }
     if (!spectator && !pendingSpawn) {
       this.markNoCollideForPlayer(id);
@@ -1878,7 +1897,7 @@ export class Game {
         this.introTimerFrames = startTick;
         const localPlayer = this.getLocalPlayer();
         if (localPlayer) {
-          this.cameraController?.initForStage(localPlayer.ball, localPlayer.ball.startRotY, this.stageRuntime);
+          localPlayer.camera.initForStage(localPlayer.ball, localPlayer.ball.startRotY, this.stageRuntime);
         }
         this.replayAutoFastForward = true;
         this.setFixedTickMode(true, 1);
@@ -1967,15 +1986,23 @@ export class Game {
         void this.audio?.playAnnouncerReady();
         this.readyAnnouncerPlayed = true;
       }
-      this.cameraController?.initReady(this.stageRuntime, startRotY, startPos, flyInFrames);
+      for (const player of this.players) {
+        if (player.isSpectator || player.pendingSpawn) {
+          continue;
+        }
+        player.camera.initReady(this.stageRuntime, startRotY, startPos, flyInFrames);
+      }
     } else {
       this.introTimerFrames = 0;
       this.bonusClearPending = false;
       this.readyAnnouncerPlayed = false;
       this.goAnnouncerPlayed = false;
       this.goalWooshPlayed = false;
-      if (localPlayer) {
-        this.cameraController?.initForStage(localPlayer.ball, startRotY, this.stageRuntime);
+      for (const player of this.players) {
+        if (player.isSpectator || player.pendingSpawn) {
+          continue;
+        }
+        player.camera.initForStage(player.ball, startRotY, this.stageRuntime);
       }
     }
     if (localPlayer) {
@@ -2004,8 +2031,8 @@ export class Game {
     player.ringoutSkipTimerFrames = 0;
     player.respawnTimerFrames = 0;
     this.markNoCollideForPlayer(player.id);
+    player.camera.initForStage(player.ball, startRotY, this.stageRuntime);
     if (player.id === this.localPlayerId) {
-      this.cameraController?.initForStage(player.ball, startRotY, this.stageRuntime);
       this.syncCameraPose();
     }
   }
@@ -2026,7 +2053,7 @@ export class Game {
     if (isBonusStage) {
       void this.audio?.playAnnouncerBonusFinish();
     }
-    this.cameraController?.initFalloutReplay(localBall);
+    localPlayer.camera.initFalloutReplay(localBall);
     this.updateHud();
   }
 
@@ -2098,7 +2125,9 @@ export class Game {
     this.statusText = '';
     if (isBonusStage) {
       this.accumulator = 0;
-      void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.FALLOUT));
+      if (this.allowCourseAdvance) {
+        void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.FALLOUT));
+      }
       return true;
     }
     this.accumulator = 0;
@@ -2121,14 +2150,18 @@ export class Game {
     this.statusText = '';
     if (isBonusStage) {
       this.accumulator = 0;
-      void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.TIMEOVER));
+      if (this.allowCourseAdvance) {
+        void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.TIMEOVER));
+      }
       return true;
     }
     this.accumulator = 0;
     if (this.players.length <= 1 && this.stage) {
       void this.loadStage(this.stage.stageId);
     } else {
-      void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.TIMEOVER));
+      if (this.allowCourseAdvance) {
+        void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.TIMEOVER));
+      }
     }
     return true;
   }
@@ -2322,6 +2355,9 @@ export class Game {
     if (!this.input) {
       return;
     }
+    if (!this.allowCourseAdvance) {
+      return;
+    }
     if (this.input.wasPressed('KeyR')) {
       if (this.course) {
         void this.loadStage(this.course.currentStageId);
@@ -2333,6 +2369,9 @@ export class Game {
   }
 
   skipStage() {
+    if (!this.allowCourseAdvance) {
+      return;
+    }
     if (!this.course || !this.stage) {
       return;
     }
@@ -2375,7 +2414,7 @@ export class Game {
       void this.audio.playAnnouncerTimeBonus(this.gameSource, isHigh);
     }
     this.breakGoalTapeForBall(localBall, goalHit);
-    this.cameraController?.setGoalMain();
+    localPlayer.camera.setGoalMain();
   }
 
   private breakGoalTapeForBall(ball: ReturnType<typeof createBallState>, goalHit: any) {
@@ -2590,7 +2629,9 @@ export class Game {
         this.stageRuntime.goalHoldOpen = this.players.length <= 1
           ? localPlayer.goalTimerFrames > 0
           : this.players.some((player) => player.goalTimerFrames > 0);
-        localPlayer.cameraRotY = this.cameraController.rotY;
+        for (const player of this.players) {
+          player.cameraRotY = player.camera.rotY;
+        }
         let tiltCount = 0;
         let avgGravX = 0;
         let avgGravY = 0;
@@ -2662,6 +2703,17 @@ export class Game {
             break;
           }
         }
+        for (const player of this.players) {
+          if (player.id === this.localPlayerId || player.isSpectator || player.pendingSpawn) {
+            continue;
+          }
+          if (player.goalTimerFrames > 0) {
+            player.goalTimerFrames -= 1;
+            if (player.goalTimerFrames <= 0) {
+              player.goalTimerFrames = 0;
+            }
+          }
+        }
         if (this.introTimerFrames > 0) {
           const prevIntroTimerFrames = this.introTimerFrames;
           this.introTimerFrames -= 1;
@@ -2681,7 +2733,12 @@ export class Game {
             }
           }
           if (this.introTimerFrames === 0) {
-            this.cameraController.initForStage(localBall, localBall.startRotY, this.stageRuntime);
+            for (const player of this.players) {
+              if (player.isSpectator || player.pendingSpawn) {
+                continue;
+              }
+              player.camera.initForStage(player.ball, player.ball.startRotY, this.stageRuntime);
+            }
             if (!this.goAnnouncerPlayed) {
               void this.audio?.playAnnouncerGo();
               this.goAnnouncerPlayed = true;
@@ -2698,17 +2755,18 @@ export class Game {
               continue;
             }
             stepBall(ball, this.stageRuntime, player.world);
+            if (ball.wormholeTransform) {
+              player.camera.applyWormholeTransform(ball.wormholeTransform);
+              ball.wormholeTransform = null;
+            }
             if (player.id === this.localPlayerId) {
-              if (ball.wormholeTransform) {
-                this.cameraController.applyWormholeTransform(ball.wormholeTransform);
-                ball.wormholeTransform = null;
-              }
               if (!ringoutActive && localPlayer.goalTimerFrames <= 0 && this.isBallFalloutForBall(ball)) {
                 this.beginFalloutSequence(isBonusStage);
               }
             } else if (player.ringoutTimerFrames <= 0 && this.isBallFalloutForBall(ball)) {
               player.ringoutTimerFrames = RINGOUT_TOTAL_FRAMES;
               player.ringoutSkipTimerFrames = 0;
+              player.camera.initFalloutReplay(ball);
             }
           }
           this.resolvePlayerCollisions();
@@ -2746,7 +2804,9 @@ export class Game {
               if (this.players.length <= 1) {
                 this.beginTimeoverSequence(isBonusStage);
               } else {
-                void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.TIMEOVER));
+                if (this.allowCourseAdvance) {
+                  void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.TIMEOVER));
+                }
               }
               break;
             }
@@ -2773,7 +2833,9 @@ export class Game {
             && localBall.state === BALL_STATES.PLAY
           ) {
             this.accumulator = 0;
-            this.beginBonusClearSequence();
+            if (this.allowCourseAdvance || this.players.length <= 1) {
+              this.beginBonusClearSequence();
+            }
             break;
           }
         }
@@ -2795,8 +2857,12 @@ export class Game {
             if (player.id === this.localPlayerId) {
               this.beginGoalSequence(goalHit);
             } else {
+              player.goalInfo = goalHit;
+              player.goalTimerFrames = GOAL_SEQUENCE_FRAMES;
+              player.goalSkipTimerFrames = GOAL_SKIP_TOTAL_FRAMES;
               startGoal(ball);
               this.breakGoalTapeForBall(ball, goalHit);
+              player.camera.setGoalMain();
             }
           }
         }
@@ -2821,21 +2887,30 @@ export class Game {
             }
           }
         }
-        if (this.players.length > 1 && this.allActivePlayersFinished()) {
+        if (this.allowCourseAdvance && this.players.length > 1 && this.allActivePlayersFinished()) {
           if (localPlayer.goalTimerFrames <= 0) {
             this.accumulator = 0;
             void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.GOAL, this.getAdvanceGoalType()));
             break;
           }
         }
-        const cameraPoses = this.ensureCameraPose();
-        if (cameraPoses) {
-          this.copyCameraPose(cameraPoses.curr, cameraPoses.prev);
-        }
         const cameraPaused = this.paused || timeoverActive;
-        this.cameraController.update(localBall, this.stageRuntime, cameraPaused, fastForwardIntro);
-        if (cameraPoses) {
-          this.captureCameraPose(cameraPoses.curr);
+        for (const player of this.players) {
+          if (player.isSpectator || player.pendingSpawn) {
+            continue;
+          }
+          if (player.id === this.localPlayerId) {
+            const cameraPoses = this.ensureCameraPose();
+            if (cameraPoses) {
+              this.copyCameraPose(cameraPoses.curr, cameraPoses.prev);
+            }
+            player.camera.update(player.ball, this.stageRuntime, cameraPaused, fastForwardIntro);
+            if (cameraPoses) {
+              this.captureCameraPose(cameraPoses.curr);
+            }
+          } else {
+            player.camera.update(player.ball, this.stageRuntime, cameraPaused, fastForwardIntro);
+          }
         }
         this.accumulator -= this.fixedStep;
         } finally {

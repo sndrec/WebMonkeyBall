@@ -753,6 +753,7 @@ function resetNetplayConnections() {
   netplayState = null;
   pendingSnapshot = null;
   netplayAccumulator = 0;
+  game.allowCourseAdvance = true;
   stopLobbyHeartbeat();
   lobbyRoom = null;
   updateLobbyUi();
@@ -1326,6 +1327,11 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
     updateLobbyUi();
   }
   if (msg.type === 'input') {
+    const player = game.players.find((entry) => entry.id === playerId);
+    if (player) {
+      player.pendingSpawn = false;
+      player.isSpectator = false;
+    }
     if (msg.lastAck !== undefined) {
       clientState.lastAckedHostFrame = Math.max(clientState.lastAckedHostFrame, msg.lastAck);
     }
@@ -1664,6 +1670,7 @@ function startHost(room: LobbyRoom) {
   game.setLocalPlayerId(room.hostId);
   game.maxPlayers = room.settings.maxPlayers;
   game.playerCollisionEnabled = room.settings.collisionEnabled;
+  game.allowCourseAdvance = true;
   hostRelay = new HostRelay((playerId, msg) => {
     handleClientMessage(playerId, msg);
   });
@@ -1737,6 +1744,7 @@ async function startClient(room: LobbyRoom) {
   game.setLocalPlayerId(playerId);
   game.maxPlayers = room.settings.maxPlayers;
   game.playerCollisionEnabled = room.settings.collisionEnabled;
+  game.allowCourseAdvance = false;
   game.addPlayer(room.hostId, { spectator: false });
   clientPeer = new ClientPeer((msg) => {
     handleHostMessage(msg);

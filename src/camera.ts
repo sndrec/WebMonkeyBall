@@ -29,7 +29,6 @@ const SMB2_PITCH_BASE = -0x900;
 const SMB2_PITCH_OFFSET = 0x200;
 const SMB2_PITCH_LIMIT = 0x3000;
 const SMB2_STANDSTILL_SPEED = 0.02;
-let smb2FrameCounter = 0;
 
 function applyMat4ToPoint(out, mtx) {
   vec3.set(wormholeVec, out.x, out.y, out.z);
@@ -83,6 +82,7 @@ export class GameplayCamera {
     this.smb2Standstill = 0;
     this.smb2PivotXRot = 0;
     this.smb2YawVel = 0;
+    this.smb2FrameCounter = 0;
   }
 
   reset() {
@@ -128,6 +128,89 @@ export class GameplayCamera {
     this.smb2Standstill = 0;
     this.smb2PivotXRot = 0;
     this.smb2YawVel = 0;
+  }
+
+  getState() {
+    return {
+      eye: { x: this.eye.x, y: this.eye.y, z: this.eye.z },
+      lookAt: { x: this.lookAt.x, y: this.lookAt.y, z: this.lookAt.z },
+      eyeVel: { x: this.eyeVel.x, y: this.eyeVel.y, z: this.eyeVel.z },
+      lookAtVel: { x: this.lookAtVel.x, y: this.lookAtVel.y, z: this.lookAtVel.z },
+      rotX: this.rotX,
+      rotY: this.rotY,
+      rotZ: this.rotZ,
+      flags: this.flags,
+      state: this.state,
+      timerCurr: this.timerCurr,
+      timerMax: this.timerMax,
+      unk54: { x: this.unk54.x, y: this.unk54.y, z: this.unk54.z },
+      unk60: this.unk60,
+      unk64: this.unk64,
+      unk68: this.unk68,
+      unk6C: this.unk6C,
+      unk70: this.unk70,
+      unk74: { x: this.unk74.x, y: this.unk74.y, z: this.unk74.z },
+      unk88: this.unk88,
+      unk8C: this.unk8C,
+      unk90: this.unk90,
+      unkAC: { x: this.unkAC.x, y: this.unkAC.y, z: this.unkAC.z },
+      unkB8: this.unkB8,
+      unk10C: this.unk10C,
+      readyMode: this.readyMode,
+      smb2Standstill: this.smb2Standstill,
+      smb2PivotXRot: this.smb2PivotXRot,
+      smb2YawVel: this.smb2YawVel,
+      smb2FrameCounter: this.smb2FrameCounter,
+    };
+  }
+
+  setState(state) {
+    if (!state) {
+      return;
+    }
+    this.eye.x = state.eye?.x ?? this.eye.x;
+    this.eye.y = state.eye?.y ?? this.eye.y;
+    this.eye.z = state.eye?.z ?? this.eye.z;
+    this.lookAt.x = state.lookAt?.x ?? this.lookAt.x;
+    this.lookAt.y = state.lookAt?.y ?? this.lookAt.y;
+    this.lookAt.z = state.lookAt?.z ?? this.lookAt.z;
+    this.eyeVel.x = state.eyeVel?.x ?? this.eyeVel.x;
+    this.eyeVel.y = state.eyeVel?.y ?? this.eyeVel.y;
+    this.eyeVel.z = state.eyeVel?.z ?? this.eyeVel.z;
+    this.lookAtVel.x = state.lookAtVel?.x ?? this.lookAtVel.x;
+    this.lookAtVel.y = state.lookAtVel?.y ?? this.lookAtVel.y;
+    this.lookAtVel.z = state.lookAtVel?.z ?? this.lookAtVel.z;
+    this.rotX = state.rotX ?? this.rotX;
+    this.rotY = state.rotY ?? this.rotY;
+    this.rotZ = state.rotZ ?? this.rotZ;
+    this.flags = state.flags ?? this.flags;
+    this.state = state.state ?? this.state;
+    this.timerCurr = state.timerCurr ?? this.timerCurr;
+    this.timerMax = state.timerMax ?? this.timerMax;
+    this.unk54.x = state.unk54?.x ?? this.unk54.x;
+    this.unk54.y = state.unk54?.y ?? this.unk54.y;
+    this.unk54.z = state.unk54?.z ?? this.unk54.z;
+    this.unk60 = state.unk60 ?? this.unk60;
+    this.unk64 = state.unk64 ?? this.unk64;
+    this.unk68 = state.unk68 ?? this.unk68;
+    this.unk6C = state.unk6C ?? this.unk6C;
+    this.unk70 = state.unk70 ?? this.unk70;
+    this.unk74.x = state.unk74?.x ?? this.unk74.x;
+    this.unk74.y = state.unk74?.y ?? this.unk74.y;
+    this.unk74.z = state.unk74?.z ?? this.unk74.z;
+    this.unk88 = state.unk88 ?? this.unk88;
+    this.unk8C = state.unk8C ?? this.unk8C;
+    this.unk90 = state.unk90 ?? this.unk90;
+    this.unkAC.x = state.unkAC?.x ?? this.unkAC.x;
+    this.unkAC.y = state.unkAC?.y ?? this.unkAC.y;
+    this.unkAC.z = state.unkAC?.z ?? this.unkAC.z;
+    this.unkB8 = state.unkB8 ?? this.unkB8;
+    this.unk10C = state.unk10C ?? this.unk10C;
+    this.readyMode = state.readyMode ?? this.readyMode;
+    this.smb2Standstill = state.smb2Standstill ?? this.smb2Standstill;
+    this.smb2PivotXRot = state.smb2PivotXRot ?? this.smb2PivotXRot;
+    this.smb2YawVel = state.smb2YawVel ?? this.smb2YawVel;
+    this.smb2FrameCounter = state.smb2FrameCounter ?? this.smb2FrameCounter;
   }
 
   applyWormholeTransform(wormholeTf) {
@@ -264,7 +347,7 @@ export class GameplayCamera {
     const override = SMB2_FLY_IN_OVERRIDES.get(stageId);
     const flyIn = override ?? stageRuntime?.boundSphere;
     const radius = Math.max(flyIn?.radius ?? 0, SMB2_FLY_IN_MIN_RADIUS);
-    let presetIndex = smb2FrameCounter & 3;
+    let presetIndex = this.smb2FrameCounter & 3;
     if (stageId === 0x11e && presetIndex === 2) {
       presetIndex = 0;
     }
@@ -695,7 +778,7 @@ export class GameplayCamera {
 
   update(ball, stageRuntime, paused, fastForwardIntro = false) {
     if (!paused) {
-      smb2FrameCounter = (smb2FrameCounter + 1) >>> 0;
+      this.smb2FrameCounter = (this.smb2FrameCounter + 1) >>> 0;
     }
     switch (this.state) {
       case CAMERA_STATE.FALLOUT_REPLAY:
