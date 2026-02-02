@@ -355,7 +355,21 @@ export class Game {
     tickMs: number;
     lastTickMs: number;
   };
+  public rollbackPerf: {
+    enabled: boolean;
+    logEvery: number;
+    saveMs: number;
+    saveCount: number;
+    lastSaveMs: number;
+    loadMs: number;
+    loadCount: number;
+    lastLoadMs: number;
+    advanceMs: number;
+    advanceCount: number;
+    lastAdvanceMs: number;
+  };
   public simTick: number;
+  public netplayRttMs: number | null;
   public inputFeed: (QuantizedStick | QuantizedInput)[] | null;
   public inputFeedIndex: number;
   public inputRecord: QuantizedStick[] | null;
@@ -462,7 +476,21 @@ export class Game {
       tickMs: 0,
       lastTickMs: 0,
     };
+    this.rollbackPerf = {
+      enabled: false,
+      logEvery: 120,
+      saveMs: 0,
+      saveCount: 0,
+      lastSaveMs: 0,
+      loadMs: 0,
+      loadCount: 0,
+      lastLoadMs: 0,
+      advanceMs: 0,
+      advanceCount: 0,
+      lastAdvanceMs: 0,
+    };
     this.simTick = 0;
+    this.netplayRttMs = null;
     this.inputFeed = null;
     this.inputFeedIndex = 0;
     this.inputRecord = null;
@@ -549,10 +577,44 @@ export class Game {
     if (this.rollbackSession) {
       return this.rollbackSession;
     }
+    const perf = this.rollbackPerf;
     this.rollbackSession = new RollbackSession({
-      saveState: () => this.saveRollbackState(),
-      loadState: (state) => this.loadRollbackState(state),
-      advanceFrame: (inputs) => this.advanceOneFrame(inputs),
+      saveState: () => {
+        if (!perf.enabled) {
+          return this.saveRollbackState();
+        }
+        const t0 = nowMs();
+        const state = this.saveRollbackState();
+        const dt = nowMs() - t0;
+        perf.lastSaveMs = dt;
+        perf.saveMs += dt;
+        perf.saveCount += 1;
+        return state;
+      },
+      loadState: (state) => {
+        if (!perf.enabled) {
+          this.loadRollbackState(state);
+          return;
+        }
+        const t0 = nowMs();
+        this.loadRollbackState(state);
+        const dt = nowMs() - t0;
+        perf.lastLoadMs = dt;
+        perf.loadMs += dt;
+        perf.loadCount += 1;
+      },
+      advanceFrame: (inputs) => {
+        if (!perf.enabled) {
+          this.advanceOneFrame(inputs);
+          return;
+        }
+        const t0 = nowMs();
+        this.advanceOneFrame(inputs);
+        const dt = nowMs() - t0;
+        perf.lastAdvanceMs = dt;
+        perf.advanceMs += dt;
+        perf.advanceCount += 1;
+      },
     }, 30);
     return this.rollbackSession;
   }
@@ -761,7 +823,7 @@ export class Game {
       })),
       noCollidePairs: Array.from(this.noCollidePairs),
       playerCollisionEnabled: this.playerCollisionEnabled,
-      stageRuntime: this.stageRuntime.getState(),
+      stageRuntime: this.stageRuntime.getState({ includeVisual: false }),
     };
   }
 
@@ -2939,6 +3001,27 @@ export class Game {
         );
         this.simPerf.tickCount = 0;
         this.simPerf.tickMs = 0;
+      }
+      if (this.rollbackPerf.enabled && this.rollbackPerf.saveCount >= this.rollbackPerf.logEvery) {
+        const avgSave = this.rollbackPerf.saveMs / Math.max(1, this.rollbackPerf.saveCount);
+        const avgLoad = this.rollbackPerf.loadMs / Math.max(1, this.rollbackPerf.loadCount);
+        const avgAdvance = this.rollbackPerf.advanceMs / Math.max(1, this.rollbackPerf.advanceCount);
+        console.log(
+          "[perf] rollback save avg=%sms last=%sms load avg=%sms last=%sms advance avg=%sms last=%sms over=%d",
+          avgSave.toFixed(3),
+          this.rollbackPerf.lastSaveMs.toFixed(3),
+          avgLoad.toFixed(3),
+          this.rollbackPerf.lastLoadMs.toFixed(3),
+          avgAdvance.toFixed(3),
+          this.rollbackPerf.lastAdvanceMs.toFixed(3),
+          this.rollbackPerf.saveCount,
+        );
+        this.rollbackPerf.saveMs = 0;
+        this.rollbackPerf.saveCount = 0;
+        this.rollbackPerf.loadMs = 0;
+        this.rollbackPerf.loadCount = 0;
+        this.rollbackPerf.advanceMs = 0;
+        this.rollbackPerf.advanceCount = 0;
       }
     }
 

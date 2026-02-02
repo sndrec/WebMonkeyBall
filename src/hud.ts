@@ -1140,6 +1140,9 @@ export class HudRenderer {
     drawTextAt(ctx, fonts.num12x19, `:${centis}`, centiLeft, centiTop, 1, null);
 
     const speedText = String(Math.round(speedMph)).padStart(2, '0');
+    const rttValue = Math.max(0, Math.min(999, Math.round(game?.netplayRttMs ?? 0)));
+    const rttText = `${String(rttValue).padStart(3, '0')}ms`;
+    drawText(ctx, fonts.asc20x20, rttText, { x: 32, y: 404 }, 1, null, 'left');
     drawText(ctx, fonts.asc20x20, speedText, { x: 32, y: 428 }, 1, null, 'left');
     const speedWidth = measureText(fonts.asc20x20, speedText, 1);
     const mphWidth = assets.mph.width * MPH_SCALE;

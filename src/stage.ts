@@ -1542,7 +1542,7 @@ export class StageRuntime {
     }
   }
 
-  getState() {
+  getState({ includeVisual = true } = {}) {
     return {
       timerFrames: this.timerFrames,
       animGroups: structuredClone(this.animGroups),
@@ -1552,8 +1552,8 @@ export class StageRuntime {
       goalBags: structuredClone(this.goalBags),
       goalTapes: structuredClone(this.goalTapes),
       bananas: structuredClone(this.bananas),
-      confetti: structuredClone(this.confetti),
-      effects: structuredClone(this.effects),
+      confetti: includeVisual ? structuredClone(this.confetti) : undefined,
+      effects: includeVisual ? structuredClone(this.effects) : undefined,
       switches: structuredClone(this.switches),
       switchPressCount: this.switchPressCount ?? 0,
       wormholes: structuredClone(this.wormholes),
@@ -1578,8 +1578,8 @@ export class StageRuntime {
     this.goalBags = structuredClone(state.goalBags ?? []);
     this.goalTapes = structuredClone(state.goalTapes ?? []);
     this.bananas = structuredClone(state.bananas ?? []);
-    this.confetti = structuredClone(state.confetti ?? []);
-    this.effects = structuredClone(state.effects ?? []);
+    this.confetti = state.confetti ? structuredClone(state.confetti) : this.confetti;
+    this.effects = state.effects ? structuredClone(state.effects) : this.effects;
     this.switches = structuredClone(state.switches ?? []);
     this.switchPressCount = state.switchPressCount ?? 0;
     this.wormholes = structuredClone(state.wormholes ?? []);

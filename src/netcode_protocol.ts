@@ -31,6 +31,27 @@ export type InputAckMessage = {
   frame: number;
 };
 
+export type PingMessage = {
+  type: 'ping';
+  id: number;
+};
+
+export type PongMessage = {
+  type: 'pong';
+  id: number;
+};
+
+export type StageReadyMessage = {
+  type: 'stage_ready';
+  stageId: number;
+};
+
+export type StageSyncMessage = {
+  type: 'stage_sync';
+  stageId: number;
+  frame: number;
+};
+
 export type FrameBundleMessage = {
   type: 'frame';
   frame: number;
@@ -81,6 +102,8 @@ export type StartMatchMessage = {
 export type HostToClientMessage =
   | InputFrameMessage
   | InputAckMessage
+  | PongMessage
+  | StageSyncMessage
   | FrameBundleMessage
   | SnapshotMessage
   | StartMatchMessage
@@ -91,6 +114,8 @@ export type HostToClientMessage =
 export type ClientToHostMessage =
   | InputFrameMessage
   | InputAckMessage
+  | PingMessage
+  | StageReadyMessage
   | SnapshotRequestMessage
   | PlayerJoinMessage
   | PlayerLeaveMessage;
