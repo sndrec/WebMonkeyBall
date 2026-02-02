@@ -646,6 +646,8 @@ type NetplayState = {
   hashInterval: number;
   hashHistory: Map<number, number>;
   expectedHashes: Map<number, number>;
+  lastAuthHashFrameSent: number;
+  pendingHostUpdates: Set<number>;
   currentCourse: any | null;
   currentGameSource: GameSource | null;
   awaitingSnapshot: boolean;
@@ -684,6 +686,8 @@ function ensureNetplayState(role: NetplayRole) {
     hashInterval: 15,
     hashHistory: new Map(),
     expectedHashes: new Map(),
+    lastAuthHashFrameSent: -1,
+    pendingHostUpdates: new Set(),
     currentCourse: null,
     currentGameSource: null,
     awaitingSnapshot: false,
@@ -709,6 +713,8 @@ function resetNetplayForStage() {
   netplayState.pendingLocalInputs.clear();
   netplayState.hashHistory.clear();
   netplayState.expectedHashes.clear();
+  netplayState.lastAuthHashFrameSent = -1;
+  netplayState.pendingHostUpdates.clear();
   netplayState.lastAckedLocalFrame = -1;
   netplayState.lastReceivedHostFrame = game.simTick;
   netplayState.hostFrameBuffer.clear();
@@ -727,6 +733,39 @@ function getSimHash() {
   const balls = players.map((player) => player.ball);
   const worlds = [game.world, ...players.map((player) => player.world)];
   return hashSimState(balls, worlds, game.stageRuntime);
+}
+
+function getAuthoritativeFrame(state: NetplayState) {
+  let authFrame = state.session.getFrame();
+  for (const player of game.players) {
+    if (player.isSpectator || player.pendingSpawn || player.id === game.localPlayerId) {
+      continue;
+    }
+    const clientState = state.clientStates.get(player.id);
+    if (!clientState) {
+      return -1;
+    }
+    authFrame = Math.min(authFrame, clientState.lastAckedClientInput);
+  }
+  return authFrame;
+}
+
+function getAuthoritativeHashFrame(state: NetplayState) {
+  if (state.hashInterval <= 0) {
+    return null;
+  }
+  const authFrame = getAuthoritativeFrame(state);
+  if (authFrame < 0) {
+    return null;
+  }
+  const hashFrame = authFrame - (authFrame % state.hashInterval);
+  if (hashFrame < 0 || hashFrame <= state.lastAuthHashFrameSent) {
+    return null;
+  }
+  if (!state.hashHistory.has(hashFrame)) {
+    return null;
+  }
+  return hashFrame;
 }
 
 function updateLobbyUi() {
@@ -844,7 +883,8 @@ function rollbackAndResim(startFrame: number) {
   if (!netplayState) {
     return false;
   }
-  const session = netplayState.session;
+  const state = netplayState;
+  const session = state.session;
   const current = session.getFrame();
   const rollbackFrame = Math.max(0, startFrame - 1);
   if (!session.rollbackTo(rollbackFrame)) {
@@ -853,12 +893,44 @@ function rollbackAndResim(startFrame: number) {
   for (let frame = rollbackFrame + 1; frame <= current; frame += 1) {
     const inputs = buildInputsForFrame(frame);
     session.advanceTo(frame, inputs);
-    if (netplayState.hashInterval > 0 && frame % netplayState.hashInterval === 0) {
-      netplayState.hashHistory.set(frame, getSimHash());
+    let hash: number | undefined;
+    if (state.hashInterval > 0 && frame % state.hashInterval === 0) {
+      hash = getSimHash();
+      state.hashHistory.set(frame, hash);
+    }
+    if (state.role === 'host') {
+      const bundleInputs: Record<number, QuantizedInput> = {};
+      for (const [playerId, input] of inputs.entries()) {
+        bundleInputs[playerId] = input;
+      }
+      state.hostFrameBuffer.set(frame, {
+        type: 'frame',
+        frame,
+        inputs: bundleInputs,
+      });
     }
     trimNetplayHistory(frame);
   }
   return true;
+}
+
+function resimFromSnapshot(snapshotFrame: number, targetFrame: number) {
+  if (!netplayState) {
+    return;
+  }
+  if (targetFrame <= snapshotFrame) {
+    return;
+  }
+  const state = netplayState;
+  const session = state.session;
+  for (let frame = snapshotFrame + 1; frame <= targetFrame; frame += 1) {
+    const inputs = buildInputsForFrame(frame);
+    session.advanceTo(frame, inputs);
+    if (state.hashInterval > 0 && frame % state.hashInterval === 0) {
+      state.hashHistory.set(frame, getSimHash());
+    }
+    trimNetplayHistory(frame);
+  }
 }
 
 function tryApplyPendingSnapshot(stageId: number) {
@@ -868,12 +940,22 @@ function tryApplyPendingSnapshot(stageId: number) {
   if (pendingSnapshot.stageId !== undefined && pendingSnapshot.stageId !== stageId) {
     return;
   }
+  const state = netplayState;
+  const targetFrame = state?.session.getFrame() ?? game.simTick;
+  const snapshotFrame = pendingSnapshot.frame;
   game.loadRollbackState(pendingSnapshot.state);
   resetNetplaySession();
-  if (netplayState) {
-    netplayState.lastReceivedHostFrame = pendingSnapshot.frame;
-    netplayState.awaitingSnapshot = false;
+  if (state) {
+    state.lastReceivedHostFrame = Math.max(state.lastReceivedHostFrame, snapshotFrame);
+    state.awaitingSnapshot = false;
+    state.hashHistory.clear();
+    for (const key of Array.from(state.expectedHashes.keys())) {
+      if (key <= snapshotFrame) {
+        state.expectedHashes.delete(key);
+      }
+    }
   }
+  resimFromSnapshot(snapshotFrame, targetFrame);
   pendingSnapshot = null;
 }
 
@@ -1191,14 +1273,15 @@ async function startStage(
   }
 }
 
-function requestSnapshot(reason: 'mismatch' | 'lag') {
+function requestSnapshot(reason: 'mismatch' | 'lag', frame?: number) {
   if (!clientPeer || !netplayState || netplayState.awaitingSnapshot) {
     return;
   }
   netplayState.awaitingSnapshot = true;
+  const targetFrame = frame ?? netplayState.session.getFrame();
   clientPeer.send({
     type: 'snapshot_request',
-    frame: netplayState.session.getFrame(),
+    frame: targetFrame,
     reason,
   });
 }
@@ -1260,11 +1343,12 @@ function handleHostMessage(msg: HostToClientMessage) {
         changed = true;
       }
     }
-    if (frameMsg.hash !== undefined) {
-      state.expectedHashes.set(frameMsg.frame, frameMsg.hash);
-      const localHash = state.hashHistory.get(frameMsg.frame);
+    if (frameMsg.hash !== undefined && frameMsg.hashFrame !== undefined) {
+      const hashFrame = frameMsg.hashFrame;
+      state.expectedHashes.set(hashFrame, frameMsg.hash);
+      const localHash = state.hashHistory.get(hashFrame);
       if (localHash !== undefined && localHash !== frameMsg.hash) {
-        requestSnapshot('mismatch');
+        requestSnapshot('mismatch', hashFrame);
       }
     }
     const currentFrame = state.session.getFrame();
@@ -1281,13 +1365,7 @@ function handleHostMessage(msg: HostToClientMessage) {
   if (msg.type === 'snapshot') {
     pendingSnapshot = msg;
     if (netplayState) {
-      netplayState.inputHistory.clear();
-      netplayState.lastInputs.clear();
-      netplayState.pendingLocalInputs.clear();
-      netplayState.hashHistory.clear();
-      netplayState.expectedHashes.clear();
-      netplayState.lastAckedLocalFrame = msg.frame;
-      netplayState.lastReceivedHostFrame = msg.frame;
+      netplayState.lastReceivedHostFrame = Math.max(netplayState.lastReceivedHostFrame, msg.frame);
     }
     if (!msg.stageId || game.stage?.stageId === msg.stageId) {
       tryApplyPendingSnapshot(game.stage?.stageId ?? 0);
@@ -1356,7 +1434,9 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
     const currentFrame = state.session.getFrame();
     if (changed && msg.frame <= currentFrame) {
       if (!rollbackAndResim(msg.frame)) {
-        sendSnapshotToClient(playerId);
+        sendSnapshotToClient(playerId, msg.frame);
+      } else {
+        state.pendingHostUpdates.add(msg.frame);
       }
     }
     return;
@@ -1366,22 +1446,31 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
     return;
   }
   if (msg.type === 'snapshot_request') {
-    sendSnapshotToClient(playerId);
+    sendSnapshotToClient(playerId, msg.frame);
   }
 }
 
-function sendSnapshotToClient(playerId: number) {
+function sendSnapshotToClient(playerId: number, frame?: number) {
   if (!hostRelay || !netplayState) {
     return;
   }
-  const state = game.saveRollbackState();
-  if (!state) {
+  const session = netplayState.session;
+  let snapshotFrame = frame ?? session.getFrame();
+  if (snapshotFrame > session.getFrame()) {
+    snapshotFrame = session.getFrame();
+  }
+  let snapshotState = session.getState(snapshotFrame);
+  if (!snapshotState) {
+    snapshotFrame = session.getFrame();
+    snapshotState = game.saveRollbackState();
+  }
+  if (!snapshotState) {
     return;
   }
   hostRelay.sendTo(playerId, {
     type: 'snapshot',
-    frame: netplayState.session.getFrame(),
-    state,
+    frame: snapshotFrame,
+    state: snapshotState,
     stageId: game.stage?.stageId,
     gameSource: game.gameSource,
   });
@@ -1391,8 +1480,23 @@ function hostResendFrames(currentFrame: number) {
   if (!hostRelay || !netplayState) {
     return;
   }
+  const pendingFrames = netplayState.pendingHostUpdates.size > 0
+    ? Array.from(netplayState.pendingHostUpdates).sort((a, b) => a - b)
+    : null;
   for (const [playerId, clientState] of netplayState.clientStates.entries()) {
     const start = Math.max(clientState.lastAckedHostFrame + 1, currentFrame - netplayState.maxResend + 1);
+    if (pendingFrames) {
+      for (const frame of pendingFrames) {
+        const bundle = netplayState.hostFrameBuffer.get(frame);
+        if (!bundle) {
+          continue;
+        }
+        hostRelay.sendTo(playerId, {
+          ...bundle,
+          lastAck: clientState.lastAckedClientInput,
+        });
+      }
+    }
     for (let frame = start; frame <= currentFrame; frame += 1) {
       const bundle = netplayState.hostFrameBuffer.get(frame);
       if (!bundle) {
@@ -1403,6 +1507,9 @@ function hostResendFrames(currentFrame: number) {
         lastAck: clientState.lastAckedClientInput,
       });
     }
+  }
+  if (pendingFrames) {
+    netplayState.pendingHostUpdates.clear();
   }
 }
 
@@ -1465,20 +1572,35 @@ function netplayStep() {
       state.hashHistory.set(frame, hash);
       const expected = state.expectedHashes.get(frame);
       if (expected !== undefined && expected !== hash) {
-        requestSnapshot('mismatch');
+        requestSnapshot('mismatch', frame);
       }
     }
   if (state.role === 'host') {
+    let hashFrame: number | null = null;
+    let authHash: number | undefined;
+    const authHashFrame = getAuthoritativeHashFrame(state);
+    if (authHashFrame !== null) {
+      const value = state.hashHistory.get(authHashFrame);
+      if (value !== undefined) {
+        hashFrame = authHashFrame;
+        authHash = value;
+        state.lastAuthHashFrameSent = authHashFrame;
+      }
+    }
     const bundleInputs: Record<number, QuantizedInput> = {};
     for (const [playerId, input] of inputs.entries()) {
       bundleInputs[playerId] = input;
     }
-    state.hostFrameBuffer.set(frame, {
+    const bundle: FrameBundleMessage = {
       type: 'frame',
       frame,
       inputs: bundleInputs,
-      hash,
-    });
+    };
+    if (hashFrame !== null && authHash !== undefined) {
+      bundle.hashFrame = hashFrame;
+      bundle.hash = authHash;
+    }
+    state.hostFrameBuffer.set(frame, bundle);
     const minFrame = frame - Math.max(state.maxRollback, state.maxResend);
     for (const key of Array.from(state.hostFrameBuffer.keys())) {
       if (key < minFrame) {

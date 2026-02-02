@@ -54,6 +54,10 @@ export class RollbackSession<T> {
     return true;
   }
 
+  getState(frame: number) {
+    return this.stateHistory.get(frame) ?? null;
+  }
+
   getInputs(frame: number) {
     return this.inputHistory.get(frame) ?? null;
   }

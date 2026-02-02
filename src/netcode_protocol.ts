@@ -36,6 +36,7 @@ export type FrameBundleMessage = {
   frame: number;
   inputs: Record<number, QuantizedInput>;
   lastAck?: number;
+  hashFrame?: number;
   hash?: number;
 };
 
