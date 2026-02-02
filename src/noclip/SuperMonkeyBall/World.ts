@@ -634,7 +634,8 @@ class BallInst {
         rp.sort = RenderSort.Translucent;
         rp.lighting = state.lighting;
         mat4.fromRotationTranslationScale(this.modelFromBall, this.rotation, this.pos, this.scale);
-        mat4.mul(rp.viewFromModel, ctx.viewerInput.camera.viewMatrix, this.modelFromBall);
+        const viewFromWorld = ctx.viewFromWorld ?? ctx.viewerInput.camera.viewMatrix;
+        mat4.mul(rp.viewFromModel, viewFromWorld, this.modelFromBall);
 
         for (let i = 0; i < this.models.length; i++) {
             rp.depthOffset = this.modelDepthOffsets[i] ?? 0;
@@ -1393,8 +1394,9 @@ export class World {
             this.fgObjects[i].prepareToRenderWithViewMatrix(this.worldState, stageCtx, viewFromWorldTilted);
         }
         this.background.prepareToRender(this.worldState, bgCtx);
+        const ballCtx = ctx.skipStageTilt ? stageCtx : { ...stageCtx, viewFromWorld: viewFromWorldTilted };
         for (let i = 0; i < this.balls.length; i++) {
-            this.balls[i].prepareToRender(this.worldState, stageCtx);
+            this.balls[i].prepareToRender(this.worldState, ballCtx);
         }
     }
 

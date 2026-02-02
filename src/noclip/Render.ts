@@ -36,6 +36,7 @@ export type RenderContext = {
   };
   opaqueInstList: GfxRenderInstList;
   translucentInstList: GfxRenderInstList;
+  viewFromWorld?: mat4;
 };
 
 export type BallRenderState = {

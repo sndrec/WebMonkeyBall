@@ -372,6 +372,7 @@ export class Game {
   };
   public simTick: number;
   public netplayRttMs: number | null;
+  public suppressVisualEffects: boolean;
   public inputFeed: (QuantizedStick | QuantizedInput)[] | null;
   public inputFeedIndex: number;
   public inputRecord: QuantizedStick[] | null;
@@ -495,6 +496,7 @@ export class Game {
     };
     this.simTick = 0;
     this.netplayRttMs = null;
+    this.suppressVisualEffects = false;
     this.inputFeed = null;
     this.inputFeedIndex = 0;
     this.inputRecord = null;
@@ -609,11 +611,23 @@ export class Game {
       },
       advanceFrame: (inputs) => {
         if (!perf.enabled) {
-          this.advanceOneFrame(inputs);
+          const prev = this.suppressVisualEffects;
+          this.suppressVisualEffects = true;
+          try {
+            this.advanceOneFrame(inputs);
+          } finally {
+            this.suppressVisualEffects = prev;
+          }
           return;
         }
         const t0 = nowMs();
-        this.advanceOneFrame(inputs);
+        const prev = this.suppressVisualEffects;
+        this.suppressVisualEffects = true;
+        try {
+          this.advanceOneFrame(inputs);
+        } finally {
+          this.suppressVisualEffects = prev;
+        }
         const dt = nowMs() - t0;
         perf.lastAdvanceMs = dt;
         perf.advanceMs += dt;
@@ -2746,6 +2760,7 @@ export class Game {
           smb2LoadInFrames,
           stageBall,
           stageCamera,
+          !this.suppressVisualEffects,
         );
         if (localPlayer.goalTimerFrames > 0) {
           localPlayer.goalTimerFrames -= 1;
@@ -2821,7 +2836,7 @@ export class Game {
             if (ball.state !== BALL_STATES.PLAY && ball.state !== BALL_STATES.GOAL_MAIN) {
               continue;
             }
-            stepBall(ball, this.stageRuntime, player.world);
+            stepBall(ball, this.stageRuntime, player.world, !this.suppressVisualEffects);
             if (ball.wormholeTransform) {
               player.camera.applyWormholeTransform(ball.wormholeTransform);
               ball.wormholeTransform = null;

@@ -1524,7 +1524,16 @@ export class StageRuntime {
     }
   }
 
-  advance(frameDelta, paused, world, animTimerOverride = null, smb2LoadInFrames = null, ball = null, camera = null) {
+  advance(
+    frameDelta,
+    paused,
+    world,
+    animTimerOverride = null,
+    smb2LoadInFrames = null,
+    ball = null,
+    camera = null,
+    includeVisuals = true,
+  ) {
     if (paused) {
       return;
     }
@@ -1538,7 +1547,7 @@ export class StageRuntime {
     }
     this.updateAnimGroups(this.timerFrames / 60, frameDelta, smb2LoadInFrames);
     if (world) {
-      this.updateObjects(world, ball, camera);
+      this.updateObjects(world, ball, camera, includeVisuals);
     }
   }
 
@@ -1945,7 +1954,7 @@ export class StageRuntime {
     }
   }
 
-  updateObjects(world, ball = null, camera = null) {
+  updateObjects(world, ball = null, camera = null, includeVisuals = true) {
     const animGroups = this.animGroups;
     const gravity = world.gravity ?? { x: 0, y: -1, z: 0 };
     const stack = this.matrixStack;
@@ -1986,8 +1995,10 @@ export class StageRuntime {
     for (const bag of this.goalBags) {
       updateGoalBag(bag, animGroups, gravity, this.goalHoldOpen, stack, this.simRng);
     }
-    updateConfetti(this, gravity);
-    updateBallEffects(this.effects, gravity, this, this.visualRng);
+    if (includeVisuals) {
+      updateConfetti(this, gravity);
+      updateBallEffects(this.effects, gravity, this, this.visualRng);
+    }
     for (let i = 0; i < animGroups.length; i += 1) {
       const bumperStates = this.bumpers[i];
       for (const bumper of bumperStates) {

@@ -730,7 +730,7 @@ function handleBallRotationalKinematics(ball, physBall, animGroups, stageRuntime
   }
 }
 
-export function stepBall(ball, stageRuntime, world) {
+export function stepBall(ball, stageRuntime, world, allowEffects = true) {
   const stage = stageRuntime.stage;
   const animGroups = stageRuntime.animGroups;
   if (ball.state === BALL_STATES.GOAL_MAIN) {
@@ -823,7 +823,7 @@ export function stepBall(ball, stageRuntime, world) {
     }
   }
 
-  if (stageRuntime.effects) {
+  if (allowEffects && stageRuntime.effects) {
     const onGround = (physBall.flags & COLI_FLAGS.OCCURRED) !== 0 && physBall.hardestColiPlane.normal.y > 0;
     const rng = stageRuntime.visualRng;
     spawnMovementSparks(stageRuntime.effects, ball, onGround, rng);
