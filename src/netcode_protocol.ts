@@ -19,6 +19,7 @@ export type RoomInfo = {
 
 export type InputFrameMessage = {
   type: 'input';
+  stageSeq: number;
   frame: number;
   playerId: PlayerId;
   input: QuantizedInput;
@@ -27,6 +28,7 @@ export type InputFrameMessage = {
 
 export type InputAckMessage = {
   type: 'ack';
+  stageSeq: number;
   playerId: PlayerId;
   frame: number;
 };
@@ -43,17 +45,20 @@ export type PongMessage = {
 
 export type StageReadyMessage = {
   type: 'stage_ready';
+  stageSeq: number;
   stageId: number;
 };
 
 export type StageSyncMessage = {
   type: 'stage_sync';
+  stageSeq: number;
   stageId: number;
   frame: number;
 };
 
 export type FrameBundleMessage = {
   type: 'frame';
+  stageSeq: number;
   frame: number;
   inputs: Record<number, QuantizedInput>;
   lastAck?: number;
@@ -63,6 +68,7 @@ export type FrameBundleMessage = {
 
 export type SnapshotMessage = {
   type: 'snapshot';
+  stageSeq: number;
   frame: number;
   state: any;
   stageId?: number;
@@ -71,6 +77,7 @@ export type SnapshotMessage = {
 
 export type SnapshotRequestMessage = {
   type: 'snapshot_request';
+  stageSeq: number;
   frame: number;
   reason: 'mismatch' | 'lag';
 };
@@ -94,6 +101,7 @@ export type RoomUpdateMessage = {
 
 export type StartMatchMessage = {
   type: 'start';
+  stageSeq: number;
   gameSource: GameSource;
   course: any;
   stageBasePath?: string;

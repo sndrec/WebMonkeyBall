@@ -544,8 +544,10 @@ const game = new Game({
       if (config) {
         netplayState.currentCourse = config;
         netplayState.currentGameSource = activeGameSource;
+        netplayState.stageSeq += 1;
         hostRelay.broadcast({
           type: 'start',
+          stageSeq: netplayState.stageSeq,
           gameSource: activeGameSource,
           course: config,
           stageBasePath: getStageBasePath(activeGameSource),
@@ -627,7 +629,13 @@ let lobbySignal: { send: (msg: any) => void; close: () => void } | null = null;
 let hostRelay: HostRelay | null = null;
 let clientPeer: ClientPeer | null = null;
 let netplayEnabled = false;
-let pendingSnapshot: { frame: number; state: any; stageId?: number; gameSource?: GameSource } | null = null;
+let pendingSnapshot: {
+  frame: number;
+  state: any;
+  stageId?: number;
+  gameSource?: GameSource;
+  stageSeq?: number;
+} | null = null;
 let lobbyHeartbeatTimer: number | null = null;
 let netplayAccumulator = 0;
 const NETPLAY_MAX_FRAME_DELTA = 5;
@@ -762,8 +770,7 @@ type NetplayState = {
   readyPlayers: Set<number>;
   awaitingStageReady: boolean;
   awaitingStageSync: boolean;
-  introEndFrame: number | null;
-  introSyncPending: boolean;
+  stageSeq: number;
   currentCourse: any | null;
   currentGameSource: GameSource | null;
   awaitingSnapshot: boolean;
@@ -816,6 +823,7 @@ function ensureNetplayState(role: NetplayRole) {
     readyPlayers: new Set(),
     awaitingStageReady: false,
     awaitingStageSync: false,
+    stageSeq: 0,
     currentCourse: null,
     currentGameSource: null,
     awaitingSnapshot: false,
@@ -850,6 +858,7 @@ function resetNetplayForStage() {
   netplayState.lastAckedLocalFrame = -1;
   netplayState.lastReceivedHostFrame = game.simTick;
   netplayState.hostFrameBuffer.clear();
+  pendingSnapshot = null;
   netplayState.readyPlayers.clear();
   netplayState.awaitingStageReady = false;
   netplayState.awaitingStageSync = false;
@@ -883,6 +892,7 @@ function maybeSendStageSync() {
   netplayAccumulator = 0;
   hostRelay.broadcast({
     type: 'stage_sync',
+    stageSeq: state.stageSeq,
     stageId: state.currentStageId ?? game.stage?.stageId ?? 0,
     frame: state.session.getFrame(),
   });
@@ -919,7 +929,7 @@ function markStageReady(stageId: number) {
     return;
   }
   if (clientPeer) {
-    clientPeer.send({ type: 'stage_ready', stageId });
+    clientPeer.send({ type: 'stage_ready', stageSeq: state.stageSeq, stageId });
   }
 }
 
@@ -1141,6 +1151,7 @@ function rollbackAndResim(startFrame: number) {
       }
       state.hostFrameBuffer.set(frame, {
         type: 'frame',
+        stageSeq: state.stageSeq,
         frame,
         inputs: bundleInputs,
       });
@@ -1185,6 +1196,10 @@ function resimFromSnapshot(snapshotFrame: number, targetFrame: number) {
 
 function tryApplyPendingSnapshot(stageId: number) {
   if (!pendingSnapshot) {
+    return;
+  }
+  if (netplayState && pendingSnapshot.stageSeq !== undefined && pendingSnapshot.stageSeq !== netplayState.stageSeq) {
+    pendingSnapshot = null;
     return;
   }
   if (pendingSnapshot.stageId !== undefined && pendingSnapshot.stageId !== stageId) {
@@ -1538,6 +1553,7 @@ function requestSnapshot(reason: 'mismatch' | 'lag', frame?: number, force = fal
   const targetFrame = frame ?? netplayState.session.getFrame();
   clientPeer.send({
     type: 'snapshot_request',
+    stageSeq: netplayState.stageSeq,
     frame: targetFrame,
     reason,
   });
@@ -1590,6 +1606,10 @@ function handleHostMessage(msg: HostToClientMessage) {
       state.rttMs = rtt;
       game.netplayRttMs = rtt;
     }
+    return;
+  }
+  const msgStageSeq = (msg as { stageSeq?: number }).stageSeq;
+  if (msgStageSeq !== undefined && msg.type !== 'start' && msgStageSeq !== state.stageSeq) {
     return;
   }
   if (msg.type === 'stage_sync') {
@@ -1684,14 +1704,19 @@ function handleHostMessage(msg: HostToClientMessage) {
     return;
   }
   if (msg.type === 'start') {
+    if (netplayState) {
+      netplayState.stageSeq = msg.stageSeq;
+      netplayState.currentCourse = msg.course;
+      netplayState.currentGameSource = msg.gameSource;
+      netplayState.awaitingSnapshot = false;
+      netplayState.expectedHashes.clear();
+      netplayState.hashHistory.clear();
+    }
+    pendingSnapshot = null;
     activeGameSource = msg.gameSource;
     game.setGameSource(activeGameSource);
     game.stageBasePath = msg.stageBasePath ?? getStageBasePath(activeGameSource);
     currentSmb2LikeMode = activeGameSource !== GAME_SOURCES.SMB1 && msg.course?.mode ? msg.course.mode : null;
-    if (netplayState) {
-      netplayState.currentCourse = msg.course;
-      netplayState.currentGameSource = msg.gameSource;
-    }
     void startStage(msg.course);
   }
 }
@@ -1699,6 +1724,10 @@ function handleHostMessage(msg: HostToClientMessage) {
 function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
   const state = netplayState;
   if (!state) {
+    return;
+  }
+  const msgStageSeq = (msg as { stageSeq?: number }).stageSeq;
+  if (msgStageSeq !== undefined && msgStageSeq !== state.stageSeq) {
     return;
   }
   let clientState = state.clientStates.get(playerId);
@@ -1774,6 +1803,7 @@ function sendSnapshotToClient(playerId: number, frame?: number) {
   }
   hostRelay.sendTo(playerId, {
     type: 'snapshot',
+    stageSeq: netplayState.stageSeq,
     frame: snapshotFrame,
     state: snapshotState,
     stageId: game.stage?.stageId,
@@ -1832,6 +1862,7 @@ function clientSendInputBuffer(currentFrame: number) {
     }
     clientPeer.send({
       type: 'input',
+      stageSeq: netplayState.stageSeq,
       frame,
       playerId: game.localPlayerId,
       input,
@@ -1841,6 +1872,7 @@ function clientSendInputBuffer(currentFrame: number) {
   if (start > end) {
     clientPeer.send({
       type: 'ack',
+      stageSeq: netplayState.stageSeq,
       playerId: game.localPlayerId,
       frame: netplayState.lastReceivedHostFrame,
     });
@@ -1902,6 +1934,7 @@ function netplayStep() {
     }
     const bundle: FrameBundleMessage = {
       type: 'frame',
+      stageSeq: state.stageSeq,
       frame,
       inputs: bundleInputs,
     };
@@ -2198,6 +2231,7 @@ function startHost(room: LobbyRoom) {
     if (state.currentCourse && state.currentGameSource) {
       hostRelay?.sendTo(playerId, {
         type: 'start',
+        stageSeq: state.stageSeq,
         gameSource: state.currentGameSource,
         course: state.currentCourse,
         stageBasePath: getStageBasePath(state.currentGameSource),
@@ -2940,12 +2974,6 @@ startButton.addEventListener('click', () => {
   if (netplayEnabled && netplayState?.role === 'host') {
     netplayState.currentCourse = difficulty;
     netplayState.currentGameSource = activeGameSource;
-    hostRelay?.broadcast({
-      type: 'start',
-      gameSource: activeGameSource,
-      course: difficulty,
-      stageBasePath: getStageBasePath(activeGameSource),
-    });
   }
   startStage(difficulty).catch((error) => {
     if (hudStatus) {
