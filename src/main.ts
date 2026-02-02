@@ -539,6 +539,9 @@ const game = new Game({
   },
   onStageLoaded: (stageId) => {
     void handleStageLoaded(stageId);
+    if (netplayEnabled && netplayState) {
+      resetNetplayForStage();
+    }
     if (netplayEnabled && netplayState?.role === 'host' && hostRelay) {
       const config = getHostCourseConfig();
       if (config) {
@@ -697,12 +700,32 @@ function resetNetplaySession() {
   }
 }
 
+function resetNetplayForStage() {
+  if (!netplayState) {
+    return;
+  }
+  netplayState.inputHistory.clear();
+  netplayState.lastInputs.clear();
+  netplayState.pendingLocalInputs.clear();
+  netplayState.hashHistory.clear();
+  netplayState.expectedHashes.clear();
+  netplayState.lastAckedLocalFrame = -1;
+  netplayState.lastReceivedHostFrame = game.simTick;
+  netplayState.hostFrameBuffer.clear();
+  for (const clientState of netplayState.clientStates.values()) {
+    clientState.lastAckedHostFrame = -1;
+    clientState.lastAckedClientInput = -1;
+  }
+  resetNetplaySession();
+}
+
 function getSimHash() {
   if (!game.stageRuntime || !game.world) {
     return 0;
   }
-  const balls = game.players.map((player) => player.ball);
-  const worlds = [game.world, ...game.players.map((player) => player.world)];
+  const players = [...game.players].sort((a, b) => a.id - b.id);
+  const balls = players.map((player) => player.ball);
+  const worlds = [game.world, ...players.map((player) => player.world)];
   return hashSimState(balls, worlds, game.stageRuntime);
 }
 
@@ -1164,14 +1187,7 @@ async function startStage(
   void audio.resume();
   await game.start(difficulty);
   if (netplayEnabled && netplayState) {
-    netplayState.inputHistory.clear();
-    netplayState.lastInputs.clear();
-    netplayState.pendingLocalInputs.clear();
-    netplayState.hashHistory.clear();
-    netplayState.expectedHashes.clear();
-    netplayState.lastAckedLocalFrame = -1;
-    netplayState.lastReceivedHostFrame = game.simTick;
-    resetNetplaySession();
+    resetNetplayForStage();
   }
 }
 
