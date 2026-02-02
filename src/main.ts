@@ -1136,27 +1136,33 @@ function rollbackAndResim(startFrame: number) {
     return false;
   }
   const resimFrames = current - rollbackFrame;
-  for (let frame = rollbackFrame + 1; frame <= current; frame += 1) {
-    const inputs = buildInputsForFrame(frame);
-    session.advanceTo(frame, inputs);
-    let hash: number | undefined;
-    if (state.hashInterval > 0 && frame % state.hashInterval === 0) {
-      hash = getSimHash();
-      state.hashHistory.set(frame, hash);
-    }
-    if (state.role === 'host') {
-      const bundleInputs: Record<number, QuantizedInput> = {};
-      for (const [playerId, input] of inputs.entries()) {
-        bundleInputs[playerId] = input;
+  const prevSuppress = session.suppressVisuals;
+  session.suppressVisuals = true;
+  try {
+    for (let frame = rollbackFrame + 1; frame <= current; frame += 1) {
+      const inputs = buildInputsForFrame(frame);
+      session.advanceTo(frame, inputs);
+      let hash: number | undefined;
+      if (state.hashInterval > 0 && frame % state.hashInterval === 0) {
+        hash = getSimHash();
+        state.hashHistory.set(frame, hash);
       }
-      state.hostFrameBuffer.set(frame, {
-        type: 'frame',
-        stageSeq: state.stageSeq,
-        frame,
-        inputs: bundleInputs,
-      });
+      if (state.role === 'host') {
+        const bundleInputs: Record<number, QuantizedInput> = {};
+        for (const [playerId, input] of inputs.entries()) {
+          bundleInputs[playerId] = input;
+        }
+        state.hostFrameBuffer.set(frame, {
+          type: 'frame',
+          stageSeq: state.stageSeq,
+          frame,
+          inputs: bundleInputs,
+        });
+      }
+      trimNetplayHistory(frame);
     }
-    trimNetplayHistory(frame);
+  } finally {
+    session.suppressVisuals = prevSuppress;
   }
   if (netplayPerf.enabled) {
     const dt = performance.now() - perfStart;
@@ -1178,13 +1184,19 @@ function resimFromSnapshot(snapshotFrame: number, targetFrame: number) {
   const state = netplayState;
   const session = state.session;
   const resimFrames = targetFrame - snapshotFrame;
-  for (let frame = snapshotFrame + 1; frame <= targetFrame; frame += 1) {
-    const inputs = buildInputsForFrame(frame);
-    session.advanceTo(frame, inputs);
-    if (state.hashInterval > 0 && frame % state.hashInterval === 0) {
-      state.hashHistory.set(frame, getSimHash());
+  const prevSuppress = session.suppressVisuals;
+  session.suppressVisuals = true;
+  try {
+    for (let frame = snapshotFrame + 1; frame <= targetFrame; frame += 1) {
+      const inputs = buildInputsForFrame(frame);
+      session.advanceTo(frame, inputs);
+      if (state.hashInterval > 0 && frame % state.hashInterval === 0) {
+        state.hashHistory.set(frame, getSimHash());
+      }
+      trimNetplayHistory(frame);
     }
-    trimNetplayHistory(frame);
+  } finally {
+    session.suppressVisuals = prevSuppress;
   }
   if (netplayPerf.enabled) {
     const dt = performance.now() - perfStart;

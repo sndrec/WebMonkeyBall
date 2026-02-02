@@ -612,7 +612,8 @@ export class Game {
       advanceFrame: (inputs) => {
         if (!perf.enabled) {
           const prev = this.suppressVisualEffects;
-          this.suppressVisualEffects = true;
+          const suppress = this.rollbackSession?.suppressVisuals ?? false;
+          this.suppressVisualEffects = suppress;
           try {
             this.advanceOneFrame(inputs);
           } finally {
@@ -622,7 +623,8 @@ export class Game {
         }
         const t0 = nowMs();
         const prev = this.suppressVisualEffects;
-        this.suppressVisualEffects = true;
+        const suppress = this.rollbackSession?.suppressVisuals ?? false;
+        this.suppressVisualEffects = suppress;
         try {
           this.advanceOneFrame(inputs);
         } finally {

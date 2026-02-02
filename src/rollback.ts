@@ -14,6 +14,7 @@ export class RollbackSession<T> {
   private stateHistory = new Map<number, T>();
   private inputHistory = new Map<number, FrameInputs>();
   private lastFrame = 0;
+  public suppressVisuals = false;
 
   constructor(callbacks: RollbackCallbacks<T>, maxRollbackFrames = 30) {
     this.callbacks = callbacks;
