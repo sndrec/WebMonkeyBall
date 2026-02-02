@@ -188,6 +188,7 @@ type GameOptions = {
   onReadyToResume?: () => void;
   onPaused?: () => void;
   onResumed?: () => void;
+  onStageLoadStart?: (stageId: number) => void;
   onStageLoaded?: (stageId: number) => void;
   stageBasePath?: string;
   gameSource?: GameSource;
@@ -280,6 +281,7 @@ export class Game {
   public onReadyToResume?: () => void;
   public onPaused?: () => void;
   public onResumed?: () => void;
+  public onStageLoadStart?: (stageId: number) => void;
   public onStageLoaded?: (stageId: number) => void;
   public stageBasePath: string;
   public gameSource: GameSource;
@@ -392,6 +394,7 @@ export class Game {
     onReadyToResume,
     onPaused,
     onResumed,
+    onStageLoadStart,
     onStageLoaded,
     stageBasePath,
     gameSource,
@@ -401,6 +404,7 @@ export class Game {
     this.onReadyToResume = onReadyToResume;
     this.onPaused = onPaused;
     this.onResumed = onResumed;
+    this.onStageLoadStart = onStageLoadStart;
     this.onStageLoaded = onStageLoaded;
     this.gameSource = gameSource ?? GAME_SOURCES.SMB1;
     this.stageBasePath = stageBasePath ?? STAGE_BASE_PATHS[this.gameSource];
@@ -1874,6 +1878,7 @@ export class Game {
     this.input?.clearPressed();
     this.statusText = `Loading stage ${String(stageId).padStart(3, '0')}...`;
     this.updateHud();
+    this.onStageLoadStart?.(stageId);
 
     try {
       const stage = await loadStageDef(stageId, this.stageBasePath, this.gameSource);

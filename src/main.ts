@@ -538,12 +538,7 @@ const game = new Game({
     paused = false;
     setOverlayVisible(false);
   },
-  onStageLoaded: (stageId) => {
-    if (netplayEnabled && netplayState) {
-      resetNetplayForStage();
-      initStageSync(stageId);
-    }
-    void handleStageLoaded(stageId);
+  onStageLoadStart: (stageId) => {
     if (netplayEnabled && netplayState?.role === 'host' && hostRelay) {
       const config = getHostCourseConfig();
       if (config) {
@@ -557,6 +552,13 @@ const game = new Game({
         });
       }
     }
+  },
+  onStageLoaded: (stageId) => {
+    if (netplayEnabled && netplayState) {
+      resetNetplayForStage();
+      initStageSync(stageId);
+    }
+    void handleStageLoaded(stageId);
   },
 });
 game.init();
@@ -636,6 +638,13 @@ const NETPLAY_CLIENT_RATE_MAX = 1.1;
 const NETPLAY_CLIENT_DRIFT_RATE = 0.05;
 const NETPLAY_DRIFT_FORCE_TICK = 3;
 const NETPLAY_DRIFT_EXTRA_TICKS = 6;
+const NETPLAY_CLIENT_MAX_EXTRA_LEAD = 12;
+const NETPLAY_SYNC_RATE_MIN = 0.85;
+const NETPLAY_SYNC_RATE_MAX = 1.35;
+const NETPLAY_SYNC_DRIFT_RATE = 0.1;
+const NETPLAY_SYNC_FORCE_TICK = 1;
+const NETPLAY_SYNC_EXTRA_TICKS = 2;
+const NETPLAY_SYNC_MAX_TICKS = 6;
 const NETPLAY_LAG_FUSE_FRAMES = 24;
 const NETPLAY_LAG_FUSE_MS = 500;
 const NETPLAY_SNAPSHOT_COOLDOWN_MS = 1000;
@@ -753,6 +762,8 @@ type NetplayState = {
   readyPlayers: Set<number>;
   awaitingStageReady: boolean;
   awaitingStageSync: boolean;
+  introEndFrame: number | null;
+  introSyncPending: boolean;
   currentCourse: any | null;
   currentGameSource: GameSource | null;
   awaitingSnapshot: boolean;
@@ -965,6 +976,29 @@ function getEstimatedHostFrame(state: NetplayState) {
   const elapsedSeconds = (performance.now() - state.lastHostFrameTimeMs) / 1000;
   const advance = Math.min(elapsedSeconds / game.fixedStep, 1);
   return state.lastReceivedHostFrame + Math.max(0, advance);
+}
+
+function getIntroLeadScale() {
+  const total = game.introTotalFrames ?? 0;
+  const remaining = game.introTimerFrames ?? 0;
+  if (total <= 0 || remaining <= 0) {
+    return 1;
+  }
+  return clamp(1 - (remaining / total), 0, 1);
+}
+
+function getClientLeadFrames(state: NetplayState) {
+  let lead = NETPLAY_CLIENT_LEAD;
+  if (state.rttMs && state.rttMs > 0) {
+    const rttFrames = (state.rttMs / 1000) / game.fixedStep;
+    const extra = Math.min(NETPLAY_CLIENT_MAX_EXTRA_LEAD, Math.max(0, Math.floor(rttFrames * 0.5)));
+    lead += extra;
+  }
+  const scale = getIntroLeadScale();
+  if (scale >= 1) {
+    return lead;
+  }
+  return Math.max(0, Math.floor(lead * scale));
 }
 
 function updateLobbyUi() {
@@ -1815,7 +1849,7 @@ function clientSendInputBuffer(currentFrame: number) {
 
 function getNetplayTargetFrame(state: NetplayState, currentFrame: number) {
   if (state.role === 'client') {
-    return getEstimatedHostFrame(state) + NETPLAY_CLIENT_LEAD;
+    return getEstimatedHostFrame(state) + getClientLeadFrames(state);
   }
   return currentFrame;
 }
@@ -1917,6 +1951,7 @@ function netplayTick(dtSeconds: number) {
   const targetFrame = getNetplayTargetFrame(state, currentFrame);
   const simFrame = currentFrame + (netplayAccumulator / game.fixedStep);
   const drift = targetFrame - simFrame;
+  const introSync = game.introTimerFrames > 0;
   if (state.role === 'client') {
     const nowMs = performance.now();
     if (clientPeer && nowMs - state.lastPingTimeMs >= NETPLAY_PING_INTERVAL_MS) {
@@ -1948,19 +1983,26 @@ function netplayTick(dtSeconds: number) {
   }
   let rateScale = 1;
   if (state.role === 'client') {
-    const desired = 1 + drift * NETPLAY_CLIENT_DRIFT_RATE;
-    rateScale = clamp(desired, NETPLAY_CLIENT_RATE_MIN, NETPLAY_CLIENT_RATE_MAX);
+    const driftRate = introSync ? NETPLAY_SYNC_DRIFT_RATE : NETPLAY_CLIENT_DRIFT_RATE;
+    const desired = 1 + drift * driftRate;
+    const minRate = introSync ? NETPLAY_SYNC_RATE_MIN : NETPLAY_CLIENT_RATE_MIN;
+    const maxRate = introSync ? NETPLAY_SYNC_RATE_MAX : NETPLAY_CLIENT_RATE_MAX;
+    rateScale = clamp(desired, minRate, maxRate);
   }
   netplayAccumulator = Math.min(
     netplayAccumulator + dtSeconds * rateScale,
     game.fixedStep * NETPLAY_MAX_FRAME_DELTA,
   );
   let ticks = Math.floor(netplayAccumulator / game.fixedStep);
-  if (ticks <= 0 && drift > NETPLAY_DRIFT_FORCE_TICK) {
+  const forceTick = introSync ? NETPLAY_SYNC_FORCE_TICK : NETPLAY_DRIFT_FORCE_TICK;
+  if (ticks <= 0 && drift > forceTick) {
     ticks = 1;
   }
-  if (drift > NETPLAY_DRIFT_EXTRA_TICKS) {
-    ticks = Math.min(3, Math.max(1, ticks + 1));
+  const extraTick = introSync ? NETPLAY_SYNC_EXTRA_TICKS : NETPLAY_DRIFT_EXTRA_TICKS;
+  if (drift > extraTick) {
+    const maxTicks = introSync ? NETPLAY_SYNC_MAX_TICKS : 3;
+    const add = introSync ? 2 : 1;
+    ticks = Math.min(maxTicks, Math.max(1, ticks + add));
   }
   for (let i = 0; i < ticks; i += 1) {
     netplayStep();
