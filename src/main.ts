@@ -625,6 +625,8 @@ let pendingSnapshot: { frame: number; state: any; stageId?: number; gameSource?:
 let lobbyHeartbeatTimer: number | null = null;
 let netplayAccumulator = 0;
 const NETPLAY_MAX_FRAME_DELTA = 5;
+const NETPLAY_CLIENT_LEAD = 2;
+const NETPLAY_CLIENT_AHEAD_SLACK = 2;
 
 type NetplayRole = 'host' | 'client';
 type NetplayClientState = {
@@ -1542,6 +1544,13 @@ function clientSendInputBuffer(currentFrame: number) {
   }
 }
 
+function getNetplayTargetFrame(state: NetplayState, currentFrame: number) {
+  if (state.role === 'client') {
+    return state.lastReceivedHostFrame + NETPLAY_CLIENT_LEAD;
+  }
+  return currentFrame;
+}
+
 function netplayStep() {
   if (!netplayState) {
     return;
@@ -1549,12 +1558,9 @@ function netplayStep() {
   const state = netplayState;
   const session = state.session;
   const currentFrame = session.getFrame();
-  let targetFrame = currentFrame;
-  if (state.role === 'client') {
-    targetFrame = Math.max(state.lastReceivedHostFrame, currentFrame);
-  }
+  const targetFrame = getNetplayTargetFrame(state, currentFrame);
   const drift = targetFrame - currentFrame;
-  if (state.role === 'client' && drift < -2) {
+  if (state.role === 'client' && drift < -NETPLAY_CLIENT_AHEAD_SLACK) {
     clientSendInputBuffer(currentFrame);
     return;
   }
@@ -1628,12 +1634,9 @@ function netplayTick(dtSeconds: number) {
   const state = netplayState;
   const session = state.session;
   const currentFrame = session.getFrame();
-  let targetFrame = currentFrame;
-  if (state.role === 'client') {
-    targetFrame = Math.max(state.lastReceivedHostFrame, currentFrame);
-  }
+  const targetFrame = getNetplayTargetFrame(state, currentFrame);
   const drift = targetFrame - currentFrame;
-  if (state.role === 'client' && drift < -2) {
+  if (state.role === 'client' && drift < -NETPLAY_CLIENT_AHEAD_SLACK) {
     clientSendInputBuffer(currentFrame);
     return;
   }
