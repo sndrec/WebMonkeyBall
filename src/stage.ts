@@ -1196,6 +1196,7 @@ export class StageRuntime {
     this.goalTapesByGroup = [];
     this.bananas = [];
     this.confetti = [];
+    this.confettiSpawnedGoals = new Set();
     this.effects = [];
     this.switches = [];
     this.switchesByGroup = [];
@@ -2255,7 +2256,10 @@ export class StageRuntime {
       bag.openFrame = this.timerFrames;
     }
     updateGoalBagTransform(bag, this.matrixStack);
-    spawnGoalBagConfetti(this, bag, ball, this.visualRng);
+    if (!this.confettiSpawnedGoals.has(goalId)) {
+      this.confettiSpawnedGoals.add(goalId);
+      spawnGoalBagConfetti(this, bag, ball, this.visualRng);
+    }
   }
 
   breakGoalTape(goalId, ball) {
