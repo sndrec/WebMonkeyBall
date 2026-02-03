@@ -637,6 +637,7 @@ let pendingSnapshot: {
   stageSeq?: number;
 } | null = null;
 let lobbyHeartbeatTimer: number | null = null;
+let lastLobbyHeartbeatMs: number | null = null;
 let netplayAccumulator = 0;
 const NETPLAY_MAX_FRAME_DELTA = 5;
 const NETPLAY_CLIENT_LEAD = 2;
@@ -653,10 +654,14 @@ const NETPLAY_SYNC_DRIFT_RATE = 0.1;
 const NETPLAY_SYNC_FORCE_TICK = 1;
 const NETPLAY_SYNC_EXTRA_TICKS = 2;
 const NETPLAY_SYNC_MAX_TICKS = 6;
+const NETPLAY_STAGE_READY_RESEND_MS = 2000;
+const NETPLAY_STAGE_READY_TIMEOUT_MS = 12000;
 const NETPLAY_LAG_FUSE_FRAMES = 24;
 const NETPLAY_LAG_FUSE_MS = 500;
 const NETPLAY_SNAPSHOT_COOLDOWN_MS = 1000;
 const NETPLAY_PING_INTERVAL_MS = 1000;
+const LOBBY_HEARTBEAT_INTERVAL_MS = 15000;
+const LOBBY_HEARTBEAT_FALLBACK_MS = 12000;
 
 const netplayPerf = {
   enabled: perfEnabled,
@@ -771,6 +776,8 @@ type NetplayState = {
   awaitingStageReady: boolean;
   awaitingStageSync: boolean;
   stageSeq: number;
+  stageReadySentMs: number | null;
+  stageReadyTimeoutMs: number | null;
   currentCourse: any | null;
   currentGameSource: GameSource | null;
   awaitingSnapshot: boolean;
@@ -824,6 +831,8 @@ function ensureNetplayState(role: NetplayRole) {
     awaitingStageReady: false,
     awaitingStageSync: false,
     stageSeq: 0,
+    stageReadySentMs: null,
+    stageReadyTimeoutMs: null,
     currentCourse: null,
     currentGameSource: null,
     awaitingSnapshot: false,
@@ -863,6 +872,8 @@ function resetNetplayForStage() {
   netplayState.awaitingStageReady = false;
   netplayState.awaitingStageSync = false;
   netplayState.currentStageId = null;
+  netplayState.stageReadySentMs = null;
+  netplayState.stageReadyTimeoutMs = null;
   netplayAccumulator = 0;
   for (const clientState of netplayState.clientStates.values()) {
     clientState.lastAckedHostFrame = -1;
@@ -889,8 +900,22 @@ function maybeSendStageSync() {
     return;
   }
   state.awaitingStageReady = false;
+  state.stageReadyTimeoutMs = null;
   netplayAccumulator = 0;
   hostRelay.broadcast({
+    type: 'stage_sync',
+    stageSeq: state.stageSeq,
+    stageId: state.currentStageId ?? game.stage?.stageId ?? 0,
+    frame: state.session.getFrame(),
+  });
+}
+
+function sendStageSyncToClient(playerId: number) {
+  if (!netplayState || netplayState.role !== 'host' || !hostRelay) {
+    return;
+  }
+  const state = netplayState;
+  hostRelay.sendTo(playerId, {
     type: 'stage_sync',
     stageSeq: state.stageSeq,
     stageId: state.currentStageId ?? game.stage?.stageId ?? 0,
@@ -908,9 +933,11 @@ function initStageSync(stageId: number) {
   if (state.role === 'host') {
     state.awaitingStageReady = true;
     state.awaitingStageSync = false;
+    state.stageReadyTimeoutMs = null;
   } else {
     state.awaitingStageSync = true;
     state.awaitingStageReady = false;
+    state.stageReadySentMs = null;
   }
   netplayAccumulator = 0;
 }
@@ -923,14 +950,59 @@ function markStageReady(stageId: number) {
   if (state.currentStageId !== null && stageId !== state.currentStageId) {
     return;
   }
+  if (state.currentStageId === null) {
+    state.currentStageId = stageId;
+  }
   if (state.role === 'host') {
     state.readyPlayers.add(game.localPlayerId);
+    if (state.stageReadyTimeoutMs === null) {
+      state.stageReadyTimeoutMs = performance.now() + NETPLAY_STAGE_READY_TIMEOUT_MS;
+    }
     maybeSendStageSync();
     return;
   }
   if (clientPeer) {
     clientPeer.send({ type: 'stage_ready', stageSeq: state.stageSeq, stageId });
+    state.stageReadySentMs = performance.now();
   }
+}
+
+function maybeResendStageReady(nowMs: number) {
+  if (!netplayState || netplayState.role !== 'client' || !clientPeer) {
+    return;
+  }
+  if (!netplayState.awaitingStageSync) {
+    return;
+  }
+  const lastSent = netplayState.stageReadySentMs;
+  if (lastSent === null || (nowMs - lastSent) < NETPLAY_STAGE_READY_RESEND_MS) {
+    return;
+  }
+  const stageId = netplayState.currentStageId ?? game.stage?.stageId ?? 0;
+  clientPeer.send({ type: 'stage_ready', stageSeq: netplayState.stageSeq, stageId });
+  netplayState.stageReadySentMs = nowMs;
+}
+
+function maybeForceStageSync(nowMs: number) {
+  if (!netplayState || netplayState.role !== 'host' || !hostRelay) {
+    return;
+  }
+  if (!netplayState.awaitingStageReady) {
+    return;
+  }
+  const timeoutAt = netplayState.stageReadyTimeoutMs;
+  if (timeoutAt === null || nowMs < timeoutAt) {
+    return;
+  }
+  netplayState.awaitingStageReady = false;
+  netplayState.stageReadyTimeoutMs = null;
+  netplayAccumulator = 0;
+  hostRelay.broadcast({
+    type: 'stage_sync',
+    stageSeq: netplayState.stageSeq,
+    stageId: netplayState.currentStageId ?? game.stage?.stageId ?? 0,
+    frame: netplayState.session.getFrame(),
+  });
 }
 
 function getSimHash() {
@@ -1035,9 +1107,11 @@ function startLobbyHeartbeat(roomId: string) {
   if (lobbyHeartbeatTimer !== null) {
     window.clearInterval(lobbyHeartbeatTimer);
   }
+  lastLobbyHeartbeatMs = null;
   lobbyHeartbeatTimer = window.setInterval(() => {
-    void lobbyClient.heartbeat(roomId);
-  }, 15000);
+    sendLobbyHeartbeat(performance.now(), false, roomId);
+  }, LOBBY_HEARTBEAT_INTERVAL_MS);
+  sendLobbyHeartbeat(performance.now(), true, roomId);
 }
 
 function stopLobbyHeartbeat() {
@@ -1045,6 +1119,7 @@ function stopLobbyHeartbeat() {
     window.clearInterval(lobbyHeartbeatTimer);
     lobbyHeartbeatTimer = null;
   }
+  lastLobbyHeartbeatMs = null;
 }
 
 function resetNetplayConnections() {
@@ -1062,7 +1137,19 @@ function resetNetplayConnections() {
   game.allowCourseAdvance = true;
   stopLobbyHeartbeat();
   lobbyRoom = null;
+  lastLobbyHeartbeatMs = null;
   updateLobbyUi();
+}
+
+function sendLobbyHeartbeat(nowMs: number, force = false, roomId = lobbyRoom?.roomId) {
+  if (!lobbyClient || !roomId) {
+    return;
+  }
+  if (!force && lastLobbyHeartbeatMs !== null && (nowMs - lastLobbyHeartbeatMs) < LOBBY_HEARTBEAT_FALLBACK_MS) {
+    return;
+  }
+  lastLobbyHeartbeatMs = nowMs;
+  void lobbyClient.heartbeat(roomId);
 }
 
 function recordInputForFrame(frame: number, playerId: number, input: QuantizedInput) {
@@ -1788,6 +1875,10 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
       return;
     }
     state.readyPlayers.add(playerId);
+    if (!state.awaitingStageReady) {
+      sendStageSyncToClient(playerId);
+      return;
+    }
     maybeSendStageSync();
     return;
   }
@@ -1981,15 +2072,20 @@ function netplayTick(dtSeconds: number) {
     return;
   }
   const state = netplayState;
+  const nowMs = performance.now();
   if (state.role === 'client' && state.awaitingStageSync) {
+    maybeResendStageReady(nowMs);
     game.accumulator = 0;
     recordNetplayPerf(perfStart, 0);
     return;
   }
   if (state.role === 'host' && state.awaitingStageReady) {
-    game.accumulator = 0;
-    recordNetplayPerf(perfStart, 0);
-    return;
+    maybeForceStageSync(nowMs);
+    if (state.awaitingStageReady) {
+      game.accumulator = 0;
+      recordNetplayPerf(perfStart, 0);
+      return;
+    }
   }
   const session = state.session;
   const currentFrame = session.getFrame();
@@ -1998,7 +2094,6 @@ function netplayTick(dtSeconds: number) {
   const drift = targetFrame - simFrame;
   const introSync = game.introTimerFrames > 0;
   if (state.role === 'client') {
-    const nowMs = performance.now();
     if (clientPeer && nowMs - state.lastPingTimeMs >= NETPLAY_PING_INTERVAL_MS) {
       const pingId = (state.pingSeq += 1);
       state.pendingPings.set(pingId, nowMs);
@@ -2618,6 +2713,7 @@ function renderFrame(now: number) {
   const dt = Math.max(0, now - lastTime);
   lastTime = now;
   const dtSeconds = dt / 1000;
+  sendLobbyHeartbeat(now);
 
   if (!paused) {
     viewerInput.deltaTime = dt;

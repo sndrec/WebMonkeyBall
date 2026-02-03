@@ -744,6 +744,10 @@ export class Game {
     return a < b ? `${a}:${b}` : `${b}:${a}`;
   }
 
+  private getPlayersSorted() {
+    return [...this.players].sort((a, b) => a.id - b.id);
+  }
+
   private markNoCollideForPlayer(playerId: number) {
     for (const player of this.players) {
       if (player.id === playerId) {
@@ -753,12 +757,12 @@ export class Game {
     }
   }
 
-  private resolvePlayerCollisions() {
-    if (!this.playerCollisionEnabled || this.players.length < 2) {
+  private resolvePlayerCollisions(players: PlayerState[] = this.getPlayersSorted()) {
+    if (!this.playerCollisionEnabled || players.length < 2) {
       return;
     }
-    for (let i = 0; i < this.players.length; i += 1) {
-      const playerA = this.players[i];
+    for (let i = 0; i < players.length; i += 1) {
+      const playerA = players[i];
       if (playerA.isSpectator || playerA.pendingSpawn) {
         continue;
       }
@@ -766,8 +770,8 @@ export class Game {
       if (ballA.state !== BALL_STATES.PLAY || (ballA.flags & BALL_FLAGS.INVISIBLE)) {
         continue;
       }
-      for (let j = i + 1; j < this.players.length; j += 1) {
-        const playerB = this.players[j];
+      for (let j = i + 1; j < players.length; j += 1) {
+        const playerB = players[j];
         if (playerB.isSpectator || playerB.pendingSpawn) {
           continue;
         }
@@ -2686,6 +2690,7 @@ export class Game {
       while (!this.pendingAdvance && this.accumulator >= this.fixedStep) {
         const tickStart = this.simPerf.enabled ? nowMs() : 0;
         try {
+        const simPlayers = this.getPlayersSorted();
         const ringoutActive = localPlayer.ringoutTimerFrames > 0;
         const timeoverActive = this.timeoverTimerFrames > 0;
         const stageInputEnabled = this.introTimerFrames <= 0 && !timeoverActive;
@@ -2711,15 +2716,15 @@ export class Game {
         this.stageRuntime.switchesEnabled = switchesEnabled;
         this.stageRuntime.goalHoldOpen = this.players.length <= 1
           ? localPlayer.goalTimerFrames > 0
-          : this.players.some((player) => player.goalTimerFrames > 0);
-        for (const player of this.players) {
+          : simPlayers.some((player) => player.goalTimerFrames > 0);
+        for (const player of simPlayers) {
           player.cameraRotY = player.camera.rotY;
         }
         let tiltCount = 0;
         let avgGravX = 0;
         let avgGravY = 0;
         let avgGravZ = 0;
-        for (const player of this.players) {
+        for (const player of simPlayers) {
           if (player.isSpectator || player.pendingSpawn) {
             continue;
           }
@@ -2787,7 +2792,7 @@ export class Game {
             break;
           }
         }
-        for (const player of this.players) {
+        for (const player of simPlayers) {
           if (player.id === this.localPlayerId || player.isSpectator || player.pendingSpawn) {
             continue;
           }
@@ -2809,7 +2814,7 @@ export class Game {
             this.readyAnnouncerPlayed = true;
           }
           if (this.introTimerFrames === this.dropFrames) {
-            for (const player of this.players) {
+            for (const player of simPlayers) {
               if (player.isSpectator || player.pendingSpawn) {
                 continue;
               }
@@ -2817,7 +2822,7 @@ export class Game {
             }
           }
           if (this.introTimerFrames === 0) {
-            for (const player of this.players) {
+            for (const player of simPlayers) {
               if (player.isSpectator || player.pendingSpawn) {
                 continue;
               }
@@ -2830,7 +2835,7 @@ export class Game {
           }
         }
         if (!timeoverActive) {
-          for (const player of this.players) {
+          for (const player of simPlayers) {
             if (player.isSpectator || player.pendingSpawn) {
               continue;
             }
@@ -2853,7 +2858,7 @@ export class Game {
               player.camera.initFalloutReplay(ball);
             }
           }
-          this.resolvePlayerCollisions();
+          this.resolvePlayerCollisions(simPlayers);
           const switchPresses = this.stageRuntime.switchPressCount ?? 0;
           if (switchPresses > 0) {
             this.stageRuntime.switchPressCount = 0;
@@ -2897,7 +2902,7 @@ export class Game {
           }
         }
         let hasPlayableBall = false;
-        for (const player of this.players) {
+        for (const player of simPlayers) {
           if (player.isSpectator || player.pendingSpawn) {
             continue;
           }
@@ -2924,7 +2929,7 @@ export class Game {
           }
         }
         if (stageInputEnabled) {
-          for (const player of this.players) {
+          for (const player of simPlayers) {
             if (player.isSpectator || player.pendingSpawn) {
               continue;
             }
@@ -2960,7 +2965,7 @@ export class Game {
             break;
           }
         }
-        for (const player of this.players) {
+        for (const player of simPlayers) {
           if (player.id === this.localPlayerId || player.isSpectator || player.pendingSpawn) {
             continue;
           }
@@ -2979,7 +2984,7 @@ export class Game {
           }
         }
         const cameraPaused = this.paused || timeoverActive;
-        for (const player of this.players) {
+        for (const player of simPlayers) {
           if (player.isSpectator || player.pendingSpawn) {
             continue;
           }
