@@ -64,6 +64,7 @@ export const CAMERA_STATE = {
   READY_INIT: 10,
   READY_MAIN: 11,
   GOAL_MAIN: 15,
+  SPECTATOR_FREE: 20,
 };
 
 export const WORLD_STATE = {

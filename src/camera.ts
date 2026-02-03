@@ -1,7 +1,7 @@
 import { mat3, vec3 } from 'gl-matrix';
 import { MatrixStack, atan2S16, atan2S16Safe, clamp, sqrt, sumSq2, sumSq3, rsqrt, toS16 } from './math.js';
 import { smoothstep } from './animation.js';
-import { BALL_FLAGS, CAMERA_STATE, COLI_FLAGS } from './constants.js';
+import { BALL_FLAGS, CAMERA_STATE, COLI_FLAGS, S16_TO_RAD } from './constants.js';
 
 const stack = new MatrixStack();
 const tmpVec = { x: 0, y: 0, z: 0 };
@@ -29,6 +29,9 @@ const SMB2_PITCH_BASE = -0x900;
 const SMB2_PITCH_OFFSET = 0x200;
 const SMB2_PITCH_LIMIT = 0x3000;
 const SMB2_STANDSTILL_SPEED = 0.02;
+const FREE_FLY_LOOK_SPEED = 0x300;
+const FREE_FLY_MOVE_SPEED = 0.3;
+const FREE_FLY_PITCH_LIMIT = 0x3000;
 
 function applyMat4ToPoint(out, mtx) {
   vec3.set(wormholeVec, out.x, out.y, out.z);
@@ -691,6 +694,53 @@ export class GameplayCamera {
     cameraFaceDirection(this, tmpVec);
   }
 
+  initSpectatorFreeFly(pose) {
+    if (!pose) {
+      return;
+    }
+    this.reset();
+    this.eye.x = pose.eye?.x ?? this.eye.x;
+    this.eye.y = pose.eye?.y ?? this.eye.y;
+    this.eye.z = pose.eye?.z ?? this.eye.z;
+    this.lookAt.x = pose.lookAt?.x ?? this.lookAt.x;
+    this.lookAt.y = pose.lookAt?.y ?? this.lookAt.y;
+    this.lookAt.z = pose.lookAt?.z ?? this.lookAt.z;
+    this.rotX = pose.rotX ?? this.rotX;
+    this.rotY = pose.rotY ?? this.rotY;
+    this.rotZ = pose.rotZ ?? this.rotZ;
+    this.state = CAMERA_STATE.SPECTATOR_FREE;
+  }
+
+  updateSpectatorFreeFly(move, look, paused) {
+    if (paused) {
+      return;
+    }
+    const moveX = move?.x ?? 0;
+    const moveY = move?.y ?? 0;
+    const lookX = look?.x ?? 0;
+    const lookY = look?.y ?? 0;
+    this.rotY = toS16(this.rotY + lookX * FREE_FLY_LOOK_SPEED);
+    this.rotX = toS16(clamp(this.rotX + lookY * FREE_FLY_LOOK_SPEED, -FREE_FLY_PITCH_LIMIT, FREE_FLY_PITCH_LIMIT));
+    this.rotZ = 0;
+
+    const yawRad = this.rotY * S16_TO_RAD;
+    const pitchRad = this.rotX * S16_TO_RAD;
+    const cosPitch = Math.cos(pitchRad);
+    const sinPitch = Math.sin(pitchRad);
+    const forwardX = Math.sin(yawRad) * cosPitch;
+    const forwardY = sinPitch;
+    const forwardZ = Math.cos(yawRad) * cosPitch;
+    const rightX = Math.cos(yawRad);
+    const rightZ = -Math.sin(yawRad);
+
+    this.eye.x += (rightX * moveX + forwardX * -moveY) * FREE_FLY_MOVE_SPEED;
+    this.eye.z += (rightZ * moveX + forwardZ * -moveY) * FREE_FLY_MOVE_SPEED;
+
+    this.lookAt.x = this.eye.x + forwardX;
+    this.lookAt.y = this.eye.y + forwardY;
+    this.lookAt.z = this.eye.z + forwardZ;
+  }
+
   updateFalloutReplay(ball, paused) {
     if (paused) {
       return;
@@ -789,6 +839,8 @@ export class GameplayCamera {
         break;
       case CAMERA_STATE.GOAL_MAIN:
         this.updateGoalMain(ball, paused);
+        break;
+      case CAMERA_STATE.SPECTATOR_FREE:
         break;
       case CAMERA_STATE.LEVEL_MAIN:
       default:

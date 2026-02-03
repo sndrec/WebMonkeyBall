@@ -550,6 +550,31 @@ export class Input {
     return best.magnitudeSq > 0 ? best.value : null;
   }
 
+  getGamepadLookStick() {
+    const pad = this.getActiveGamepad();
+    if (!pad || !pad.axes || pad.axes.length < 4) {
+      return null;
+    }
+    const rawX = pad.axes[2] ?? 0;
+    const rawY = pad.axes[3] ?? 0;
+    const magSq = rawX * rawX + rawY * rawY;
+    if (magSq < 0.0225) {
+      return null;
+    }
+    return {
+      x: clamp(rawX, -1, 1),
+      y: clamp(rawY, -1, 1),
+    };
+  }
+
+  getLookStick() {
+    const look = this.getGamepadLookStick();
+    if (look) {
+      return look;
+    }
+    return { x: 0, y: 0 };
+  }
+
   getStick() {
     const mode = this.getControlMode();
     this.syncTouchLayer(mode);
