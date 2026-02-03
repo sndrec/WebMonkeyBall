@@ -917,8 +917,8 @@ function resetNetplayForStage() {
   netplayState.lagBehindSinceMs = null;
   netplayState.lastSnapshotRequestTimeMs = null;
   netplayState.awaitingSnapshot = false;
-  netplayState.lastAckedLocalFrame = -1;
-  netplayState.lastReceivedHostFrame = game.simTick;
+  netplayState.lastAckedLocalFrame = 0;
+  netplayState.lastReceivedHostFrame = 0;
   netplayState.hostFrameBuffer.clear();
   pendingSnapshot = null;
   netplayState.readyPlayers.clear();
@@ -1892,10 +1892,11 @@ function handleHostMessage(msg: HostToClientMessage) {
       return;
     }
     state.awaitingStageSync = false;
-    state.lastReceivedHostFrame = Math.max(state.lastReceivedHostFrame, msg.frame);
+    state.lastReceivedHostFrame = msg.frame;
     state.lastHostFrameTimeMs = performance.now();
     state.awaitingSnapshot = false;
     state.lagBehindSinceMs = null;
+    state.lastAckedLocalFrame = 0;
     netplayAccumulator = 0;
     if (msg.frame > state.session.getFrame()) {
       requestSnapshot('lag', msg.frame, true);
@@ -1903,6 +1904,9 @@ function handleHostMessage(msg: HostToClientMessage) {
     return;
   }
   if (msg.type === 'frame') {
+    if (state.awaitingStageSync) {
+      return;
+    }
     const frameMsg = msg as FrameBundleMessage;
     if (frameMsg.lastAck !== undefined) {
       state.lastAckedLocalFrame = Math.max(state.lastAckedLocalFrame, frameMsg.lastAck);
