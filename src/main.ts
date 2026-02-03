@@ -40,6 +40,7 @@ import { HudRenderer } from './hud.js';
 import type { ReplayData } from './replay.js';
 import {
   fetchPackSlice,
+  prefetchPackSlice,
   getActivePack,
   getPackCourseData,
   getPackStageBasePath,
@@ -646,6 +647,10 @@ const lobbyPlayers = document.getElementById('lobby-players') as HTMLElement | n
 
 let lobbyRoom: LobbyRoom | null = null;
 let lobbySignal: { send: (msg: any) => void; close: () => void } | null = null;
+let lobbySignalRetryTimer: number | null = null;
+let lobbySignalRetryMs = 1000;
+let lobbySignalShouldReconnect = false;
+let lobbySignalReconnectFn: (() => void) | null = null;
 let hostRelay: HostRelay | null = null;
 let clientPeer: ClientPeer | null = null;
 let netplayEnabled = false;
@@ -1171,9 +1176,35 @@ function stopLobbyHeartbeat() {
   lastLobbyHeartbeatMs = null;
 }
 
+function clearLobbySignalRetry() {
+  if (lobbySignalRetryTimer !== null) {
+    window.clearTimeout(lobbySignalRetryTimer);
+    lobbySignalRetryTimer = null;
+  }
+  lobbySignalRetryMs = 1000;
+}
+
+function scheduleLobbySignalReconnect() {
+  if (!lobbyClient || !lobbySignalShouldReconnect || !lobbySignalReconnectFn) {
+    return;
+  }
+  if (lobbySignalRetryTimer !== null) {
+    return;
+  }
+  const delay = lobbySignalRetryMs;
+  lobbySignalRetryMs = Math.min(lobbySignalRetryMs * 2, 15000);
+  lobbySignalRetryTimer = window.setTimeout(() => {
+    lobbySignalRetryTimer = null;
+    lobbySignalReconnectFn?.();
+  }, delay);
+}
+
 function resetNetplayConnections() {
   lobbySignal?.close();
   lobbySignal = null;
+  lobbySignalShouldReconnect = false;
+  lobbySignalReconnectFn = null;
+  clearLobbySignalRetry();
   hostRelay?.closeAll();
   hostRelay = null;
   clientPeer?.close();
@@ -1183,6 +1214,10 @@ function resetNetplayConnections() {
   pendingSnapshot = null;
   netplayAccumulator = 0;
   game.netplayRttMs = null;
+  game.setInputFeed(null);
+  for (const player of game.players) {
+    game.setPlayerInputFeed(player.id, null);
+  }
   game.allowCourseAdvance = true;
   stopLobbyHeartbeat();
   lobbyRoom = null;
@@ -1448,6 +1483,93 @@ function prewarmConfettiRenderer() {
   gfxDevice.endFrame();
 }
 
+function queuePrefetch(paths: string[]) {
+  for (const path of paths) {
+    if (!path) {
+      continue;
+    }
+    void prefetchPackSlice(path);
+  }
+}
+
+function getStageAssetPathsSmb1(stageId: number, stageBasePath: string): string[] {
+  const stageInfo = STAGE_INFO_MAP.get(stageId as StageId);
+  if (!stageInfo) {
+    return [];
+  }
+  const stageIdStr = String(stageId).padStart(3, '0');
+  const stagedefPath = `${stageBasePath}/st${stageIdStr}/STAGE${stageIdStr}.lz`;
+  const stageGmaPath = `${stageBasePath}/st${stageIdStr}/st${stageIdStr}.gma`;
+  const stageTplPath = `${stageBasePath}/st${stageIdStr}/st${stageIdStr}.tpl`;
+  const commonGmaPath = `${stageBasePath}/init/common.gma`;
+  const commonTplPath = `${stageBasePath}/init/common.tpl`;
+  const commonNlPath = `${stageBasePath}/init/common_p.lz`;
+  const commonNlTplPath = `${stageBasePath}/init/common.lz`;
+  const bgName = stageInfo.bgInfo.fileName;
+  const bgGmaPath = `${stageBasePath}/bg/${bgName}.gma`;
+  const bgTplPath = `${stageBasePath}/bg/${bgName}.tpl`;
+  const isNaomi = isNaomiStage(stageId);
+  const stageNlObjPath = isNaomi ? `${stageBasePath}/st${stageIdStr}/st${stageIdStr}_p.lz` : '';
+  const stageNlTplPath = isNaomi ? `${stageBasePath}/st${stageIdStr}/st${stageIdStr}.lz` : '';
+  const paths = [
+    stagedefPath,
+    stageGmaPath,
+    stageTplPath,
+    commonGmaPath,
+    commonTplPath,
+    commonNlPath,
+    commonNlTplPath,
+    bgGmaPath,
+    bgTplPath,
+  ];
+  if (stageNlObjPath && stageNlTplPath) {
+    paths.push(stageNlObjPath, stageNlTplPath);
+  }
+  return paths;
+}
+
+function getStageAssetPathsSmb2(stageId: number, gameSource: GameSource, stageBasePath: string): string[] {
+  const stageIdStr = String(stageId).padStart(3, '0');
+  const stageInfo =
+    gameSource === GAME_SOURCES.MB2WS ? getMb2wsStageInfo(stageId) : getSmb2StageInfo(stageId);
+  const bgName = stageInfo?.bgInfo?.fileName ?? '';
+  const paths = [
+    `${stageBasePath}/st${stageIdStr}/STAGE${stageIdStr}.lz`,
+    `${stageBasePath}/st${stageIdStr}/st${stageIdStr}.gma`,
+    `${stageBasePath}/st${stageIdStr}/st${stageIdStr}.tpl`,
+    `${stageBasePath}/init/common.gma`,
+    `${stageBasePath}/init/common.tpl`,
+    `${stageBasePath}/init/common_p.lz`,
+    `${stageBasePath}/init/common.lz`,
+  ];
+  if (bgName) {
+    paths.push(`${stageBasePath}/bg/${bgName}.gma`, `${stageBasePath}/bg/${bgName}.tpl`);
+  }
+  return paths;
+}
+
+function preloadNextStages() {
+  const course = game.course;
+  if (!course?.getNextStageIds) {
+    return;
+  }
+  const nextStageIds = course.getNextStageIds();
+  if (!nextStageIds.length) {
+    return;
+  }
+  const stageBasePath = game.stageBasePath ?? getStageBasePath(activeGameSource);
+  const uniqueIds = new Set(nextStageIds.filter((id) => typeof id === 'number' && id > 0));
+  for (const stageId of uniqueIds) {
+    const paths =
+      activeGameSource === GAME_SOURCES.SMB1
+        ? getStageAssetPathsSmb1(stageId, stageBasePath)
+        : getStageAssetPathsSmb2(stageId, activeGameSource, stageBasePath);
+    if (paths.length > 0) {
+      queuePrefetch(paths);
+    }
+  }
+}
+
 async function handleStageLoaded(stageId: number) {
   const token = ++stageLoadToken;
   renderReady = false;
@@ -1476,14 +1598,15 @@ async function handleStageLoaded(stageId: number) {
 
     running = true;
     paused = false;
-  renderReady = true;
-  lastTime = performance.now();
-  updateMobileMenuButtonVisibility();
-  maybeStartSmb2LikeStageFade();
-  markStageReady(stageId);
-  tryApplyPendingSnapshot(stageId);
-  return;
-}
+    renderReady = true;
+    lastTime = performance.now();
+    updateMobileMenuButtonVisibility();
+    maybeStartSmb2LikeStageFade();
+    markStageReady(stageId);
+    tryApplyPendingSnapshot(stageId);
+    preloadNextStages();
+    return;
+  }
 
   const stageData = await loadRenderStage(stageId);
   if (token !== stageLoadToken) {
@@ -1510,6 +1633,7 @@ async function handleStageLoaded(stageId: number) {
   maybeStartSmb2LikeStageFade();
   markStageReady(stageId);
   tryApplyPendingSnapshot(stageId);
+  preloadNextStages();
 }
 
 function setSelectOptions(select: HTMLSelectElement, values: { value: string; label: string }[]) {
@@ -2445,6 +2569,9 @@ async function leaveRoom() {
   }
   const roomId = lobbyRoom?.roomId;
   const wasHost = netplayState?.role === 'host';
+  lobbySignalShouldReconnect = false;
+  lobbySignalReconnectFn = null;
+  clearLobbySignalRetry();
   resetNetplayConnections();
   if (roomId && wasHost) {
     try {
@@ -2512,21 +2639,29 @@ function startHost(room: LobbyRoom) {
     updateLobbyUi();
     maybeSendStageSync();
   };
-  lobbySignal?.close();
-  lobbySignal = lobbyClient.openSignal(room.roomId, room.hostId, async (msg) => {
-    if (msg.to !== room.hostId) {
-      return;
-    }
-    if (msg.payload?.join) {
-      const offer = await createHostOffer(hostRelay!, msg.from);
-      hostRelay?.onSignal?.({ type: 'signal', from: room.hostId, to: msg.from, payload: { sdp: offer } });
-      return;
-    }
-    await applyHostSignal(hostRelay!, msg.from, msg.payload);
-  }, () => {
-    lobbyStatus!.textContent = 'Lobby: disconnected';
-    resetNetplayConnections();
-  });
+  lobbySignalShouldReconnect = true;
+  clearLobbySignalRetry();
+  lobbySignalReconnectFn = () => {
+    lobbySignal?.close();
+    lobbySignal = lobbyClient.openSignal(room.roomId, room.hostId, async (msg) => {
+      if (msg.to !== room.hostId) {
+        return;
+      }
+      if (msg.payload?.join) {
+        const offer = await createHostOffer(hostRelay!, msg.from);
+        hostRelay?.onSignal?.({ type: 'signal', from: room.hostId, to: msg.from, payload: { sdp: offer } });
+        return;
+      }
+      await applyHostSignal(hostRelay!, msg.from, msg.payload);
+    }, () => {
+      if (!lobbySignalShouldReconnect) {
+        return;
+      }
+      lobbyStatus!.textContent = 'Lobby: signal lost';
+      scheduleLobbySignalReconnect();
+    });
+  };
+  lobbySignalReconnectFn();
   hostRelay.onSignal = (signal) => lobbySignal?.send(signal);
   startLobbyHeartbeat(room.roomId);
   lobbyStatus!.textContent = `Lobby: hosting ${room.roomCode ?? room.roomId}`;
@@ -2551,16 +2686,24 @@ async function startClient(room: LobbyRoom) {
   clientPeer.playerId = playerId;
   clientPeer.hostId = room.hostId;
   await clientPeer.createConnection();
-  lobbySignal?.close();
-  lobbySignal = lobbyClient.openSignal(room.roomId, playerId, async (msg) => {
-    if (msg.to !== playerId) {
-      return;
-    }
-    await clientPeer?.handleSignal(msg.payload);
-  }, () => {
-    lobbyStatus!.textContent = 'Lobby: disconnected';
-    resetNetplayConnections();
-  });
+  lobbySignalShouldReconnect = true;
+  clearLobbySignalRetry();
+  lobbySignalReconnectFn = () => {
+    lobbySignal?.close();
+    lobbySignal = lobbyClient.openSignal(room.roomId, playerId, async (msg) => {
+      if (msg.to !== playerId) {
+        return;
+      }
+      await clientPeer?.handleSignal(msg.payload);
+    }, () => {
+      if (!lobbySignalShouldReconnect) {
+        return;
+      }
+      lobbyStatus!.textContent = 'Lobby: signal lost';
+      scheduleLobbySignalReconnect();
+    });
+  };
+  lobbySignalReconnectFn();
   clientPeer.onSignal = (signal) => lobbySignal?.send(signal);
   clientPeer.onDisconnect = () => {
     lobbyStatus!.textContent = 'Lobby: disconnected';

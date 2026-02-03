@@ -401,6 +401,31 @@ export class Mb2wsCourse {
     };
   }
 
+  getNextStageIds() {
+    const nextIndex = this.currentIndex + 1;
+    if (nextIndex >= this.stageList.length) {
+      return [];
+    }
+    const ids = new Set<number>();
+    const nextStageId = this.stageList[nextIndex];
+    if (nextStageId) {
+      ids.add(nextStageId);
+    }
+    if (this.mode === 'challenge') {
+      const greenIndex = nextIndex + 1;
+      const redIndex = nextIndex + 2;
+      const greenStageId = this.stageList[greenIndex];
+      const redStageId = this.stageList[redIndex];
+      if (greenStageId) {
+        ids.add(greenStageId);
+      }
+      if (redStageId) {
+        ids.add(redStageId);
+      }
+    }
+    return Array.from(ids.values());
+  }
+
   isBonusStage() {
     if (this.mode !== 'challenge') {
       return false;
@@ -417,7 +442,19 @@ export class Mb2wsCourse {
     if (this.currentIndex + 1 >= this.stageList.length) {
       return false;
     }
-    this.currentIndex += 1;
+    let step = 1;
+    if (this.mode === 'challenge' && _info?.goalType) {
+      const goalType = _info.goalType;
+      if (goalType === 'G' || goalType === 'g') {
+        step = 2;
+      } else if (goalType === 'R' || goalType === 'r') {
+        step = 3;
+      }
+    }
+    if (this.currentIndex + step >= this.stageList.length) {
+      return false;
+    }
+    this.currentIndex += step;
     this.currentStageId = this.stageList[this.currentIndex] ?? this.currentStageId;
     return true;
   }

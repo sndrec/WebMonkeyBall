@@ -76,6 +76,55 @@ export type LoadedPack = {
 
 let activePack: LoadedPack | null = null;
 let packEnabled = true;
+const urlSliceCache = new Map<string, ArrayBufferSlice>();
+const urlSliceInFlight = new Map<string, Promise<ArrayBufferSlice>>();
+const packSliceCache = new WeakMap<LoadedPack, Map<string, ArrayBufferSlice>>();
+const packSliceInFlight = new WeakMap<LoadedPack, Map<string, Promise<ArrayBufferSlice>>>();
+
+function getPackSliceCache(pack: LoadedPack) {
+  let cache = packSliceCache.get(pack);
+  if (!cache) {
+    cache = new Map();
+    packSliceCache.set(pack, cache);
+  }
+  return cache;
+}
+
+function getPackSliceInFlight(pack: LoadedPack) {
+  let inflight = packSliceInFlight.get(pack);
+  if (!inflight) {
+    inflight = new Map();
+    packSliceInFlight.set(pack, inflight);
+  }
+  return inflight;
+}
+
+async function fetchWithCache(
+  cacheKey: string,
+  cache: Map<string, ArrayBufferSlice>,
+  inflight: Map<string, Promise<ArrayBufferSlice>>,
+  fetcher: () => Promise<ArrayBufferSlice>,
+) {
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const pending = inflight.get(cacheKey);
+  if (pending) {
+    return pending;
+  }
+  const promise = (async () => {
+    try {
+      const slice = await fetcher();
+      cache.set(cacheKey, slice);
+      return slice;
+    } finally {
+      inflight.delete(cacheKey);
+    }
+  })();
+  inflight.set(cacheKey, promise);
+  return promise;
+}
 
 function normalizePackPath(path: string): string {
   return path.replace(/^\.\//, '').replace(/^\//, '');
@@ -168,21 +217,38 @@ export async function fetchPackSlice(path: string): Promise<ArrayBufferSlice> {
   const defaultBasePaths = Object.values(STAGE_BASE_PATHS).map((base) => normalizePackPath(base));
   const isDefaultPath = defaultBasePaths.some((base) => normalized === base || normalized.startsWith(`${base}/`));
   if (pack && isDefaultPath) {
-    const response = await fetch(path);
-    if (!response.ok) {
-      throw new Error(`Failed to load ${path}: ${response.status} ${response.statusText}`);
-    }
-    return new ArrayBufferSlice(await response.arrayBuffer());
+    const cacheKey = normalizePackPath(path);
+    return fetchWithCache(cacheKey, urlSliceCache, urlSliceInFlight, async () => {
+      const response = await fetch(path);
+      if (!response.ok) {
+        throw new Error(`Failed to load ${path}: ${response.status} ${response.statusText}`);
+      }
+      return new ArrayBufferSlice(await response.arrayBuffer());
+    });
   }
   if (!pack) {
-    const response = await fetch(path);
-    if (!response.ok) {
-      throw new Error(`Failed to load ${path}: ${response.status} ${response.statusText}`);
-    }
-    return new ArrayBufferSlice(await response.arrayBuffer());
+    const cacheKey = normalizePackPath(path);
+    return fetchWithCache(cacheKey, urlSliceCache, urlSliceInFlight, async () => {
+      const response = await fetch(path);
+      if (!response.ok) {
+        throw new Error(`Failed to load ${path}: ${response.status} ${response.statusText}`);
+      }
+      return new ArrayBufferSlice(await response.arrayBuffer());
+    });
   }
   const resolved = joinBasePath(pack.basePath, normalized);
-  return new ArrayBufferSlice(await pack.provider.fetch(resolved));
+  const cacheKey = normalizePackPath(resolved);
+  const cache = getPackSliceCache(pack);
+  const inflight = getPackSliceInFlight(pack);
+  return fetchWithCache(cacheKey, cache, inflight, async () => new ArrayBufferSlice(await pack.provider.fetch(resolved)));
+}
+
+export async function prefetchPackSlice(path: string): Promise<void> {
+  try {
+    await fetchPackSlice(path);
+  } catch (err) {
+    console.warn(`Prefetch failed for ${path}.`, err);
+  }
 }
 
 export async function fetchPackBuffer(path: string): Promise<ArrayBuffer> {

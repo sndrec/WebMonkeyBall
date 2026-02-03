@@ -548,16 +548,27 @@ const BG_LIGHTING = [
 ];
 
 export function goalTypeFromValue(value) {
-  switch (value) {
-    case 0x4200:
-      return 'B';
-    case 0x4700:
-      return 'G';
-    case 0x5200:
-      return 'R';
-    default:
-      return 'B';
+  const high = (value >> 8) & 0xff;
+  const low = value & 0xff;
+  if (high === 0x42 || low === 0x42) {
+    return 'B';
   }
+  if (high === 0x47 || low === 0x47) {
+    return 'G';
+  }
+  if (high === 0x52 || low === 0x52) {
+    return 'R';
+  }
+  if (low === 0x01) {
+    if (high === 0x01) {
+      return 'G';
+    }
+    if (high === 0x02) {
+      return 'R';
+    }
+    return 'B';
+  }
+  return 'B';
 }
 
 export function stageIdFromName(name) {

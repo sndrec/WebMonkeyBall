@@ -594,16 +594,14 @@ function mapAnimType(value: number) {
   }
 }
 
-function mapGoalType(type: string) {
-  switch (type) {
-    case 'G':
-      return GoalType.Green;
-    case 'R':
-      return GoalType.Red;
-    case 'B':
-    default:
-      return GoalType.Blue;
+function mapGoalType(type: string | number) {
+  if (type === 1 || type === '1' || type === 'G' || type === 'g') {
+    return GoalType.Green;
   }
+  if (type === 2 || type === '2' || type === 'R' || type === 'r') {
+    return GoalType.Red;
+  }
+  return GoalType.Blue;
 }
 
 function mapBananaType(type: number) {

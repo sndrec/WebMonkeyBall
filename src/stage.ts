@@ -16,6 +16,7 @@ import {
   GOAL_BAG_OFFSET,
   GOAL_BAG_OPEN_SCALE,
   STAGE_BASE_PATHS,
+  goalTypeFromValue,
 } from './constants.js';
 import {
   MatrixStack,
@@ -413,7 +414,7 @@ class StageParser {
         pos: this.readVec3(base),
         rot: this.readS16Vec(base + 0x0c),
         typeValue,
-        type: String.fromCharCode(typeValue >> 8),
+        type: goalTypeFromValue(typeValue),
       };
     }
     return goals;

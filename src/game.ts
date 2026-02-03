@@ -155,6 +155,7 @@ type CourseLike = {
     showDifficultyIcon?: boolean;
     isFinal: boolean;
   };
+  getNextStageIds?: () => number[];
   peekJumpCount?: (info: {
     flags: number;
     goalType: string | null;

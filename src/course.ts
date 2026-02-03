@@ -615,6 +615,33 @@ export class Course {
     };
   }
 
+  getNextStageIds() {
+    const ids = new Set<number>();
+    const next = this.findStageAfterFloors(this.scriptIndex, 1);
+    if (next) {
+      ids.add(next.id);
+    }
+    const goalTypes = ['B', 'G', 'R'];
+    const timerCandidates = [0, DEFAULT_STAGE_TIME];
+    for (const goalType of goalTypes) {
+      for (const timerCurr of timerCandidates) {
+        const jumpCount = this.peekJumpCount({
+          flags: INFO_FLAGS.GOAL,
+          goalType,
+          timerCurr,
+          u_currStageId: this.currentStageId,
+        });
+        if (typeof jumpCount === 'number' && jumpCount > 0) {
+          const jumpStage = this.findStageAfterFloors(this.scriptIndex, jumpCount);
+          if (jumpStage) {
+            ids.add(jumpStage.id);
+          }
+        }
+      }
+    }
+    return Array.from(ids.values());
+  }
+
   setStageIndex(stageIndex) {
     if (!this.stageList.length) {
       return;
@@ -780,6 +807,27 @@ export class Course {
           name: cmd.value,
           nextIndex: i + 1,
         };
+      }
+    }
+    return null;
+  }
+
+  findStageAfterFloors(startIndex, floors) {
+    if (floors <= 0) {
+      return null;
+    }
+    let count = 0;
+    for (let i = startIndex; i < this.script.length; i += 1) {
+      const cmd = this.script[i];
+      if (cmd.op === CMD_FLOOR && cmd.type === FLOOR_STAGE_ID) {
+        count += 1;
+        if (count === floors) {
+          return {
+            id: stageIdFromName(cmd.value),
+            name: cmd.value,
+            nextIndex: i + 1,
+          };
+        }
       }
     }
     return null;
