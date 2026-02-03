@@ -1110,7 +1110,8 @@ function getEstimatedHostFrame(state: NetplayState) {
     return state.lastReceivedHostFrame;
   }
   const elapsedSeconds = (performance.now() - state.lastHostFrameTimeMs) / 1000;
-  const advance = Math.min(elapsedSeconds / game.fixedStep, 1);
+  const maxAdvance = Math.max(1, state.maxRollback);
+  const advance = Math.min(elapsedSeconds / game.fixedStep, maxAdvance);
   return state.lastReceivedHostFrame + Math.max(0, advance);
 }
 
@@ -2303,14 +2304,19 @@ function netplayTick(dtSeconds: number) {
       state.lastPingTimeMs = nowMs;
       clientPeer.send({ type: 'ping', id: pingId });
     }
+    const hostAge = state.lastHostFrameTimeMs === null ? null : nowMs - state.lastHostFrameTimeMs;
+    const lastRequest = state.lastSnapshotRequestTimeMs ?? 0;
+    const canRequest = state.lastSnapshotRequestTimeMs === null
+      || (nowMs - lastRequest) >= NETPLAY_SNAPSHOT_COOLDOWN_MS;
+    if (hostAge !== null && hostAge >= NETPLAY_HOST_STALL_MS && canRequest) {
+      state.lastSnapshotRequestTimeMs = nowMs;
+      requestSnapshot('lag', state.lastReceivedHostFrame, true);
+    }
     if (drift > NETPLAY_LAG_FUSE_FRAMES) {
       if (state.lagBehindSinceMs === null) {
         state.lagBehindSinceMs = nowMs;
       }
       const timeBehind = nowMs - state.lagBehindSinceMs;
-      const lastRequest = state.lastSnapshotRequestTimeMs ?? 0;
-      const canRequest = state.lastSnapshotRequestTimeMs === null
-        || (nowMs - lastRequest) >= NETPLAY_SNAPSHOT_COOLDOWN_MS;
       if (timeBehind >= NETPLAY_LAG_FUSE_MS && canRequest) {
         state.lastSnapshotRequestTimeMs = nowMs;
         requestSnapshot('lag', state.lastReceivedHostFrame, true);
