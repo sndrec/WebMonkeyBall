@@ -12,6 +12,15 @@ export type SignalMessage = {
 };
 
 const DEFAULT_STUN = [{ urls: 'stun:stun.l.google.com:19302' }];
+const FAST_MESSAGE_TYPES = new Set(['frame', 'input', 'ack', 'ping', 'pong']);
+
+function isFastMessage(msg: { type: string }) {
+  return FAST_MESSAGE_TYPES.has(msg.type);
+}
+
+function getChannelRole(label: string) {
+  return label === 'fast' ? 'fast' : 'ctrl';
+}
 
 export class LobbyClient {
   constructor(private baseUrl: string) {}
@@ -95,7 +104,8 @@ export class LobbyClient {
 
 export class HostRelay {
   private peers = new Map<number, RTCPeerConnection>();
-  private channels = new Map<number, RTCDataChannel>();
+  private channels = new Map<number, { ctrl?: RTCDataChannel; fast?: RTCDataChannel }>();
+  private connected = new Set<number>();
 
   constructor(private onMessage: (playerId: number, msg: ClientToHostMessage) => void) {}
 
@@ -118,10 +128,16 @@ export class HostRelay {
   }
 
   attachChannel(playerId: number, channel: RTCDataChannel) {
-    this.channels.set(playerId, channel);
+    const role = getChannelRole(channel.label);
+    const entry = this.channels.get(playerId) ?? {};
+    entry[role] = channel;
+    this.channels.set(playerId, entry);
     channel.binaryType = 'arraybuffer';
     channel.addEventListener('open', () => {
-      this.onConnect?.(playerId);
+      if (role === 'ctrl' && !this.connected.has(playerId)) {
+        this.connected.add(playerId);
+        this.onConnect?.(playerId);
+      }
     });
     channel.addEventListener('message', (event) => {
       try {
@@ -134,33 +150,73 @@ export class HostRelay {
       }
     });
     channel.addEventListener('close', () => {
-      this.onDisconnect?.(playerId);
+      const current = this.channels.get(playerId);
+      const ctrl = current?.ctrl;
+      if (role === 'ctrl' || !ctrl || ctrl.readyState === 'closed' || ctrl.readyState === 'closing') {
+        if (this.connected.has(playerId)) {
+          this.connected.delete(playerId);
+          this.onDisconnect?.(playerId);
+        }
+      }
     });
+  }
+
+  private pickChannel(playerId: number, preferFast: boolean) {
+    const entry = this.channels.get(playerId);
+    if (!entry) {
+      return null;
+    }
+    const primary = preferFast ? entry.fast : entry.ctrl;
+    const fallback = preferFast ? entry.ctrl : entry.fast;
+    if (primary && primary.readyState === 'open') {
+      return primary;
+    }
+    if (fallback && fallback.readyState === 'open') {
+      return fallback;
+    }
+    return null;
   }
 
   broadcast(msg: HostToClientMessage) {
     const payload = JSON.stringify(msg);
-    for (const channel of this.channels.values()) {
-      if (channel.readyState === 'open') {
+    const preferFast = isFastMessage(msg);
+    for (const playerId of this.channels.keys()) {
+      const channel = this.pickChannel(playerId, preferFast);
+      if (channel) {
         channel.send(payload);
       }
     }
   }
 
+  getChannelStates() {
+    const states: Array<{ playerId: number; readyState: string }> = [];
+    for (const [playerId, entry] of this.channels.entries()) {
+      const ctrl = entry.ctrl?.readyState ?? 'none';
+      const fast = entry.fast?.readyState ?? 'none';
+      states.push({ playerId, readyState: `ctrl=${ctrl} fast=${fast}` });
+    }
+    return states;
+  }
+
   sendTo(playerId: number, msg: HostToClientMessage) {
-    const channel = this.channels.get(playerId);
-    if (!channel || channel.readyState !== 'open') {
+    const channel = this.pickChannel(playerId, isFastMessage(msg));
+    if (!channel) {
       return;
     }
     channel.send(JSON.stringify(msg));
   }
 
   closeAll() {
-    for (const channel of this.channels.values()) {
-      try {
-        channel.close();
-      } catch {
-        // Ignore.
+    for (const entry of this.channels.values()) {
+      for (const channel of [entry.ctrl, entry.fast]) {
+        if (!channel) {
+          continue;
+        }
+        try {
+          channel.close();
+        } catch {
+          // Ignore.
+        }
       }
     }
     for (const peer of this.peers.values()) {
@@ -172,6 +228,7 @@ export class HostRelay {
     }
     this.channels.clear();
     this.peers.clear();
+    this.connected.clear();
   }
 
   hostId = 0;
@@ -182,12 +239,18 @@ export class HostRelay {
 
 export class ClientPeer {
   private pc: RTCPeerConnection | null = null;
-  private channel: RTCDataChannel | null = null;
+  private ctrlChannel: RTCDataChannel | null = null;
+  private fastChannel: RTCDataChannel | null = null;
 
   constructor(private onMessage: (msg: HostToClientMessage) => void) {}
 
   private attachChannel(channel: RTCDataChannel) {
-    this.channel = channel;
+    const role = getChannelRole(channel.label);
+    if (role === 'fast') {
+      this.fastChannel = channel;
+    } else {
+      this.ctrlChannel = channel;
+    }
     channel.addEventListener('message', (event) => {
       try {
         const msg = JSON.parse(event.data) as HostToClientMessage;
@@ -197,7 +260,9 @@ export class ClientPeer {
       }
     });
     channel.addEventListener('close', () => {
-      this.onDisconnect?.();
+      if (role === 'ctrl') {
+        this.onDisconnect?.();
+      }
     });
   }
 
@@ -216,23 +281,42 @@ export class ClientPeer {
   }
 
   send(msg: ClientToHostMessage) {
-    if (this.channel?.readyState === 'open') {
-      this.channel.send(JSON.stringify(msg));
+    const preferFast = isFastMessage(msg);
+    const primary = preferFast ? this.fastChannel : this.ctrlChannel;
+    const fallback = preferFast ? this.ctrlChannel : this.fastChannel;
+    if (primary?.readyState === 'open') {
+      primary.send(JSON.stringify(msg));
+      return;
+    }
+    if (fallback?.readyState === 'open') {
+      fallback.send(JSON.stringify(msg));
     }
   }
 
+  getChannelState(): string {
+    const ctrl = this.ctrlChannel?.readyState ?? 'none';
+    const fast = this.fastChannel?.readyState ?? 'none';
+    return `ctrl=${ctrl} fast=${fast}`;
+  }
+
   close() {
-    try {
-      this.channel?.close();
-    } catch {
-      // Ignore.
+    for (const channel of [this.ctrlChannel, this.fastChannel]) {
+      if (!channel) {
+        continue;
+      }
+      try {
+        channel.close();
+      } catch {
+        // Ignore.
+      }
     }
     try {
       this.pc?.close();
     } catch {
       // Ignore.
     }
-    this.channel = null;
+    this.ctrlChannel = null;
+    this.fastChannel = null;
     this.pc = null;
   }
 
@@ -260,8 +344,10 @@ export class ClientPeer {
 
 export async function createHostOffer(host: HostRelay, playerId: number) {
   const pc = host.getPeer(playerId);
-  const channel = pc.createDataChannel('game');
-  host.attachChannel(playerId, channel);
+  const ctrl = pc.createDataChannel('ctrl');
+  host.attachChannel(playerId, ctrl);
+  const fast = pc.createDataChannel('fast', { ordered: false, maxRetransmits: 0 });
+  host.attachChannel(playerId, fast);
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   return pc.localDescription;

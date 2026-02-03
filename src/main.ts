@@ -206,6 +206,26 @@ const gamepadCalibrationOverlay = document.getElementById('gamepad-calibration')
 const gamepadCalibrationMap = document.getElementById('gamepad-calibration-map') as HTMLCanvasElement | null;
 const gamepadCalibrationButton = document.getElementById('gamepad-calibrate') as HTMLButtonElement | null;
 const gamepadCalibrationCtx = gamepadCalibrationMap?.getContext('2d') ?? null;
+const netplayDebugWrap = document.createElement('div');
+const netplayDebugWarningEl = document.createElement('div');
+const netplayDebugInfoEl = document.createElement('div');
+netplayDebugWrap.id = 'netplay-debug';
+netplayDebugWrap.style.position = 'fixed';
+netplayDebugWrap.style.left = '12px';
+netplayDebugWrap.style.top = '120px';
+netplayDebugWrap.style.zIndex = '10000';
+netplayDebugWrap.style.color = '#ffffff';
+netplayDebugWrap.style.font = '12px/1.4 system-ui, sans-serif';
+netplayDebugWrap.style.whiteSpace = 'pre';
+netplayDebugWrap.style.pointerEvents = 'none';
+netplayDebugWrap.style.textShadow = '0 1px 2px rgba(0,0,0,0.7)';
+netplayDebugWrap.style.display = 'none';
+netplayDebugWarningEl.style.color = '#ff6666';
+netplayDebugWarningEl.style.fontWeight = '600';
+netplayDebugWarningEl.style.marginBottom = '4px';
+netplayDebugInfoEl.style.whiteSpace = 'pre';
+netplayDebugWrap.append(netplayDebugWarningEl, netplayDebugInfoEl);
+document.body.appendChild(netplayDebugWrap);
 const startButton = document.getElementById('start') as HTMLButtonElement;
 const resumeButton = document.getElementById('resume') as HTMLButtonElement;
 const difficultySelect = document.getElementById('difficulty') as HTMLSelectElement;
@@ -660,6 +680,10 @@ const NETPLAY_LAG_FUSE_FRAMES = 24;
 const NETPLAY_LAG_FUSE_MS = 500;
 const NETPLAY_SNAPSHOT_COOLDOWN_MS = 1000;
 const NETPLAY_PING_INTERVAL_MS = 1000;
+const NETPLAY_HOST_STALL_MS = 3000;
+const NETPLAY_HOST_SNAPSHOT_BEHIND_FRAMES = 120;
+const NETPLAY_HOST_SNAPSHOT_COOLDOWN_MS = 1500;
+const NETPLAY_DEBUG_STORAGE_KEY = 'smb_netplay_debug';
 const LOBBY_HEARTBEAT_INTERVAL_MS = 15000;
 const LOBBY_HEARTBEAT_FALLBACK_MS = 12000;
 
@@ -742,10 +766,34 @@ function recordNetplayPerf(startMs: number, simTicks = 0) {
   logNetplayPerf(nowMs);
 }
 
+function isNetplayDebugEnabled() {
+  const globalFlag = (window as any).NETPLAY_DEBUG;
+  if (globalFlag !== undefined) {
+    return !!globalFlag;
+  }
+  try {
+    return localStorage.getItem(NETPLAY_DEBUG_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setNetplayDebugEnabled(enabled: boolean) {
+  (window as any).NETPLAY_DEBUG = enabled;
+  try {
+    localStorage.setItem(NETPLAY_DEBUG_STORAGE_KEY, enabled ? '1' : '0');
+  } catch {
+    // Ignore storage issues.
+  }
+}
+
+(window as any).setNetplayDebug = setNetplayDebugEnabled;
+
 type NetplayRole = 'host' | 'client';
 type NetplayClientState = {
   lastAckedHostFrame: number;
   lastAckedClientInput: number;
+  lastSnapshotMs: number | null;
 };
 type NetplayState = {
   role: NetplayRole;
@@ -878,6 +926,7 @@ function resetNetplayForStage() {
   for (const clientState of netplayState.clientStates.values()) {
     clientState.lastAckedHostFrame = -1;
     clientState.lastAckedClientInput = -1;
+    clientState.lastSnapshotMs = null;
   }
   resetNetplaySession();
 }
@@ -1831,7 +1880,7 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
   }
   let clientState = state.clientStates.get(playerId);
   if (!clientState) {
-    clientState = { lastAckedHostFrame: -1, lastAckedClientInput: -1 };
+    clientState = { lastAckedHostFrame: -1, lastAckedClientInput: -1, lastSnapshotMs: null };
     state.clientStates.set(playerId, clientState);
   }
   if (!game.players.some((player) => player.id === playerId)) {
@@ -1948,6 +1997,29 @@ function hostResendFrames(currentFrame: number) {
   }
   if (pendingFrames) {
     netplayState.pendingHostUpdates.clear();
+  }
+}
+
+function hostMaybeSendSnapshots(nowMs: number) {
+  if (!hostRelay || !netplayState || netplayState.role !== 'host') {
+    return;
+  }
+  const state = netplayState;
+  const currentFrame = state.session.getFrame();
+  for (const [playerId, clientState] of state.clientStates.entries()) {
+    if (clientState.lastAckedHostFrame < 0) {
+      continue;
+    }
+    const behind = currentFrame - clientState.lastAckedHostFrame;
+    if (behind < NETPLAY_HOST_SNAPSHOT_BEHIND_FRAMES) {
+      continue;
+    }
+    const lastSnap = clientState.lastSnapshotMs;
+    if (lastSnap !== null && (nowMs - lastSnap) < NETPLAY_HOST_SNAPSHOT_COOLDOWN_MS) {
+      continue;
+    }
+    clientState.lastSnapshotMs = nowMs;
+    sendSnapshotToClient(playerId, currentFrame);
   }
 }
 
@@ -2087,6 +2159,9 @@ function netplayTick(dtSeconds: number) {
       return;
     }
   }
+  if (netplayAccumulator < 0) {
+    netplayAccumulator = 0;
+  }
   const session = state.session;
   const currentFrame = session.getFrame();
   const targetFrame = getNetplayTargetFrame(state, currentFrame);
@@ -2148,8 +2223,91 @@ function netplayTick(dtSeconds: number) {
     netplayStep();
     netplayAccumulator -= game.fixedStep;
   }
+  if (netplayAccumulator < 0) {
+    netplayAccumulator = 0;
+  }
+  if (state.role === 'host') {
+    hostMaybeSendSnapshots(nowMs);
+  }
   game.accumulator = Math.max(0, Math.min(game.fixedStep, netplayAccumulator));
   recordNetplayPerf(perfStart, ticks);
+}
+
+function updateNetplayDebugOverlay(nowMs: number) {
+  if (!netplayEnabled || !netplayState) {
+    game.netplayDebugLines = null;
+    game.netplayWarning = null;
+    netplayDebugWrap.style.display = 'none';
+    return;
+  }
+  const state = netplayState;
+  const localPlayer = game.getLocalPlayer?.() ?? null;
+  let warning: string | null = null;
+  if (state.role === 'client') {
+    const hostAge = state.lastHostFrameTimeMs === null ? null : nowMs - state.lastHostFrameTimeMs;
+    if (hostAge !== null && hostAge > NETPLAY_HOST_STALL_MS) {
+      warning = `NET: host frames stale ${(hostAge / 1000).toFixed(1)}s`;
+    } else if (state.awaitingStageSync) {
+      warning = 'NET: awaiting stage sync';
+    }
+  }
+  if (!warning && localPlayer) {
+    if (localPlayer.isSpectator) {
+      warning = 'NET: local spectator';
+    } else if (localPlayer.pendingSpawn) {
+      warning = 'NET: local pending spawn';
+    }
+  }
+  game.netplayWarning = warning;
+
+  if (!isNetplayDebugEnabled()) {
+    game.netplayDebugLines = null;
+    if (!warning) {
+      netplayDebugWrap.style.display = 'none';
+      return;
+    }
+    netplayDebugWarningEl.textContent = warning;
+    netplayDebugInfoEl.textContent = '';
+    netplayDebugWrap.style.display = 'block';
+    return;
+  }
+
+  const sessionFrame = state.session.getFrame();
+  const simFrame = sessionFrame + (netplayAccumulator / game.fixedStep);
+  const targetFrame = getNetplayTargetFrame(state, sessionFrame);
+  const drift = targetFrame - simFrame;
+  const lines: string[] = [];
+  lines.push(`net ${state.role} id=${game.localPlayerId}`);
+  lines.push(`stage=${state.currentStageId ?? game.stage?.stageId ?? 0} seq=${state.stageSeq}`);
+  lines.push(`frame=${sessionFrame} host=${state.lastReceivedHostFrame} ack=${state.lastAckedLocalFrame}`);
+  lines.push(`drift=${drift.toFixed(2)} acc=${netplayAccumulator.toFixed(3)}`);
+  lines.push(`sync=${state.awaitingStageSync ? 1 : 0} ready=${state.awaitingStageReady ? 1 : 0} snap=${state.awaitingSnapshot ? 1 : 0}`);
+  if (state.role === 'client') {
+    const chanState = clientPeer?.getChannelState?.() ?? 'none';
+    const hostAge = state.lastHostFrameTimeMs === null ? 'n/a' : `${((nowMs - state.lastHostFrameTimeMs) / 1000).toFixed(1)}s`;
+    lines.push(`peer=${chanState} hostAge=${hostAge}`);
+  } else {
+    const peers = hostRelay?.getChannelStates?.() ?? [];
+    const peerText = peers.length
+      ? peers.map((peer) => `${peer.playerId}:${peer.readyState}`).join(' ')
+      : 'none';
+    lines.push(`peers=${peerText}`);
+    if (state.clientStates.size > 0) {
+      const currentFrame = state.session.getFrame();
+      const behind = Array.from(state.clientStates.entries())
+        .map(([playerId, clientState]) => `${playerId}:${currentFrame - clientState.lastAckedHostFrame}`)
+        .join(' ');
+      lines.push(`behind=${behind}`);
+    }
+  }
+  if (localPlayer) {
+    lines.push(`local spec=${localPlayer.isSpectator ? 1 : 0} spawn=${localPlayer.pendingSpawn ? 1 : 0} state=${localPlayer.ball?.state ?? 0}`);
+  }
+  lines.push(`intro=${game.introTimerFrames} timeover=${game.timeoverTimerFrames}`);
+  game.netplayDebugLines = lines;
+  netplayDebugWarningEl.textContent = warning ?? '';
+  netplayDebugInfoEl.textContent = lines.join('\n');
+  netplayDebugWrap.style.display = 'block';
 }
 
 function setReplayStatus(text: string) {
@@ -2320,7 +2478,7 @@ function startHost(room: LobbyRoom) {
       return;
     }
     if (!state.clientStates.has(playerId)) {
-      state.clientStates.set(playerId, { lastAckedHostFrame: -1, lastAckedClientInput: -1 });
+      state.clientStates.set(playerId, { lastAckedHostFrame: -1, lastAckedClientInput: -1, lastSnapshotMs: null });
     }
     game.addPlayer(playerId, { spectator: false });
     const player = game.players.find((p) => p.id === playerId);
@@ -2727,6 +2885,7 @@ function renderFrame(now: number) {
   } else {
     game.update(dtSeconds);
   }
+  updateNetplayDebugOverlay(now);
 
   const shouldRender = interpolationEnabled || (now - lastRenderTime) >= RENDER_FRAME_MS;
   if (!shouldRender) {

@@ -372,6 +372,8 @@ export class Game {
   };
   public simTick: number;
   public netplayRttMs: number | null;
+  public netplayDebugLines: string[] | null;
+  public netplayWarning: string | null;
   public suppressVisualEffects: boolean;
   public inputFeed: (QuantizedStick | QuantizedInput)[] | null;
   public inputFeedIndex: number;
@@ -496,6 +498,8 @@ export class Game {
     };
     this.simTick = 0;
     this.netplayRttMs = null;
+    this.netplayDebugLines = null;
+    this.netplayWarning = null;
     this.suppressVisualEffects = false;
     this.inputFeed = null;
     this.inputFeedIndex = 0;
