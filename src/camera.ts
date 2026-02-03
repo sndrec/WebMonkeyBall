@@ -727,14 +727,16 @@ export class GameplayCamera {
     const pitchRad = this.rotX * S16_TO_RAD;
     const cosPitch = Math.cos(pitchRad);
     const sinPitch = Math.sin(pitchRad);
-    const forwardX = Math.sin(yawRad) * cosPitch;
+    const forwardX = -Math.sin(yawRad) * cosPitch;
     const forwardY = sinPitch;
-    const forwardZ = Math.cos(yawRad) * cosPitch;
-    const rightX = Math.cos(yawRad);
-    const rightZ = -Math.sin(yawRad);
+    const forwardZ = -Math.cos(yawRad) * cosPitch;
+    const rightX = -forwardZ;
+    const rightZ = forwardX;
 
-    this.eye.x += (rightX * moveX + forwardX * -moveY) * FREE_FLY_MOVE_SPEED;
-    this.eye.z += (rightZ * moveX + forwardZ * -moveY) * FREE_FLY_MOVE_SPEED;
+    const forwardScale = -moveY;
+    this.eye.x += (rightX * moveX + forwardX * forwardScale) * FREE_FLY_MOVE_SPEED;
+    this.eye.y += (forwardY * forwardScale) * FREE_FLY_MOVE_SPEED;
+    this.eye.z += (rightZ * moveX + forwardZ * forwardScale) * FREE_FLY_MOVE_SPEED;
 
     this.lookAt.x = this.eye.x + forwardX;
     this.lookAt.y = this.eye.y + forwardY;

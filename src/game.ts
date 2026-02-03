@@ -2626,8 +2626,9 @@ export class Game {
     localPlayer.goalSkipTimerFrames = GOAL_SKIP_TOTAL_FRAMES;
     startGoal(localBall);
     if (this.players.length > 1) {
+    if (this.players.length > 1) {
       localPlayer.spectateTimerFrames = GOAL_SPECTATE_DESTROY_FRAMES;
-      this.enterFreeFlyCamera(localPlayer);
+    }
     }
     if (!this.suppressAudioEffects) {
       void this.audio?.playGoal(this.gameSource);
@@ -2954,6 +2955,9 @@ export class Game {
             if (player.spectateTimerFrames <= 0) {
               player.spectateTimerFrames = 0;
               this.hidePlayerBall(player);
+              if (player.id === this.localPlayerId && !player.freeFly && this.players.length > 1) {
+                this.enterFreeFlyCamera(player);
+              }
             }
           }
         }
@@ -3176,7 +3180,12 @@ export class Game {
               }
               const moveStick = this.input?.getStick?.() ?? { x: 0, y: 0 };
               const lookStick = this.input?.getLookStick?.() ?? { x: 0, y: 0 };
-              player.camera.updateSpectatorFreeFly(moveStick, lookStick, cameraPaused);
+              const mouseLook = this.input?.consumeMouseLook?.() ?? { x: 0, y: 0 };
+              const lookInput = {
+                x: lookStick.x + mouseLook.x * 0.005,
+                y: lookStick.y + mouseLook.y * 0.005,
+              };
+              player.camera.updateSpectatorFreeFly(moveStick, lookInput, cameraPaused);
               if (cameraPoses) {
                 this.captureCameraPose(cameraPoses.curr);
               }

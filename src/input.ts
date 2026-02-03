@@ -22,6 +22,15 @@ export class Input {
       active: false,
     };
 
+    this.mouseLook = {
+      active: false,
+      dx: 0,
+      dy: 0,
+      lastX: 0,
+      lastY: 0,
+      suppressUntil: 0,
+    };
+
     this.gyro = {
       baselineSet: false,
       baseBeta: 0,
@@ -215,6 +224,44 @@ export class Input {
           this.gamepadIndex = null;
         }
       },
+      mousedown: (event) => {
+        if (event.button !== 2) {
+          return;
+        }
+        this.mouseLook.active = true;
+        this.mouseLook.lastX = event.clientX;
+        this.mouseLook.lastY = event.clientY;
+        event.preventDefault();
+      },
+      mouseup: (event) => {
+        if (event.button !== 2) {
+          return;
+        }
+        this.mouseLook.active = false;
+        this.mouseLook.suppressUntil = (typeof performance !== 'undefined' ? performance.now() : Date.now()) + 250;
+      },
+      mousemove: (event) => {
+        if (!this.mouseLook.active) {
+          return;
+        }
+        const dx = typeof event.movementX === 'number'
+          ? event.movementX
+          : event.clientX - this.mouseLook.lastX;
+        const dy = typeof event.movementY === 'number'
+          ? event.movementY
+          : event.clientY - this.mouseLook.lastY;
+        this.mouseLook.lastX = event.clientX;
+        this.mouseLook.lastY = event.clientY;
+        this.mouseLook.dx += dx;
+        this.mouseLook.dy += dy;
+        event.preventDefault();
+      },
+      contextmenu: (event) => {
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        if (this.mouseLook.active || now < this.mouseLook.suppressUntil) {
+          event.preventDefault();
+        }
+      },
     };
     window.addEventListener('keydown', this.handlers.keydown);
     window.addEventListener('keyup', this.handlers.keyup);
@@ -235,6 +282,10 @@ export class Input {
 
     window.addEventListener('gamepadconnected', this.handlers.gamepadconnected);
     window.addEventListener('gamepaddisconnected', this.handlers.gamepaddisconnected);
+    window.addEventListener('mousedown', this.handlers.mousedown);
+    window.addEventListener('mouseup', this.handlers.mouseup);
+    window.addEventListener('mousemove', this.handlers.mousemove);
+    window.addEventListener('contextmenu', this.handlers.contextmenu);
   }
 
   destroy() {
@@ -257,6 +308,10 @@ export class Input {
 
     window.removeEventListener('gamepadconnected', this.handlers.gamepadconnected);
     window.removeEventListener('gamepaddisconnected', this.handlers.gamepaddisconnected);
+    window.removeEventListener('mousedown', this.handlers.mousedown);
+    window.removeEventListener('mouseup', this.handlers.mouseup);
+    window.removeEventListener('mousemove', this.handlers.mousemove);
+    window.removeEventListener('contextmenu', this.handlers.contextmenu);
   }
 
   getControlMode() {
@@ -565,6 +620,14 @@ export class Input {
       x: clamp(rawX, -1, 1),
       y: clamp(rawY, -1, 1),
     };
+  }
+
+  consumeMouseLook() {
+    const dx = this.mouseLook.dx;
+    const dy = this.mouseLook.dy;
+    this.mouseLook.dx = 0;
+    this.mouseLook.dy = 0;
+    return { x: dx, y: dy };
   }
 
   getLookStick() {
