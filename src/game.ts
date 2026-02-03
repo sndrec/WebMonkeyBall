@@ -2868,7 +2868,7 @@ export class Game {
         let avgGravY = 0;
         let avgGravZ = 0;
         for (const player of simPlayers) {
-          if (player.isSpectator || player.pendingSpawn || player.finished) {
+          if (player.isSpectator || player.pendingSpawn) {
             continue;
           }
           const playerInputEnabled = stageInputEnabled
@@ -2876,11 +2876,13 @@ export class Game {
             && player.ringoutTimerFrames <= 0
             && !player.finished;
           const stick = this.readDeterministicStickForPlayer(player, playerInputEnabled);
-          tiltCount += 1;
           player.world.updateInput(stick, player.cameraRotY);
-          avgGravX += player.world.gravity.x;
-          avgGravY += player.world.gravity.y;
-          avgGravZ += player.world.gravity.z;
+          if (!player.finished) {
+            tiltCount += 1;
+            avgGravX += player.world.gravity.x;
+            avgGravY += player.world.gravity.y;
+            avgGravZ += player.world.gravity.z;
+          }
         }
         if (this.world) {
           if (tiltCount > 0) {
@@ -3182,8 +3184,8 @@ export class Game {
               const lookStick = this.input?.getLookStick?.() ?? { x: 0, y: 0 };
               const mouseLook = this.input?.consumeMouseLook?.() ?? { x: 0, y: 0 };
               const lookInput = {
-                x: lookStick.x + mouseLook.x * 0.005,
-                y: lookStick.y + mouseLook.y * 0.005,
+                x: -lookStick.x - mouseLook.x * 0.025,
+                y: -lookStick.y - mouseLook.y * 0.025,
               };
               player.camera.updateSpectatorFreeFly(moveStick, lookInput, cameraPaused);
               if (cameraPoses) {
