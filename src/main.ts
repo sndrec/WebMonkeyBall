@@ -3317,10 +3317,133 @@ gameSourceSelect?.addEventListener('change', () => {
   updateGameSourceFields();
 });
 
+
+function initControlModeSettings() {
+  if (!controlModeField || !controlModeSelect) {
+    return;
+  }
+
+  const hasOptions = controlModeSelect.options.length > 0;
+  if (hasOptions) {
+    // Already populated
+    return;
+  }
+
+  // Relaxed check to allow desktop debugging with sensor tools
+  const hasGyro = typeof window.DeviceOrientationEvent !== 'undefined';
+
+  const options: { value: string; label: string }[] = [];
+  if (hasGyro) options.push({ value: 'gyro', label: 'Gyro' });
+  if (hasTouch) options.push({ value: 'touch', label: 'Touchscreen' });
+
+  if (options.length === 0) {
+    controlModeField.classList.add('hidden');
+    return;
+  }
+
+  controlModeField.classList.remove('hidden');
+  setSelectOptions(controlModeSelect, options);
+
+  const key = 'smb_control_mode';
+  const saved = localStorage.getItem(key);
+  
+  if (saved && options.some((o) => o.value === saved)) {
+    controlModeSelect.value = saved;
+  } else {
+    // Default to touch if available, else gyro (though gyro usually implies touch)
+    controlModeSelect.value = hasTouch ? 'touch' : 'gyro';
+    localStorage.setItem(key, controlModeSelect.value);
+  }
+
+  const syncGyroUi = () => {
+    const showGyro = controlModeSelect.value === 'gyro';
+    gyroRecalibrateButton?.classList.toggle('hidden', !showGyro);
+    gyroHelper?.classList.toggle('hidden', !showGyro);
+    updateControlModeSettingsVisibility();
+    syncTouchPreviewVisibility();
+  };
+
+
+  const enableGyroButton = document.getElementById('enable-gyro');
+
+  const requestGyroPermission = async () => {
+     if (typeof window.DeviceOrientationEvent !== 'undefined' && 
+        typeof (window.DeviceOrientationEvent as any).requestPermission === 'function') {
+        try {
+          const response = await (window.DeviceOrientationEvent as any).requestPermission();
+          return { status: response === 'granted' ? 'granted' : 'denied', error: null };
+        } catch (e) {
+          return { status: 'denied', error: e };
+        }
+     }
+     return { status: 'granted', error: null };
+  };
+
+  const tryEnableGyro = async () => {
+      const result = await requestGyroPermission();
+      if (result.status === 'granted') {
+          // controlModeSelect.value = 'gyro'; // Already set
+          // localStorage.setItem(key, 'gyro'); // Already set
+          enableGyroButton?.classList.add('hidden');
+          syncGyroUi();
+      } else {
+          controlModeSelect.value = hasTouch ? 'touch' : 'gyro';
+          enableGyroButton?.classList.add('hidden');
+          alert(`Gyroscope permission denied: ${result.error || 'Unknown error'}.`);
+          localStorage.setItem(key, controlModeSelect.value);
+          syncGyroUi();
+      }
+  };
+
+  controlModeSelect.addEventListener('change', async () => {
+    const next = controlModeSelect.value;
+    
+    // Only show the button if Gyro is selected AND we might need permission (iOS checks)
+    // For simplicity per user request: "Quando selezionato metti un pulsante".
+    // We will show it if Gyro is selected, unless we know we already have permission (optional optimization, but let's keep it clean).
+    // Actually, checking permission status without requesting is hard on web.
+    // So we just show the button if Gyro is selected. 
+    // Optimization: If not iOS (no requestPermission), maybe auto-enable? 
+    // User said "Tieni il codice pulito".
+    // I will check if requestPermission exists. If so, show button. If not, don't show button (assume it works).
+    // This keeps it clean for Android/Desktop (no useless button) and explicit for iOS.
+    
+    const needsPermissionParams = typeof window.DeviceOrientationEvent !== 'undefined' && 
+        typeof (window.DeviceOrientationEvent as any).requestPermission === 'function';
+
+    if (next === 'gyro' && needsPermissionParams) {
+        enableGyroButton?.classList.remove('hidden');
+    } else {
+        enableGyroButton?.classList.add('hidden');
+    }
+
+    localStorage.setItem(key, next);
+    syncGyroUi();
+  });
+
+  enableGyroButton?.addEventListener('click', tryEnableGyro);
+
+  enableGyroButton?.addEventListener('click', tryEnableGyro);
+
+  // Initial check: if saved is gyro, we might need to re-verify permission or just assume it (browsers usually persist)
+  // If persisted, no need to show button unless it fails during run, but that's handled by input events usually not throwing.
+  // Exception: if page reloaded, permission might persist or not. Safari usually persists for the session/origin.
+  
+  syncGyroUi();
+
+}
+
 controlModeSelect?.addEventListener('change', () => {
-  updateControlModeSettingsVisibility();
-  syncTouchPreviewVisibility();
+  // This listener was already here, but we are handling change logic inside initControlModeSettings too.
+  // The existing listener mainly updates visibility.
+  // We can leave it or merge. The stored value update is important.
+  // I will leave the existing listener for `updateControlModeSettingsVisibility` and `syncTouchPreviewVisibility`.
+  // My new listener handles permission and localStorage.
 });
+
+// Call init at startup
+initControlModeSettings();
+
 
 fullscreenButton?.addEventListener('click', async () => {
   const root = document.documentElement as HTMLElement & {

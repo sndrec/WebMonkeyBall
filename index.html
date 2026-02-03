@@ -179,6 +179,7 @@
             <option value="master">Master</option>
           </select>
         </label>
+        <button id="enable-gyro" class="hidden" style="margin-top: 1.5rem; background-color: #e67e22; padding: 0.5rem; font-size: 0.8rem;">Enable Gyro</button>
         <label class="field">
           <span>Stage</span>
           <select id="smb1-stage"></select>
@@ -275,90 +276,7 @@
     </div>
   </div>
 
-  <script type="module">
-    const field = document.getElementById('control-mode-field');
-    const select = document.getElementById('control-mode');
-    const hasTouch = ('ontouchstart' in window) || ((navigator.maxTouchPoints ?? 0) > 0);
-    const hasCoarsePointer = window.matchMedia?.('(pointer: coarse)')?.matches ?? false;
-    const hasGyro = typeof window.DeviceOrientationEvent !== 'undefined' && (hasTouch || hasCoarsePointer);
-    const gyroButton = document.getElementById('gyro-recalibrate');
-    const gyroHelper = document.getElementById('gyro-helper');
 
-    if (!field || !select || (!hasTouch && !hasGyro)) {
-      field?.classList.add('hidden');
-    } else {
-      const options = [];
-      if (hasGyro) options.push({ value: 'gyro', label: 'Gyro' });
-      if (hasTouch) options.push({ value: 'touch', label: 'Touchscreen' });
-
-      if (options.length === 0) {
-        field.classList.add('hidden');
-      } else {
-        field.classList.remove('hidden');
-        select.innerHTML = '';
-        for (const opt of options) {
-          const el = document.createElement('option');
-          el.value = opt.value;
-          el.textContent = opt.label;
-          select.appendChild(el);
-        }
-
-        const key = 'smb_control_mode';
-        const saved = localStorage.getItem(key);
-        if (saved && options.some((o) => o.value === saved)) {
-          select.value = saved;
-        } else {
-          select.value = hasTouch ? 'touch' : 'gyro';
-          localStorage.setItem(key, select.value);
-        }
-
-        const syncGyroUi = () => {
-          const showGyro = select.value === 'gyro';
-          gyroButton?.classList.toggle('hidden', !showGyro);
-          gyroHelper?.classList.toggle('hidden', !showGyro);
-        };
-
-        syncGyroUi();
-
-        const requestGyroPermission = async () => {
-          const requests = [];
-          const orientationPermission = window.DeviceOrientationEvent?.requestPermission;
-          if (typeof orientationPermission === 'function') {
-            requests.push(orientationPermission.call(window.DeviceOrientationEvent));
-          }
-          const motionPermission = window.DeviceMotionEvent?.requestPermission;
-          if (typeof motionPermission === 'function') {
-            requests.push(motionPermission.call(window.DeviceMotionEvent));
-          }
-          if (requests.length === 0) {
-            return 'granted';
-          }
-          try {
-            const results = await Promise.all(requests);
-            return results.every((result) => result === 'granted') ? 'granted' : 'denied';
-          } catch {
-            return 'denied';
-          }
-        };
-
-        select.addEventListener('change', async () => {
-          let next = select.value;
-
-          // iOS: gyro requires a user-gesture permission prompt.
-          if (next === 'gyro') {
-            const result = await requestGyroPermission();
-            if (result !== 'granted') {
-              next = hasTouch ? 'touch' : 'gyro';
-              select.value = next;
-            }
-          }
-
-          localStorage.setItem(key, next);
-          syncGyroUi();
-        });
-      }
-    }
-  </script>
 
   <script>
     window.LOBBY_URL = "https://webmonkeyball-lobby.sndrec32exe.workers.dev";
