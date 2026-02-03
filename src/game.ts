@@ -376,6 +376,7 @@ export class Game {
   public netplayDebugLines: string[] | null;
   public netplayWarning: string | null;
   public suppressVisualEffects: boolean;
+  public suppressAudioEffects: boolean;
   public inputFeed: (QuantizedStick | QuantizedInput)[] | null;
   public inputFeedIndex: number;
   public inputRecord: QuantizedStick[] | null;
@@ -502,6 +503,7 @@ export class Game {
     this.netplayDebugLines = null;
     this.netplayWarning = null;
     this.suppressVisualEffects = false;
+    this.suppressAudioEffects = false;
     this.inputFeed = null;
     this.inputFeedIndex = 0;
     this.inputRecord = null;
@@ -617,23 +619,29 @@ export class Game {
       advanceFrame: (inputs) => {
         if (!perf.enabled) {
           const prev = this.suppressVisualEffects;
+          const prevAudio = this.suppressAudioEffects;
           const suppress = this.rollbackSession?.suppressVisuals ?? false;
           this.suppressVisualEffects = suppress;
+          this.suppressAudioEffects = suppress;
           try {
             this.advanceOneFrame(inputs);
           } finally {
             this.suppressVisualEffects = prev;
+            this.suppressAudioEffects = prevAudio;
           }
           return;
         }
         const t0 = nowMs();
         const prev = this.suppressVisualEffects;
+        const prevAudio = this.suppressAudioEffects;
         const suppress = this.rollbackSession?.suppressVisuals ?? false;
         this.suppressVisualEffects = suppress;
+        this.suppressAudioEffects = suppress;
         try {
           this.advanceOneFrame(inputs);
         } finally {
           this.suppressVisualEffects = prev;
+          this.suppressAudioEffects = prevAudio;
         }
         const dt = nowMs() - t0;
         perf.lastAdvanceMs = dt;
@@ -2141,9 +2149,11 @@ export class Game {
     if (!isBonusStage && this.lives > 0) {
       this.lives -= 1;
     }
-    void this.audio?.playFallout(this.gameSource);
-    if (isBonusStage) {
-      void this.audio?.playAnnouncerBonusFinish();
+    if (!this.suppressAudioEffects) {
+      void this.audio?.playFallout(this.gameSource);
+      if (isBonusStage) {
+        void this.audio?.playAnnouncerBonusFinish();
+      }
     }
     localPlayer.camera.initFalloutReplay(localBall);
     this.updateHud();
@@ -2170,7 +2180,9 @@ export class Game {
       this.lives -= 1;
     }
     if (!this.timeOverAnnouncerPlayed) {
-      void this.audio?.playAnnouncerTimeOver();
+      if (!this.suppressAudioEffects) {
+        void this.audio?.playAnnouncerTimeOver();
+      }
       this.timeOverAnnouncerPlayed = true;
     }
     this.updateHud();
@@ -2187,7 +2199,9 @@ export class Game {
     localPlayer.goalSkipTimerFrames = GOAL_SKIP_TOTAL_FRAMES;
     localPlayer.goalInfo = null;
     startGoal(localBall);
-    void this.audio?.playAnnouncerPerfect();
+    if (!this.suppressAudioEffects) {
+      void this.audio?.playAnnouncerPerfect();
+    }
   }
 
   updateRingout(isBonusStage: boolean) {
@@ -2435,7 +2449,9 @@ export class Game {
         }
         ball.bananas += bananaValueForType(banana.type);
         this.score += bananaPointValueForType(banana.type);
-        void this.audio?.playBananaCollect(isBananaBunch(banana.type));
+        if (!this.suppressAudioEffects) {
+          void this.audio?.playBananaCollect(isBananaBunch(banana.type));
+        }
         collectedAny = true;
         break;
       }
@@ -2498,12 +2514,14 @@ export class Game {
     localPlayer.goalTimerFrames = GOAL_SEQUENCE_FRAMES;
     localPlayer.goalSkipTimerFrames = GOAL_SKIP_TOTAL_FRAMES;
     startGoal(localBall);
-    void this.audio?.playGoal(this.gameSource);
-    void this.audio?.playAnnouncerGoal(0.5);
-    if (this.audio && this.stageTimeLimitFrames > 0) {
-      const timeLeft = Math.max(0, this.stageTimeLimitFrames - this.stageTimerFrames);
-      const isHigh = timeLeft > (this.stageTimeLimitFrames >> 1);
-      void this.audio.playAnnouncerTimeBonus(this.gameSource, isHigh);
+    if (!this.suppressAudioEffects) {
+      void this.audio?.playGoal(this.gameSource);
+      void this.audio?.playAnnouncerGoal(0.5);
+      if (this.audio && this.stageTimeLimitFrames > 0) {
+        const timeLeft = Math.max(0, this.stageTimeLimitFrames - this.stageTimerFrames);
+        const isHigh = timeLeft > (this.stageTimeLimitFrames >> 1);
+        void this.audio.playAnnouncerTimeBonus(this.gameSource, isHigh);
+      }
     }
     this.breakGoalTapeForBall(localBall, goalHit);
     localPlayer.camera.setGoalMain();
@@ -2711,6 +2729,7 @@ export class Game {
           && this.stageAttempts === 1
           && this.introTimerFrames > 120
           && this.input?.isPrimaryActionDown?.();
+        const allowAudio = !this.suppressAudioEffects;
         const isSmb2 = this.stage?.format === 'smb2';
         const animTimerOverride = !isSmb2 && this.introTimerFrames > 0
           ? Math.max(0, 120 - this.introTimerFrames)
@@ -2778,7 +2797,9 @@ export class Game {
           localPlayer.goalTimerFrames -= 1;
           localPlayer.goalSkipTimerFrames -= 1;
           if (!this.goalWooshPlayed && localBall.goalTimer >= GOAL_FLOAT_FRAMES) {
-            void this.audio?.playSfx('ball_woosh', this.gameSource, 0.85);
+            if (allowAudio) {
+              void this.audio?.playSfx('ball_woosh', this.gameSource, 0.85);
+            }
             this.goalWooshPlayed = true;
           }
           const canSkipGoal = this.players.length <= 1
@@ -2815,7 +2836,9 @@ export class Game {
             this.introTimerFrames -= 1;
           }
           if (!this.readyAnnouncerPlayed && prevIntroTimerFrames > 120 && this.introTimerFrames <= 120) {
-            void this.audio?.playAnnouncerReady();
+            if (allowAudio) {
+              void this.audio?.playAnnouncerReady();
+            }
             this.readyAnnouncerPlayed = true;
           }
           if (this.introTimerFrames === this.dropFrames) {
@@ -2834,7 +2857,9 @@ export class Game {
               player.camera.initForStage(player.ball, player.ball.startRotY, this.stageRuntime);
             }
             if (!this.goAnnouncerPlayed) {
-              void this.audio?.playAnnouncerGo();
+              if (allowAudio) {
+                void this.audio?.playAnnouncerGo();
+              }
               this.goAnnouncerPlayed = true;
             }
           }
@@ -2867,12 +2892,14 @@ export class Game {
           const switchPresses = this.stageRuntime.switchPressCount ?? 0;
           if (switchPresses > 0) {
             this.stageRuntime.switchPressCount = 0;
-            for (let i = 0; i < switchPresses; i += 1) {
-              void this.audio?.playSfx('switch_press', this.gameSource, 0.6);
+            if (allowAudio) {
+              for (let i = 0; i < switchPresses; i += 1) {
+                void this.audio?.playSfx('switch_press', this.gameSource, 0.6);
+              }
             }
           }
         }
-        if (this.audio && localBall) {
+        if (allowAudio && this.audio && localBall) {
           const frameCount = this.stageRuntime?.timerFrames ?? 0;
           void this.audio.updateRollingSound(localBall, this.gameSource, frameCount);
           void this.audio.playImpactForBall(localBall, this.gameSource, frameCount);
@@ -2886,12 +2913,16 @@ export class Game {
           if (this.stageTimeLimitFrames > 0) {
             const timeLeft = this.stageTimeLimitFrames - this.stageTimerFrames;
             if (timeLeft === HURRY_UP_FRAMES && !this.hurryUpAnnouncerPlayed) {
-              void this.audio?.playAnnouncerHurryUp();
+              if (allowAudio) {
+                void this.audio?.playAnnouncerHurryUp();
+              }
               this.hurryUpAnnouncerPlayed = true;
             }
             if (timeLeft <= COUNTDOWN_START_FRAMES && timeLeft >= 60 && timeLeft % 60 === 0) {
               const count = Math.trunc(timeLeft / 60) - 1;
-              void this.audio?.playAnnouncerCount(count);
+              if (allowAudio) {
+                void this.audio?.playAnnouncerCount(count);
+              }
             }
             if (timeLeft <= 0 && this.timeoverTimerFrames <= 0) {
               this.accumulator = 0;

@@ -96,6 +96,7 @@ type RollingState = {
   gain: GainNode;
   rate: number;
   volume: number;
+  creating: boolean;
 };
 
 export class AudioManager {
@@ -332,7 +333,7 @@ export class AudioManager {
       const gain = ctx.createGain();
       gain.gain.value = 0;
       gain.connect(this.sfxGain ?? ctx.destination);
-      rolling = { source: null, gain, rate: 1, volume: 0 };
+      rolling = { source: null, gain, rate: 1, volume: 0, creating: false };
       this.rolling.set(playerId, rolling);
     }
     if (vol <= 0) {
@@ -345,10 +346,22 @@ export class AudioManager {
       rolling.volume = 0;
       return;
     }
+    const targetVolume = Math.min(vol / 127, 1);
+    const targetRate = rate;
+    rolling.volume = targetVolume;
+    rolling.rate = targetRate;
     if (!rolling.source) {
+      if (rolling.creating) {
+        return;
+      }
+      rolling.creating = true;
       const url = this.resolveNamedSfxUrl(ROLLING_SFX_NAME);
       const buffer = url ? await this.getBuffer(url) : null;
+      rolling.creating = false;
       if (!buffer) {
+        return;
+      }
+      if (rolling.source || rolling.volume <= 0) {
         return;
       }
       const source = ctx.createBufferSource();
@@ -358,14 +371,10 @@ export class AudioManager {
       source.start();
       rolling.source = source;
     }
-    const targetVolume = Math.min(vol / 127, 1);
-    const targetRate = rate;
-    rolling.gain.gain.value = targetVolume;
+    rolling.gain.gain.value = rolling.volume;
     if (rolling.source) {
-      rolling.source.playbackRate.value = targetRate;
+      rolling.source.playbackRate.value = rolling.rate;
     }
-    rolling.volume = targetVolume;
-    rolling.rate = targetRate;
   }
 
   private async ensureContext() {
