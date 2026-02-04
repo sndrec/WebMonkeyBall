@@ -317,6 +317,73 @@ body.gameplay-active {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.settings-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 8px;
+  flex-wrap: wrap;
+}
+
+.settings-tab-button {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(12, 12, 18, 0.5);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.settings-tab-button.active {
+  border-color: var(--accent);
+  background: rgba(255, 159, 28, 0.12);
+}
+
+.settings-tab-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-tab-panel.hidden {
+  display: none;
+}
+
+.profile-avatar-row {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 12px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.profile-avatar-preview {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(12, 12, 18, 0.45);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.profile-avatar-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.profile-avatar-controls {
+  display: grid;
+  gap: 6px;
+}
+
+.profile-avatar-controls .text-input {
+  width: 100%;
+}
+
 .menu-header {
   display: flex;
   align-items: flex-start;
@@ -353,6 +420,14 @@ body.gameplay-active {
   transform: translateY(-1px);
   border-color: rgba(255, 159, 28, 0.6);
   background: rgba(20, 20, 30, 0.85);
+}
+
+.menu-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(16, 16, 24, 0.5);
 }
 
 .menu-button-title {
@@ -422,6 +497,11 @@ body.gameplay-active {
   font-weight: 600;
 }
 
+.lobby-item-subtitle {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .lobby-item-meta {
   color: var(--muted);
   font-size: 12px;
@@ -475,6 +555,19 @@ body.gameplay-active {
   color: var(--muted);
 }
 
+.kick-button {
+  margin-left: auto;
+  padding: 4px 10px;
+  font-size: 11px;
+  border-color: rgba(255, 99, 99, 0.45);
+  color: #ffb3b3;
+}
+
+.kick-button:hover {
+  border-color: rgba(255, 99, 99, 0.75);
+  background: rgba(255, 99, 99, 0.15);
+}
+
 .lobby-setting {
   display: flex;
   align-items: center;
@@ -493,6 +586,21 @@ body.gameplay-active {
   font-size: 12px;
 }
 
+.lobby-setting-button {
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: rgba(12, 12, 18, 0.4);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.lobby-setting-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .avatar {
   width: 32px;
   height: 32px;
@@ -501,6 +609,16 @@ body.gameplay-active {
   flex: 0 0 auto;
   background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0) 55%),
     rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .avatar-grid {
@@ -577,6 +695,10 @@ body.gameplay-active {
   color: var(--muted);
   line-height: 1.4;
   margin-top: 6px;
+}
+
+.control-hint.error {
+  color: #ffb3b3;
 }
 
 .response-curve {
@@ -760,13 +882,27 @@ button:disabled {
   }
 }
 
-.credits-menu {
+.menu-actions {
   position: fixed;
   top: 12px;
   left: 12px;
   z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 13px;
   color: var(--fg);
+}
+
+.credits-menu {
+  position: relative;
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.settings-button {
+  padding: 8px 12px;
+  border-radius: 10px;
 }
 
 /* Hover "bridge" so the menu doesn't vanish while moving into the panel */

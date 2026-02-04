@@ -6,6 +6,7 @@ export type PlayerId = number;
 export type RoomSettings = {
   maxPlayers: number;
   collisionEnabled: boolean;
+  locked: boolean;
 };
 
 export type RoomMeta = {
@@ -14,6 +15,7 @@ export type RoomMeta = {
   courseLabel?: string;
   stageLabel?: string;
   stageId?: number;
+  roomName?: string;
 };
 
 export type RoomInfo = {
@@ -111,13 +113,18 @@ export type RoomUpdateMessage = {
 
 export type PlayerProfile = {
   name: string;
-  avatarId: string;
+  avatarData?: string;
 };
 
 export type PlayerProfileMessage = {
   type: 'player_profile';
   playerId: PlayerId;
   profile: PlayerProfile;
+};
+
+export type KickMessage = {
+  type: 'kick';
+  reason?: string;
 };
 
 export type StartMatchMessage = {
@@ -139,7 +146,8 @@ export type HostToClientMessage =
   | PlayerJoinMessage
   | PlayerLeaveMessage
   | RoomUpdateMessage
-  | PlayerProfileMessage;
+  | PlayerProfileMessage
+  | KickMessage;
 
 export type ClientToHostMessage =
   | InputFrameMessage

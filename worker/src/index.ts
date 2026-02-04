@@ -7,6 +7,7 @@ export interface Env {
 type RoomSettings = {
   maxPlayers: number;
   collisionEnabled: boolean;
+  locked: boolean;
 };
 
 type RoomMeta = {
@@ -15,6 +16,7 @@ type RoomMeta = {
   courseLabel?: string;
   stageLabel?: string;
   stageId?: number;
+  roomName?: string;
 };
 
 type PlayerRecord = {
@@ -131,6 +133,7 @@ function sanitizeSettings(input?: Partial<RoomSettings>): RoomSettings {
   return {
     maxPlayers,
     collisionEnabled: !!(input?.collisionEnabled ?? true),
+    locked: !!(input?.locked ?? false),
   };
 }
 
@@ -140,8 +143,10 @@ function sanitizeMeta(input?: Partial<RoomMeta>): RoomMeta {
     input?.gameSource === "smb2" || input?.gameSource === "mb2ws" ? input.gameSource : "smb1";
   const courseLabelRaw = typeof input?.courseLabel === "string" ? input.courseLabel.slice(0, 64) : "";
   const stageLabelRaw = typeof input?.stageLabel === "string" ? input.stageLabel.slice(0, 64) : "";
+  const roomNameRaw = typeof input?.roomName === "string" ? input.roomName.slice(0, 64) : "";
   const courseLabel = courseLabelRaw.trim() ? courseLabelRaw.trim() : undefined;
   const stageLabel = stageLabelRaw.trim() ? stageLabelRaw.trim() : undefined;
+  const roomName = roomNameRaw.trim() ? roomNameRaw.trim() : undefined;
   const stageId = Number.isFinite(input?.stageId) ? Number(input?.stageId) : undefined;
   return {
     status,
@@ -149,6 +154,7 @@ function sanitizeMeta(input?: Partial<RoomMeta>): RoomMeta {
     courseLabel,
     stageLabel,
     stageId,
+    roomName,
   };
 }
 
@@ -365,6 +371,9 @@ export class Lobby implements DurableObject {
           hostToken: room.hostId === existing.playerId ? room.hostToken : undefined,
         }, 200, origin);
       }
+      if (room.settings.locked) {
+        return jsonResponse({ error: "room_locked" }, 403, origin);
+      }
       const playerCount = Object.keys(room.players ?? {}).length;
       if (playerCount >= room.settings.maxPlayers) {
         return jsonResponse({ error: "room_full" }, 409, origin);
@@ -463,6 +472,34 @@ export class Lobby implements DurableObject {
       player.lastActiveAt = now;
       room.lastActiveAt = now;
       room.players[playerKey(playerId)] = player;
+      this.data.rooms[roomId] = room;
+      await this.save();
+      return jsonResponse({ ok: true }, 200, origin);
+    }
+
+    if (request.method === "POST" && url.pathname === "/rooms/kick") {
+      const body = await parseJson<{ roomId?: string; hostToken?: string; playerId?: number }>(request);
+      const roomId = body.roomId ?? null;
+      if (!roomId || !this.data.rooms[roomId]) {
+        return jsonResponse({ ok: false, error: "room_not_found" }, 404, origin);
+      }
+      const room = this.data.rooms[roomId];
+      room.players = room.players ?? {};
+      if (body.hostToken !== room.hostToken) {
+        return jsonResponse({ ok: false, error: "unauthorized" }, 401, origin);
+      }
+      const playerId = Number(body.playerId ?? 0);
+      if (!playerId) {
+        return jsonResponse({ ok: false, error: "bad_request" }, 400, origin);
+      }
+      if (playerId === room.hostId) {
+        return jsonResponse({ ok: false, error: "cannot_kick_host" }, 400, origin);
+      }
+      if (!room.players?.[playerKey(playerId)]) {
+        return jsonResponse({ ok: false, error: "player_not_found" }, 404, origin);
+      }
+      delete room.players[playerKey(playerId)];
+      room.lastActiveAt = nowMs();
       this.data.rooms[roomId] = room;
       await this.save();
       return jsonResponse({ ok: true }, 200, origin);

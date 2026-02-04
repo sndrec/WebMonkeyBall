@@ -103,6 +103,14 @@ export class LobbyClient {
     });
   }
 
+  async kickPlayer(roomId: string, hostToken: string, playerId: number): Promise<void> {
+    await fetch(`${this.baseUrl}/rooms/kick`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ roomId, hostToken, playerId }),
+    });
+  }
+
   openSignal(
     roomId: string,
     playerId: number,
@@ -291,6 +299,36 @@ export class HostRelay {
     this.channels.clear();
     this.peers.clear();
     this.connected.clear();
+  }
+
+  disconnect(playerId: number) {
+    const entry = this.channels.get(playerId);
+    if (entry) {
+      for (const channel of [entry.ctrl, entry.fast]) {
+        if (!channel) {
+          continue;
+        }
+        try {
+          channel.close();
+        } catch {
+          // Ignore.
+        }
+      }
+    }
+    const peer = this.peers.get(playerId);
+    if (peer) {
+      try {
+        peer.close();
+      } catch {
+        // Ignore.
+      }
+    }
+    this.channels.delete(playerId);
+    this.peers.delete(playerId);
+    if (this.connected.has(playerId)) {
+      this.connected.delete(playerId);
+      this.onDisconnect?.(playerId);
+    }
   }
 
   hostId = 0;

@@ -26,69 +26,55 @@
   <div id="stage-fade" class="stage-fade"></div>
   <div id="overlay" class="overlay">
     
-    <div class="credits-menu" id="credits-menu">
-      <button class="credits-label" id="credits-toggle" type="button" aria-haspopup="true" aria-expanded="false">
-        Credits
-      </button>
+    <div class="menu-actions">
+      <div class="credits-menu" id="credits-menu">
+        <button class="credits-label" id="credits-toggle" type="button" aria-haspopup="true" aria-expanded="false">
+          Credits
+        </button>
 
-      <div class="credits-panel" id="credits-panel">
-        <div>
-          <a href="https://ko-fi.com/twilightpb" target="_blank" rel="noopener">TwilightPB</a>
-          <span>— Porting</span>
-        </div>
-        <div>
-          <a href="https://complexplane.dev" target="_blank" rel="noopener">ComplexPlane</a>
-          <span>— Renderer</span>
-        </div>
-        <div>
-          camthesaxman <span>— SMB1 Decompilation</span>
-        </div>
-        <div class="credits-multiline">
-          <div class="credits-title">SMB2 Decompilation</div>
-          <div class="credits-sublist">
-            <div>ComplexPlane</div>
-            <div>CraftedCart</div>
-            <div>EELI</div>
-            <div>Eucalyptus</div>
-            <div>The BombSquad</div>
+        <div class="credits-panel" id="credits-panel">
+          <div>
+            <a href="https://ko-fi.com/twilightpb" target="_blank" rel="noopener">TwilightPB</a>
+            <span>— Porting</span>
+          </div>
+          <div>
+            <a href="https://complexplane.dev" target="_blank" rel="noopener">ComplexPlane</a>
+            <span>— Renderer</span>
+          </div>
+          <div>
+            camthesaxman <span>— SMB1 Decompilation</span>
+          </div>
+          <div class="credits-multiline">
+            <div class="credits-title">SMB2 Decompilation</div>
+            <div class="credits-sublist">
+              <div>ComplexPlane</div>
+              <div>CraftedCart</div>
+              <div>EELI</div>
+              <div>Eucalyptus</div>
+              <div>The BombSquad</div>
+            </div>
+          </div>
+          <div>
+            Amusement Vision <span>— Original game</span>
+          </div>
+          <div>
+            <a href="https://discord.gg/CEYjvDj" target="_blank" rel="noopener">SMB Custom Level Community</a>
+            <span>— Tools and resources</span>
           </div>
         </div>
-        <div>
-          Amusement Vision <span>— Original game</span>
-        </div>
-        <div>
-          <a href="https://discord.gg/CEYjvDj" target="_blank" rel="noopener">SMB Custom Level Community</a>
-          <span>— Tools and resources</span>
-        </div>
       </div>
+      <button id="open-settings" class="ghost compact settings-button" type="button">Settings</button>
     </div>
     <div class="panel" id="main-menu">
       <h1>Super Monkey Ball 1</h1>
       <p>Standard gameplay (Beginner / Advanced / Expert).</p>
-      <label class="field">
-        <span>Game Source</span>
-        <select id="game-source">
-          <option value="smb1">Super Monkey Ball 1</option>
-          <option value="smb2">Super Monkey Ball 2</option>
-          <option value="mb2ws">Super Monkey Ball 2 (MB2WS)</option>
-        </select>
-      </label>
-      <div class="pack-controls">
-        <button id="pack-load" class="ghost compact" type="button">Load Pack</button>
-        <div id="pack-picker" class="pack-picker hidden">
-          <button id="pack-load-zip" class="ghost compact" type="button">Zip File</button>
-          <button id="pack-load-folder" class="ghost compact" type="button">Folder</button>
-        </div>
-        <div id="pack-status" class="pack-status">No pack loaded</div>
+
+      <div class="panel-section">
+        <button id="open-level-select" class="menu-button" type="button">
+          <span class="menu-button-title">Level Select</span>
+          <span class="menu-button-subtitle">Choose game source and stage</span>
+        </button>
       </div>
-      <input id="pack-file" class="hidden" type="file" accept=".zip" />
-      <input id="pack-folder" class="hidden" type="file" webkitdirectory />
-      <div class="pack-controls">
-        <button id="replay-save" class="ghost compact" type="button">Save Replay</button>
-        <button id="replay-load" class="ghost compact" type="button">Load Replay</button>
-        <div id="replay-status" class="pack-status">Replay: none</div>
-      </div>
-      <input id="replay-file" class="hidden" type="file" accept=".json" />
 
       <div class="panel-section">
         <button id="open-multiplayer" class="menu-button" type="button">
@@ -97,131 +83,6 @@
         </button>
       </div>
 
-      <label id="control-mode-field" class="field hidden">
-        <span>Control Mode</span>
-        <div class="control-mode-row">
-          <select id="control-mode"></select>
-          <button id="gyro-recalibrate" class="ghost compact hidden" type="button">Recalibrate</button>
-          <div id="gyro-helper" class="gyro-helper hidden" aria-hidden="true">
-            <div class="gyro-helper-frame">
-              <div id="gyro-helper-ghost" class="gyro-helper-ghost"></div>
-              <div id="gyro-helper-device" class="gyro-helper-device"></div>
-            </div>
-          </div>
-        </div>
-      </label>
-      <div id="control-mode-settings" class="control-mode-settings hidden">
-        <div id="gyro-settings" class="control-mode-block hidden">
-          <label class="field slider-field">
-            <span>Gyro Sensitivity <output id="gyro-sensitivity-value">25°</output></span>
-            <input id="gyro-sensitivity" type="range" min="10" max="25" step="1" value="25" />
-          </label>
-          <div id="gyro-hint" class="control-hint">Tap the screen during gameplay to recalibrate gyro.</div>
-        </div>
-        <div id="touch-settings" class="control-mode-block hidden">
-          <label class="field slider-field">
-            <span>Virtual Joystick Size <output id="joystick-size-value">1.0x</output></span>
-            <input id="joystick-size" type="range" min="0.5" max="2" step="0.1" value="1" />
-          </label>
-        </div>
-        <div id="input-falloff-block" class="control-mode-block">
-          <label class="field slider-field">
-            <span>Input Falloff <output id="input-falloff-value">1.5</output></span>
-            <input id="input-falloff" type="range" min="1" max="2" step="0.05" value="1" />
-          </label>
-          <div class="input-falloff-visuals">
-            <div id="input-falloff-curve-wrap" class="response-curve">
-              <svg id="input-falloff-curve" viewBox="0 0 100 100" role="img" aria-hidden="true">
-                <path id="input-falloff-path" d="M 0 100 L 100 0"></path>
-              </svg>
-            </div>
-            <div id="input-preview" class="input-preview" aria-hidden="true">
-              <div class="input-preview-grid"></div>
-              <div id="input-raw-dot" class="input-dot raw"></div>
-              <div id="input-processed-dot" class="input-dot processed"></div>
-            </div>
-          </div>
-          <div class="control-hint">
-            A lower value makes joystick input more linear. Higher makes small adjustments more precise.
-          </div>
-        </div>
-        <div id="gamepad-calibration-block" class="control-mode-block hidden">
-          <button id="gamepad-calibrate" class="ghost compact" type="button">Calibrate Stick</button>
-        </div>
-      </div>
-      <div id="smb1-fields">
-        <label class="field">
-          <span>Difficulty</span>
-          <select id="difficulty">
-            <option value="beginner">Beginner</option>
-            <option value="advanced">Advanced</option>
-            <option value="expert">Expert</option>
-            <option value="beginner-extra">Beginner (Extra)</option>
-            <option value="advanced-extra">Advanced (Extra)</option>
-            <option value="expert-extra">Expert (Extra)</option>
-            <option value="master">Master</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>Stage</span>
-          <select id="smb1-stage"></select>
-        </label>
-      </div>
-      <div id="smb2-fields" class="hidden">
-        <label class="field">
-          <span>SMB2 Mode</span>
-          <select id="smb2-mode">
-            <option value="challenge">Challenge</option>
-            <option value="story">Story</option>
-          </select>
-        </label>
-        <div id="smb2-challenge-fields">
-          <label class="field">
-            <span>Challenge Difficulty</span>
-            <select id="smb2-challenge">
-              <option value="beginner">Beginner</option>
-              <option value="advanced">Advanced</option>
-              <option value="expert">Expert</option>
-              <option value="beginner-extra">Beginner Extra</option>
-              <option value="advanced-extra">Advanced Extra</option>
-              <option value="expert-extra">Expert Extra</option>
-              <option value="master">Master</option>
-              <option value="master-extra">Master Extra</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Challenge Stage</span>
-            <select id="smb2-challenge-stage"></select>
-          </label>
-        </div>
-        <div id="smb2-story-fields" class="hidden">
-          <label class="field">
-            <span>Story World</span>
-            <select id="smb2-story-world"></select>
-          </label>
-          <label class="field">
-            <span>Story Stage</span>
-            <select id="smb2-story-stage"></select>
-          </label>
-        </div>
-      </div>
-      <label class="field checkbox-field hidden">
-        <span>Settings</span>
-      </label>
-      <div class="slider-group">
-        <label class="field slider-field">
-          <span>Music Volume <output id="music-volume-value">50%</output></span>
-          <input id="music-volume" type="range" min="0" max="100" value="50" />
-        </label>
-        <label class="field slider-field">
-          <span>SFX Volume <output id="sfx-volume-value">30%</output></span>
-          <input id="sfx-volume" type="range" min="0" max="100" value="30" />
-        </label>
-        <label class="field slider-field">
-          <span>Announcer Volume <output id="announcer-volume-value">30%</output></span>
-          <input id="announcer-volume" type="range" min="0" max="100" value="30" />
-        </label>
-      </div>
       <div class="row">
         <button id="start" disabled>Start</button>
         <button id="resume" class="ghost" disabled>Resume</button>
@@ -230,6 +91,119 @@
         <div>Controls: WASD / Arrow Keys = tilt, R = reset stage, N = skip stage</div>
         <div>If you have a controller plugged in, it should work too.</div>
         <div>Don't worry about reporting bugs. I probably already know about it - it'll get fixed.</div>
+      </div>
+    </div>
+    <div class="panel hidden" id="level-select-menu">
+      <div class="menu-header">
+        <button id="level-select-back" class="ghost compact" type="button">Back</button>
+        <div>
+          <h1>Level Select</h1>
+          <p>Choose the game source, course, and stage.</p>
+        </div>
+      </div>
+      <div class="panel-section">
+        <label class="field">
+          <span>Game Source</span>
+          <select id="game-source">
+            <option value="smb1">Super Monkey Ball 1</option>
+            <option value="smb2">Super Monkey Ball 2</option>
+            <option value="mb2ws">Super Monkey Ball 2 (MB2WS)</option>
+          </select>
+        </label>
+      </div>
+      <div class="panel-section">
+        <div class="panel-section-header">
+          <h2>Packs</h2>
+        </div>
+        <div class="pack-controls">
+          <button id="pack-load" class="ghost compact" type="button">Load Pack</button>
+          <div id="pack-picker" class="pack-picker hidden">
+            <button id="pack-load-zip" class="ghost compact" type="button">Zip File</button>
+            <button id="pack-load-folder" class="ghost compact" type="button">Folder</button>
+          </div>
+          <div id="pack-status" class="pack-status">No pack loaded</div>
+        </div>
+        <input id="pack-file" class="hidden" type="file" accept=".zip" />
+        <input id="pack-folder" class="hidden" type="file" webkitdirectory />
+      </div>
+      <div class="panel-section">
+        <div class="panel-section-header">
+          <h2>Replay</h2>
+        </div>
+        <div class="pack-controls">
+          <button id="replay-save" class="ghost compact" type="button">Save Replay</button>
+          <button id="replay-load" class="ghost compact" type="button">Load Replay</button>
+          <div id="replay-status" class="pack-status">Replay: none</div>
+        </div>
+        <input id="replay-file" class="hidden" type="file" accept=".json" />
+      </div>
+      <div class="panel-section">
+        <div class="panel-section-header">
+          <h2>Stage Selection</h2>
+        </div>
+        <div id="smb1-fields">
+          <label class="field">
+            <span>Difficulty</span>
+            <select id="difficulty">
+              <option value="beginner">Beginner</option>
+              <option value="advanced">Advanced</option>
+              <option value="expert">Expert</option>
+              <option value="beginner-extra">Beginner (Extra)</option>
+              <option value="advanced-extra">Advanced (Extra)</option>
+              <option value="expert-extra">Expert (Extra)</option>
+              <option value="master">Master</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Stage</span>
+            <select id="smb1-stage"></select>
+          </label>
+        </div>
+        <div id="smb2-fields" class="hidden">
+          <label class="field">
+            <span>SMB2 Mode</span>
+            <select id="smb2-mode">
+              <option value="challenge">Challenge</option>
+              <option value="story">Story</option>
+            </select>
+          </label>
+          <div id="smb2-challenge-fields">
+            <label class="field">
+              <span>Challenge Difficulty</span>
+              <select id="smb2-challenge">
+                <option value="beginner">Beginner</option>
+                <option value="advanced">Advanced</option>
+                <option value="expert">Expert</option>
+                <option value="beginner-extra">Beginner Extra</option>
+                <option value="advanced-extra">Advanced Extra</option>
+                <option value="expert-extra">Expert Extra</option>
+                <option value="master">Master</option>
+                <option value="master-extra">Master Extra</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Challenge Stage</span>
+              <select id="smb2-challenge-stage"></select>
+            </label>
+          </div>
+          <div id="smb2-story-fields" class="hidden">
+            <label class="field">
+              <span>Story World</span>
+              <select id="smb2-story-world"></select>
+            </label>
+            <label class="field">
+              <span>Story Stage</span>
+              <select id="smb2-story-stage"></select>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div id="lobby-stage-actions" class="panel-section hidden">
+        <div class="panel-section-header">
+          <h2>Lobby Stage</h2>
+        </div>
+        <button id="lobby-stage-choose" type="button">Choose</button>
+        <div class="control-hint">Updates the lobby selection without starting the match.</div>
       </div>
     </div>
     <div class="panel hidden" id="multiplayer-menu">
@@ -269,6 +243,9 @@
               <span>Public</span>
             </label>
           </div>
+          <div class="multiplayer-row">
+            <input id="lobby-name" class="text-input" type="text" placeholder="Lobby name (optional)" maxlength="64" />
+          </div>
         </div>
       </div>
       <div id="multiplayer-lobby" class="multiplayer-view hidden">
@@ -278,6 +255,10 @@
             <button id="lobby-leave" class="ghost compact hidden" type="button">Leave Room</button>
           </div>
           <div id="lobby-room-info" class="lobby-room-info"></div>
+          <label class="field">
+            <span>Lobby Name</span>
+            <input id="lobby-room-name" class="text-input" type="text" maxlength="64" />
+          </label>
           <div id="lobby-room-status" class="lobby-room-status"></div>
         </div>
         <div class="panel-section">
@@ -292,7 +273,9 @@
           </div>
           <div class="lobby-setting">
             <span>Selected Stage</span>
-            <div id="lobby-stage-info" class="lobby-setting-value">Unknown</div>
+            <button id="lobby-stage-button" class="lobby-setting-value lobby-setting-button" type="button">
+              <span id="lobby-stage-info">Unknown</span>
+            </button>
           </div>
           <label class="field">
             <span>Max Players</span>
@@ -310,25 +293,144 @@
             <input id="lobby-collision" type="checkbox" checked />
             <span>Player Collision</span>
           </label>
+          <label class="checkbox-field">
+            <input id="lobby-locked" type="checkbox" />
+            <span>Lock Room</span>
+          </label>
           <div class="control-hint">Only the host can change match settings.</div>
         </div>
         <div class="panel-section">
-          <div class="panel-section-header">
-            <h2>Your Profile</h2>
+          <button id="lobby-start" type="button">Start Match</button>
+        </div>
+      </div>
+    </div>
+    <div class="panel hidden" id="settings-menu">
+      <div class="menu-header">
+        <button id="settings-back" class="ghost compact" type="button">Back</button>
+        <div>
+          <h1>Settings</h1>
+          <p>Adjust controls, audio, and multiplayer preferences.</p>
+        </div>
+      </div>
+      <div class="settings-tabs" role="tablist">
+        <button class="settings-tab-button active" type="button" data-settings-tab="input">Input</button>
+        <button class="settings-tab-button" type="button" data-settings-tab="audio">Audio</button>
+        <button class="settings-tab-button" type="button" data-settings-tab="multiplayer">Multiplayer</button>
+      </div>
+      <div class="settings-tab-panels">
+        <div class="settings-tab-panel" data-settings-panel="input">
+          <div class="panel-section">
+            <div class="panel-section-header">
+              <h2>Controls</h2>
+            </div>
+            <label id="control-mode-field" class="field hidden">
+              <span>Control Mode</span>
+              <div class="control-mode-row">
+                <select id="control-mode"></select>
+                <button id="gyro-recalibrate" class="ghost compact hidden" type="button">Recalibrate</button>
+                <div id="gyro-helper" class="gyro-helper hidden" aria-hidden="true">
+                  <div class="gyro-helper-frame">
+                    <div id="gyro-helper-ghost" class="gyro-helper-ghost"></div>
+                    <div id="gyro-helper-device" class="gyro-helper-device"></div>
+                  </div>
+                </div>
+              </div>
+            </label>
+            <div id="control-mode-settings" class="control-mode-settings hidden">
+              <div id="gyro-settings" class="control-mode-block hidden">
+                <label class="field slider-field">
+                  <span>Gyro Sensitivity <output id="gyro-sensitivity-value">25°</output></span>
+                  <input id="gyro-sensitivity" type="range" min="10" max="25" step="1" value="25" />
+                </label>
+                <div id="gyro-hint" class="control-hint">Tap the screen during gameplay to recalibrate gyro.</div>
+              </div>
+              <div id="touch-settings" class="control-mode-block hidden">
+                <label class="field slider-field">
+                  <span>Virtual Joystick Size <output id="joystick-size-value">1.0x</output></span>
+                  <input id="joystick-size" type="range" min="0.5" max="2" step="0.1" value="1" />
+                </label>
+              </div>
+              <div id="input-falloff-block" class="control-mode-block">
+                <label class="field slider-field">
+                  <span>Input Falloff <output id="input-falloff-value">1.5</output></span>
+                  <input id="input-falloff" type="range" min="1" max="2" step="0.05" value="1" />
+                </label>
+                <div class="input-falloff-visuals">
+                  <div id="input-falloff-curve-wrap" class="response-curve">
+                    <svg id="input-falloff-curve" viewBox="0 0 100 100" role="img" aria-hidden="true">
+                      <path id="input-falloff-path" d="M 0 100 L 100 0"></path>
+                    </svg>
+                  </div>
+                  <div id="input-preview" class="input-preview" aria-hidden="true">
+                    <div class="input-preview-grid"></div>
+                    <div id="input-raw-dot" class="input-dot raw"></div>
+                    <div id="input-processed-dot" class="input-dot processed"></div>
+                  </div>
+                </div>
+                <div class="control-hint">
+                  A lower value makes joystick input more linear. Higher makes small adjustments more precise.
+                </div>
+              </div>
+              <div id="gamepad-calibration-block" class="control-mode-block hidden">
+                <button id="gamepad-calibrate" class="ghost compact" type="button">Calibrate Stick</button>
+              </div>
+            </div>
           </div>
-          <label class="field">
-            <span>Display Name</span>
-            <input id="profile-name" class="text-input" type="text" maxlength="16" />
-          </label>
-          <div id="profile-avatars" class="avatar-grid">
-            <button type="button" class="avatar-option avatar-amber" data-avatar="amber" aria-label="Amber avatar"></button>
-            <button type="button" class="avatar-option avatar-mint" data-avatar="mint" aria-label="Mint avatar"></button>
-            <button type="button" class="avatar-option avatar-sky" data-avatar="sky" aria-label="Sky avatar"></button>
-            <button type="button" class="avatar-option avatar-rose" data-avatar="rose" aria-label="Rose avatar"></button>
-            <button type="button" class="avatar-option avatar-slate" data-avatar="slate" aria-label="Slate avatar"></button>
-            <button type="button" class="avatar-option avatar-lime" data-avatar="lime" aria-label="Lime avatar"></button>
+        </div>
+        <div class="settings-tab-panel hidden" data-settings-panel="audio">
+          <div class="panel-section">
+            <div class="panel-section-header">
+              <h2>Audio</h2>
+            </div>
+            <div class="slider-group">
+              <label class="field slider-field">
+                <span>Music Volume <output id="music-volume-value">50%</output></span>
+                <input id="music-volume" type="range" min="0" max="100" value="50" />
+              </label>
+              <label class="field slider-field">
+                <span>SFX Volume <output id="sfx-volume-value">30%</output></span>
+                <input id="sfx-volume" type="range" min="0" max="100" value="30" />
+              </label>
+              <label class="field slider-field">
+                <span>Announcer Volume <output id="announcer-volume-value">30%</output></span>
+                <input id="announcer-volume" type="range" min="0" max="100" value="30" />
+              </label>
+            </div>
           </div>
-          <div class="control-hint">Names are sanitized and avatars are from a fixed set.</div>
+        </div>
+        <div class="settings-tab-panel hidden" data-settings-panel="multiplayer">
+          <div class="panel-section">
+            <div class="panel-section-header">
+              <h2>Profile</h2>
+            </div>
+            <label class="field">
+              <span>Display Name</span>
+              <input id="profile-name" class="text-input" type="text" maxlength="64" />
+            </label>
+            <div class="profile-avatar-row">
+              <div id="profile-avatar-preview" class="profile-avatar-preview" aria-hidden="true"></div>
+              <div class="profile-avatar-controls">
+                <input id="profile-avatar-input" class="text-input" type="file" accept="image/png,image/jpeg,image/webp" />
+                <button id="profile-avatar-clear" class="ghost compact" type="button">Clear Avatar</button>
+                <div id="profile-avatar-error" class="control-hint hidden"></div>
+              </div>
+            </div>
+            <div class="control-hint">PNG/JPG/WebP only. Max 512x512 and 150kb.</div>
+          </div>
+          <div class="panel-section">
+            <div class="panel-section-header">
+              <h2>Privacy</h2>
+            </div>
+            <label class="checkbox-field">
+              <input id="hide-player-names" type="checkbox" />
+              <span>Hide Player Names</span>
+            </label>
+            <label class="checkbox-field">
+              <input id="hide-lobby-names" type="checkbox" />
+              <span>Hide Lobby Names</span>
+            </label>
+            <div class="control-hint">Replaces names with deterministic aliases for safer sharing.</div>
+          </div>
         </div>
       </div>
     </div>
@@ -342,7 +444,7 @@
   </div>
 
   <button id="mobile-menu-button" class="mobile-menu-button hidden" type="button">
-    Level Select
+    Menu
   </button>
 
   <button id="fullscreen-button" class="ghost compact fullscreen-button hidden" type="button">

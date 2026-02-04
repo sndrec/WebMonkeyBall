@@ -190,7 +190,8 @@ const hudCanvas = document.getElementById('hud-canvas') as HTMLCanvasElement;
 const overlay = document.getElementById('overlay') as HTMLElement;
 const mainMenuPanel = document.getElementById('main-menu') as HTMLElement | null;
 const multiplayerMenuPanel = document.getElementById('multiplayer-menu') as HTMLElement | null;
-const overlayPanel = mainMenuPanel;
+const settingsMenuPanel = document.getElementById('settings-menu') as HTMLElement | null;
+const levelSelectMenuPanel = document.getElementById('level-select-menu') as HTMLElement | null;
 const stageFade = document.getElementById('stage-fade') as HTMLElement;
 const mobileMenuButton = document.getElementById('mobile-menu-button') as HTMLButtonElement | null;
 const fullscreenButton = document.getElementById('fullscreen-button') as HTMLButtonElement | null;
@@ -643,6 +644,12 @@ const lobbyClient = lobbyBaseUrl ? new LobbyClient(lobbyBaseUrl) : null;
 
 const multiplayerOpenButton = document.getElementById('open-multiplayer') as HTMLButtonElement | null;
 const multiplayerBackButton = document.getElementById('multiplayer-back') as HTMLButtonElement | null;
+const levelSelectOpenButton = document.getElementById('open-level-select') as HTMLButtonElement | null;
+const levelSelectBackButton = document.getElementById('level-select-back') as HTMLButtonElement | null;
+const settingsOpenButton = document.getElementById('open-settings') as HTMLButtonElement | null;
+const settingsBackButton = document.getElementById('settings-back') as HTMLButtonElement | null;
+const settingsTabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]'));
+const settingsTabPanels = Array.from(document.querySelectorAll<HTMLElement>('[data-settings-panel]'));
 const multiplayerOnlineCount = document.getElementById('lobby-online-count') as HTMLElement | null;
 const multiplayerBrowser = document.getElementById('multiplayer-browser') as HTMLElement | null;
 const multiplayerLobby = document.getElementById('multiplayer-lobby') as HTMLElement | null;
@@ -650,24 +657,43 @@ const lobbyRefreshButton = document.getElementById('lobby-refresh') as HTMLButto
 const lobbyCreateButton = document.getElementById('lobby-create') as HTMLButtonElement | null;
 const lobbyJoinButton = document.getElementById('lobby-join') as HTMLButtonElement | null;
 const lobbyPublicCheckbox = document.getElementById('lobby-public') as HTMLInputElement | null;
+const lobbyNameInput = document.getElementById('lobby-name') as HTMLInputElement | null;
 const lobbyCodeInput = document.getElementById('lobby-code') as HTMLInputElement | null;
 const lobbyLeaveButton = document.getElementById('lobby-leave') as HTMLButtonElement | null;
 const lobbyStatus = document.getElementById('lobby-status') as HTMLElement | null;
 const lobbyList = document.getElementById('lobby-list') as HTMLElement | null;
 const lobbyRoomInfo = document.getElementById('lobby-room-info') as HTMLElement | null;
 const lobbyRoomStatus = document.getElementById('lobby-room-status') as HTMLElement | null;
+const lobbyRoomNameInput = document.getElementById('lobby-room-name') as HTMLInputElement | null;
 const lobbyPlayerList = document.getElementById('lobby-player-list') as HTMLElement | null;
 const lobbyMaxPlayersSelect = document.getElementById('lobby-max-players') as HTMLSelectElement | null;
 const lobbyCollisionToggle = document.getElementById('lobby-collision') as HTMLInputElement | null;
+const lobbyLockToggle = document.getElementById('lobby-locked') as HTMLInputElement | null;
+const lobbyStageButton = document.getElementById('lobby-stage-button') as HTMLButtonElement | null;
 const lobbyStageInfo = document.getElementById('lobby-stage-info') as HTMLElement | null;
+const lobbyStageActions = document.getElementById('lobby-stage-actions') as HTMLElement | null;
+const lobbyStageChooseButton = document.getElementById('lobby-stage-choose') as HTMLButtonElement | null;
+const lobbyStartButton = document.getElementById('lobby-start') as HTMLButtonElement | null;
 const profileNameInput = document.getElementById('profile-name') as HTMLInputElement | null;
-const profileAvatarGrid = document.getElementById('profile-avatars') as HTMLElement | null;
+const profileAvatarInput = document.getElementById('profile-avatar-input') as HTMLInputElement | null;
+const profileAvatarPreview = document.getElementById('profile-avatar-preview') as HTMLElement | null;
+const profileAvatarClearButton = document.getElementById('profile-avatar-clear') as HTMLButtonElement | null;
+const profileAvatarError = document.getElementById('profile-avatar-error') as HTMLElement | null;
+const hidePlayerNamesToggle = document.getElementById('hide-player-names') as HTMLInputElement | null;
+const hideLobbyNamesToggle = document.getElementById('hide-lobby-names') as HTMLInputElement | null;
 
 const PROFILE_STORAGE_KEY = 'smb_netplay_profile';
-const PROFILE_NAME_MAX = 16;
+const PROFILE_NAME_MAX = 64;
 const PROFILE_NAME_SAFE = /[^A-Za-z0-9 _.-]/g;
-const PROFILE_AVATARS = ['amber', 'mint', 'sky', 'rose', 'slate', 'lime'] as const;
-type ProfileAvatarId = (typeof PROFILE_AVATARS)[number];
+const LOBBY_NAME_MAX = 64;
+const PROFILE_AVATAR_MAX_BYTES = 150 * 1024;
+const PROFILE_AVATAR_MAX_DIM = 512;
+const PROFILE_AVATAR_MAX_DATA_URL_CHARS = 220000;
+const PROFILE_AVATAR_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/jpg']);
+const PRIVACY_STORAGE_KEY = 'smb_netplay_privacy';
+const PROFILE_BROADCAST_COOLDOWN_MS = 1200;
+const PROFILE_REMOTE_COOLDOWN_MS = 1500;
+const LOBBY_NAME_UPDATE_COOLDOWN_MS = 1200;
 
 let lobbyRoom: LobbyRoom | null = null;
 let lobbySelfId: number | null = null;
@@ -682,8 +708,10 @@ let hostRelay: HostRelay | null = null;
 let clientPeer: ClientPeer | null = null;
 let netplayEnabled = false;
 let lobbyProfiles = new Map<number, PlayerProfile>();
-let localProfile: PlayerProfile = { name: 'Player', avatarId: PROFILE_AVATARS[0] };
+let pendingAvatarByPlayer = new Map<number, string>();
+let localProfile: PlayerProfile = { name: 'Player' };
 let allowHostMigration = true;
+let suppressHostDisconnectUntil = 0;
 let pendingSnapshot: {
   frame: number;
   state: any;
@@ -694,9 +722,20 @@ let pendingSnapshot: {
 let lobbyHeartbeatTimer: number | null = null;
 let lastLobbyHeartbeatMs: number | null = null;
 let netplayAccumulator = 0;
-let multiplayerMenuOpen = false;
+type MenuPanel = 'main' | 'multiplayer' | 'settings' | 'level-select';
+type SettingsTab = 'input' | 'audio' | 'multiplayer';
+let activeMenu: MenuPanel = 'main';
+let settingsReturnMenu: MenuPanel = 'main';
+let levelSelectReturnMenu: MenuPanel = 'main';
+let activeSettingsTab: SettingsTab = 'input';
 let profileBroadcastTimer: number | null = null;
+let lastProfileBroadcastMs: number | null = null;
+let lobbyNameUpdateTimer: number | null = null;
+let lastLobbyNameUpdateMs: number | null = null;
 let lastRoomMetaKey: string | null = null;
+let privacySettings = { hidePlayerNames: false, hideLobbyNames: false };
+const avatarValidationCache = new Map<string, Promise<boolean>>();
+const profileUpdateThrottle = new Map<number, number>();
 const NETPLAY_MAX_FRAME_DELTA = 5;
 const NETPLAY_CLIENT_LEAD = 2;
 const NETPLAY_CLIENT_AHEAD_SLACK = 2;
@@ -1215,15 +1254,56 @@ function sanitizeProfileName(value: string) {
   return trimmed || 'Player';
 }
 
-function sanitizeAvatarId(value: string): ProfileAvatarId {
-  const entry = PROFILE_AVATARS.find((id) => id === value);
-  return entry ?? PROFILE_AVATARS[0];
+function sanitizeLobbyName(value?: string) {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, '').replace(PROFILE_NAME_SAFE, '').trim();
+  const collapsed = cleaned.replace(/\s+/g, ' ');
+  const trimmed = collapsed.slice(0, LOBBY_NAME_MAX);
+  return trimmed || undefined;
+}
+
+function sanitizeLobbyNameDraft(value: string) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, '').replace(PROFILE_NAME_SAFE, '');
+  const collapsed = cleaned.replace(/\s+/g, ' ');
+  return collapsed.slice(0, LOBBY_NAME_MAX);
+}
+
+function base64ByteLength(base64: string) {
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+}
+
+function sanitizeAvatarDataUrl(value?: unknown): string | undefined {
+  if (typeof value !== 'string' || !value) {
+    return undefined;
+  }
+  if (value.length > PROFILE_AVATAR_MAX_DATA_URL_CHARS) {
+    return undefined;
+  }
+  const match = value.match(/^data:(image\/(?:png|jpeg|webp|jpg));base64,([A-Za-z0-9+/=]+)$/);
+  if (!match) {
+    return undefined;
+  }
+  const mime = match[1].toLowerCase();
+  if (!PROFILE_AVATAR_MIME.has(mime)) {
+    return undefined;
+  }
+  const bytes = base64ByteLength(match[2]);
+  if (bytes <= 0 || bytes > PROFILE_AVATAR_MAX_BYTES) {
+    return undefined;
+  }
+  return value;
 }
 
 function sanitizeProfile(profile?: Partial<PlayerProfile>): PlayerProfile {
   return {
     name: sanitizeProfileName(profile?.name ?? ''),
-    avatarId: sanitizeAvatarId(String(profile?.avatarId ?? PROFILE_AVATARS[0])),
+    avatarData: sanitizeAvatarDataUrl(profile?.avatarData),
   };
 }
 
@@ -1247,13 +1327,235 @@ function saveLocalProfile(profile: PlayerProfile) {
   }
 }
 
+function setProfileAvatarError(message?: string) {
+  if (!profileAvatarError) {
+    return;
+  }
+  if (message) {
+    profileAvatarError.textContent = message;
+    profileAvatarError.classList.remove('hidden');
+    profileAvatarError.classList.add('error');
+  } else {
+    profileAvatarError.textContent = '';
+    profileAvatarError.classList.add('hidden');
+    profileAvatarError.classList.remove('error');
+  }
+}
+
+function loadImageDimensions(url: string): Promise<{ width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth || img.width, height: img.naturalHeight || img.height });
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+async function loadImageDimensionsFromFile(file: File) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    return await loadImageDimensions(objectUrl);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('read_failed'));
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.readAsDataURL(file);
+  });
+}
+
+function isAllowedAvatarFile(file: File) {
+  if (PROFILE_AVATAR_MIME.has(file.type.toLowerCase())) {
+    return true;
+  }
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+  return ext === 'png' || ext === 'jpg' || ext === 'jpeg' || ext === 'webp';
+}
+
+async function validateAvatarFile(file: File): Promise<string | null> {
+  setProfileAvatarError();
+  if (!isAllowedAvatarFile(file)) {
+    setProfileAvatarError('Avatar must be PNG, JPG, or WebP.');
+    return null;
+  }
+  if (file.size > PROFILE_AVATAR_MAX_BYTES) {
+    setProfileAvatarError('Avatar must be smaller than 150kb.');
+    return null;
+  }
+  const dimensions = await loadImageDimensionsFromFile(file);
+  if (!dimensions) {
+    setProfileAvatarError('Failed to read avatar image.');
+    return null;
+  }
+  if (dimensions.width > PROFILE_AVATAR_MAX_DIM || dimensions.height > PROFILE_AVATAR_MAX_DIM) {
+    setProfileAvatarError('Avatar must be 512x512 or smaller.');
+    return null;
+  }
+  let dataUrl = '';
+  try {
+    dataUrl = await readFileAsDataUrl(file);
+  } catch {
+    setProfileAvatarError('Failed to read avatar file.');
+    return null;
+  }
+  const sanitized = sanitizeAvatarDataUrl(dataUrl);
+  if (!sanitized) {
+    setProfileAvatarError('Avatar could not be validated.');
+    return null;
+  }
+  return sanitized;
+}
+
+function validateAvatarDataUrlDimensions(dataUrl: string): Promise<boolean> {
+  return loadImageDimensions(dataUrl).then((dims) => {
+    if (!dims) {
+      return false;
+    }
+    return dims.width <= PROFILE_AVATAR_MAX_DIM && dims.height <= PROFILE_AVATAR_MAX_DIM;
+  });
+}
+
+function getAvatarValidationPromise(dataUrl: string): Promise<boolean> {
+  const cached = avatarValidationCache.get(dataUrl);
+  if (cached) {
+    return cached;
+  }
+  const promise = validateAvatarDataUrlDimensions(dataUrl);
+  avatarValidationCache.set(dataUrl, promise);
+  return promise;
+}
+
+function sanitizePrivacySettings(value: any) {
+  return {
+    hidePlayerNames: !!value?.hidePlayerNames,
+    hideLobbyNames: !!value?.hideLobbyNames,
+  };
+}
+
+function loadPrivacySettings() {
+  try {
+    const raw = localStorage.getItem(PRIVACY_STORAGE_KEY);
+    if (!raw) {
+      return sanitizePrivacySettings({});
+    }
+    return sanitizePrivacySettings(JSON.parse(raw));
+  } catch {
+    return sanitizePrivacySettings({});
+  }
+}
+
+function savePrivacySettings(settings: { hidePlayerNames: boolean; hideLobbyNames: boolean }) {
+  try {
+    localStorage.setItem(PRIVACY_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+function updatePrivacyUi() {
+  if (hidePlayerNamesToggle) {
+    hidePlayerNamesToggle.checked = privacySettings.hidePlayerNames;
+  }
+  if (hideLobbyNamesToggle) {
+    hideLobbyNamesToggle.checked = privacySettings.hideLobbyNames;
+  }
+}
+
 function profileFallbackForPlayer(playerId: number): PlayerProfile {
   const suffix = String(playerId).slice(-4);
-  const avatarId = PROFILE_AVATARS[playerId % PROFILE_AVATARS.length] ?? PROFILE_AVATARS[0];
   return {
     name: `Player ${suffix}`,
-    avatarId,
   };
+}
+
+const ALIAS_ADJECTIVES = [
+  'Brisk', 'Calm', 'Copper', 'Dusty', 'Frost', 'Golden', 'Hidden', 'Jade', 'Keen', 'Lucky',
+  'Mellow', 'Neon', 'Quiet', 'Rapid', 'Rustic', 'Silver', 'Soft', 'Solar', 'Steady', 'Swift',
+  'Tidy', 'Tiny', 'Vivid', 'Warm', 'Wild', 'Witty', 'Young', 'Zesty',
+];
+
+const ALIAS_NOUNS = [
+  'Comet', 'Cedar', 'Drift', 'Falcon', 'Flare', 'Forest', 'Galaxy', 'Harbor', 'Horizon', 'Lagoon',
+  'Maple', 'Meadow', 'Meteor', 'Orbit', 'Pebble', 'Quasar', 'River', 'Rocket', 'Signal', 'Summit',
+  'Thistle', 'Voyage', 'Whisper', 'Willow', 'Zenith',
+];
+
+function hashString(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function seededRandom(seed: number) {
+  let t = seed + 0x6d2b79f5;
+  return () => {
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function generateAlias(seedText: string) {
+  const seed = hashString(seedText);
+  const rand = seededRandom(seed);
+  const wordCount = 2 + Math.floor(rand() * 3);
+  const words: string[] = [];
+  for (let i = 0; i < wordCount - 1; i += 1) {
+    words.push(ALIAS_ADJECTIVES[Math.floor(rand() * ALIAS_ADJECTIVES.length)]);
+  }
+  words.push(ALIAS_NOUNS[Math.floor(rand() * ALIAS_NOUNS.length)]);
+  return words.join(' ');
+}
+
+function getPlayerDisplayName(playerId: number, profile: PlayerProfile) {
+  if (!privacySettings.hidePlayerNames) {
+    return profile.name;
+  }
+  const roomKey = lobbyRoom?.roomId ?? 'solo';
+  return generateAlias(`${roomKey}:player:${playerId}`);
+}
+
+function getRoomDisplayName(room: RoomInfo) {
+  const roomName = room.meta?.roomName?.trim() ?? '';
+  if (!roomName) {
+    return room.roomCode ? `Room ${room.roomCode}` : `Room ${room.roomId.slice(0, 8)}`;
+  }
+  if (!privacySettings.hideLobbyNames) {
+    return roomName;
+  }
+  return generateAlias(`room:${room.roomId}`);
+}
+
+function formatRoomInfoLabel(room: RoomInfo) {
+  const codeLabel = room.roomCode ? `Room ${room.roomCode}` : `Room ${room.roomId.slice(0, 8)}`;
+  const roomName = room.meta?.roomName?.trim();
+  const displayName = roomName ? (privacySettings.hideLobbyNames ? generateAlias(`room:${room.roomId}`) : roomName) : '';
+  return displayName ? `${codeLabel} • ${displayName}` : codeLabel;
+}
+
+function createAvatarElement(profile: PlayerProfile, seed: number) {
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar';
+  if (profile.avatarData) {
+    const img = document.createElement('img');
+    img.alt = '';
+    img.src = profile.avatarData;
+    avatar.style.background = 'none';
+    avatar.appendChild(img);
+    return avatar;
+  }
+  const hue = (seed * 47) % 360;
+  const hue2 = (hue + 40) % 360;
+  avatar.style.background = `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.6), rgba(255,255,255,0) 55%), linear-gradient(135deg, hsl(${hue} 70% 60%), hsl(${hue2} 70% 45%))`;
+  return avatar;
 }
 
 function formatGameSourceLabel(source?: GameSource) {
@@ -1320,12 +1622,33 @@ function buildRoomMeta(): RoomMeta | null {
   const labels = formatCourseMeta(gameSource, course);
   const stageId = game.stage?.stageId ?? undefined;
   const status = netplayState.currentCourse ? 'in_game' : 'lobby';
+  const roomName = sanitizeLobbyName(lobbyRoomNameInput?.value ?? lobbyRoom?.meta?.roomName ?? '');
   return {
     status,
     gameSource,
     courseLabel: labels.courseLabel,
     stageLabel: labels.stageLabel,
     stageId,
+    roomName: roomName ?? undefined,
+  };
+}
+
+function buildRoomMetaForCreation(): RoomMeta {
+  const resolvedSource = resolveSelectedGameSource();
+  const gameSource = resolvedSource.gameSource ?? activeGameSource;
+  const course = gameSource === GAME_SOURCES.SMB2
+    ? buildSmb2CourseConfig()
+    : gameSource === GAME_SOURCES.MB2WS
+      ? buildMb2wsCourseConfig()
+      : buildSmb1CourseConfig();
+  const labels = formatCourseMeta(gameSource, course);
+  const roomName = sanitizeLobbyName(lobbyNameInput?.value ?? '');
+  return {
+    status: 'lobby',
+    gameSource,
+    courseLabel: labels.courseLabel,
+    stageLabel: labels.stageLabel,
+    roomName: roomName ?? undefined,
   };
 }
 
@@ -1348,16 +1671,42 @@ function updateLobbyUi() {
     if (lobbyRoomStatus) {
       lobbyRoomStatus.textContent = '';
     }
+    if (lobbyRoomNameInput) {
+      lobbyRoomNameInput.value = '';
+      lobbyRoomNameInput.disabled = true;
+    }
+    if (lobbyLockToggle) {
+      lobbyLockToggle.checked = false;
+      lobbyLockToggle.disabled = true;
+    }
+    if (lobbyStartButton) {
+      lobbyStartButton.classList.add('hidden');
+      lobbyStartButton.disabled = true;
+      lobbyStartButton.textContent = 'Start Match';
+    }
+    if (levelSelectOpenButton) {
+      levelSelectOpenButton.disabled = false;
+    }
+    updateLevelSelectUi();
     return;
   }
 
   lobbyLeaveButton.classList.remove('hidden');
-  const roomLabel = lobbyRoom.roomCode ? `Room ${lobbyRoom.roomCode}` : `Room ${lobbyRoom.roomId.slice(0, 8)}`;
+  const roomLabel = formatRoomInfoLabel(lobbyRoom);
   const statusLabel = lobbyRoom.meta?.status === 'in_game' ? 'In Game' : 'Waiting';
   const playerCount = Math.max(lobbyRoom.playerCount ?? 0, game.players.length);
   const maxPlayers = lobbyRoom.settings?.maxPlayers ?? game.maxPlayers;
+  const isHost = netplayState?.role === 'host';
   if (lobbyRoomInfo) {
     lobbyRoomInfo.textContent = roomLabel;
+  }
+  if (lobbyRoomNameInput) {
+    const desiredName = lobbyRoom.meta?.roomName ?? '';
+    const isEditing = document.activeElement === lobbyRoomNameInput;
+    if (!isEditing && lobbyRoomNameInput.value !== desiredName) {
+      lobbyRoomNameInput.value = desiredName;
+    }
+    lobbyRoomNameInput.disabled = !isHost;
   }
   if (lobbyRoomStatus) {
     lobbyRoomStatus.textContent = `${statusLabel} • ${playerCount}/${maxPlayers} players`;
@@ -1369,14 +1718,13 @@ function updateLobbyUi() {
       const profile = lobbyProfiles.get(player.id) ?? profileFallbackForPlayer(player.id);
       const row = document.createElement('div');
       row.className = 'lobby-player';
-      const avatar = document.createElement('div');
-      avatar.className = `avatar avatar-${profile.avatarId}`;
+      const avatar = createAvatarElement(profile, player.id);
       avatar.setAttribute('aria-hidden', 'true');
       const info = document.createElement('div');
       info.className = 'lobby-player-info';
       const name = document.createElement('div');
       name.className = 'lobby-player-name';
-      name.textContent = profile.name;
+      name.textContent = getPlayerDisplayName(player.id, profile);
       const tags = document.createElement('span');
       tags.className = 'lobby-player-tags';
       const tagParts: string[] = [];
@@ -1395,6 +1743,16 @@ function updateLobbyUi() {
       sub.textContent = `ID ${player.id}`;
       info.append(name, sub);
       row.append(avatar, info);
+      if (isHost && player.id !== lobbyRoom.hostId) {
+        const kickButton = document.createElement('button');
+        kickButton.type = 'button';
+        kickButton.className = 'ghost kick-button';
+        kickButton.textContent = 'Kick';
+        kickButton.addEventListener('click', () => {
+          void kickPlayerFromRoom(player.id);
+        });
+        row.append(kickButton);
+      }
       lobbyPlayerList.appendChild(row);
     }
   }
@@ -1420,27 +1778,94 @@ function updateLobbyUi() {
   if (lobbyCollisionToggle) {
     lobbyCollisionToggle.checked = !!(lobbyRoom.settings?.collisionEnabled ?? true);
   }
-  const isHost = netplayState?.role === 'host';
+  if (lobbyLockToggle) {
+    lobbyLockToggle.checked = !!(lobbyRoom.settings?.locked ?? false);
+  }
   if (lobbyMaxPlayersSelect) {
     lobbyMaxPlayersSelect.disabled = !isHost;
   }
   if (lobbyCollisionToggle) {
     lobbyCollisionToggle.disabled = !isHost;
   }
+  if (lobbyLockToggle) {
+    lobbyLockToggle.disabled = !isHost;
+  }
+  if (lobbyStageButton) {
+    lobbyStageButton.disabled = !isHost;
+  }
+  if (lobbyStartButton) {
+    lobbyStartButton.classList.remove('hidden');
+    lobbyStartButton.disabled = !isHost;
+    lobbyStartButton.textContent = isHost ? 'Start Match' : 'Waiting for host...';
+  }
+  if (levelSelectOpenButton) {
+    levelSelectOpenButton.disabled = !isHost;
+  }
   updateProfileUi();
+  updateLevelSelectUi();
 }
 
-function setMultiplayerMenuOpen(open: boolean) {
-  if (multiplayerMenuOpen === open) {
+function setSettingsTab(tab: SettingsTab) {
+  activeSettingsTab = tab;
+  for (const button of settingsTabButtons) {
+    button.classList.toggle('active', button.dataset.settingsTab === tab);
+  }
+  for (const panel of settingsTabPanels) {
+    panel.classList.toggle('hidden', panel.dataset.settingsPanel !== tab);
+  }
+}
+
+function updateSettingsUi() {
+  // Settings UI currently only depends on stored values.
+}
+
+function updateLevelSelectUi() {
+  const showLobbyStage = !!(netplayEnabled && lobbyRoom && netplayState?.role === 'host');
+  if (lobbyStageActions) {
+    lobbyStageActions.classList.toggle('hidden', !showLobbyStage);
+  }
+  if (lobbyStageChooseButton) {
+    lobbyStageChooseButton.disabled = !showLobbyStage;
+  }
+}
+
+function setActiveMenu(menu: MenuPanel) {
+  if (activeMenu === menu) {
     return;
   }
-  multiplayerMenuOpen = open;
-  mainMenuPanel?.classList.toggle('hidden', open);
-  multiplayerMenuPanel?.classList.toggle('hidden', !open);
+  activeMenu = menu;
+  mainMenuPanel?.classList.toggle('hidden', menu !== 'main');
+  multiplayerMenuPanel?.classList.toggle('hidden', menu !== 'multiplayer');
+  settingsMenuPanel?.classList.toggle('hidden', menu !== 'settings');
+  levelSelectMenuPanel?.classList.toggle('hidden', menu !== 'level-select');
   updateLobbyUi();
-  if (open && lobbyClient) {
+  if (menu === 'multiplayer' && lobbyClient) {
     void refreshLobbyList();
   }
+  if (menu === 'settings') {
+    updateSettingsUi();
+  }
+  if (menu === 'level-select') {
+    updateLevelSelectUi();
+  }
+  syncTouchPreviewVisibility();
+}
+
+function openSettingsMenu(tab?: SettingsTab) {
+  if (activeMenu !== 'settings') {
+    settingsReturnMenu = activeMenu;
+  }
+  if (tab) {
+    setSettingsTab(tab);
+  }
+  setActiveMenu('settings');
+}
+
+function openLevelSelectMenu(returnMenu?: MenuPanel) {
+  if (activeMenu !== 'level-select') {
+    levelSelectReturnMenu = returnMenu ?? activeMenu;
+  }
+  setActiveMenu('level-select');
 }
 
 function broadcastRoomUpdate() {
@@ -1461,10 +1886,12 @@ function applyLobbySettingsFromInputs() {
   const minPlayers = Math.max(2, currentPlayers);
   const nextMax = clampInt(requestedMax, minPlayers, LOBBY_MAX_PLAYERS);
   const collisionEnabled = lobbyCollisionToggle ? !!lobbyCollisionToggle.checked : lobbyRoom.settings.collisionEnabled;
+  const locked = lobbyLockToggle ? !!lobbyLockToggle.checked : lobbyRoom.settings.locked;
   lobbyRoom.settings = {
     ...lobbyRoom.settings,
     maxPlayers: nextMax,
     collisionEnabled,
+    locked,
   };
   game.maxPlayers = nextMax;
   game.playerCollisionEnabled = collisionEnabled;
@@ -1477,6 +1904,10 @@ function applyLobbySettingsFromInputs() {
 }
 
 async function handleHostDisconnect() {
+  if (performance.now() < suppressHostDisconnectUntil) {
+    suppressHostDisconnectUntil = 0;
+    return;
+  }
   if (!allowHostMigration) {
     resetNetplayConnections();
     return;
@@ -1544,6 +1975,14 @@ function broadcastLocalProfile() {
   if (!Number.isFinite(game.localPlayerId) || game.localPlayerId <= 0) {
     return;
   }
+  const sanitized = sanitizeProfile(localProfile);
+  if (sanitized.name !== localProfile.name || sanitized.avatarData !== localProfile.avatarData) {
+    localProfile = sanitized;
+    saveLocalProfile(localProfile);
+    updateProfileUi();
+  } else {
+    localProfile = sanitized;
+  }
   applyLocalProfileToSession();
   const payload = { type: 'player_profile', playerId: game.localPlayerId, profile: localProfile } as const;
   if (netplayState.role === 'host') {
@@ -1551,18 +1990,24 @@ function broadcastLocalProfile() {
   } else if (netplayState.role === 'client') {
     clientPeer?.send(payload);
   }
+  lastProfileBroadcastMs = performance.now();
   updateLobbyUi();
 }
 
 function updateProfileUi() {
   if (profileNameInput) {
-    profileNameInput.value = localProfile.name;
+    const isEditing = document.activeElement === profileNameInput;
+    if (!isEditing && profileNameInput.value !== localProfile.name) {
+      profileNameInput.value = localProfile.name;
+    }
   }
-  if (profileAvatarGrid) {
-    const buttons = Array.from(profileAvatarGrid.querySelectorAll<HTMLButtonElement>('button[data-avatar]'));
-    for (const button of buttons) {
-      const avatarId = button.dataset.avatar;
-      button.classList.toggle('selected', avatarId === localProfile.avatarId);
+  if (profileAvatarPreview) {
+    profileAvatarPreview.innerHTML = '';
+    if (localProfile.avatarData) {
+      const img = document.createElement('img');
+      img.alt = '';
+      img.src = localProfile.avatarData;
+      profileAvatarPreview.appendChild(img);
     }
   }
 }
@@ -1571,14 +2016,71 @@ function scheduleProfileBroadcast() {
   if (profileBroadcastTimer !== null) {
     window.clearTimeout(profileBroadcastTimer);
   }
+  const nowMs = performance.now();
+  const lastMs = lastProfileBroadcastMs ?? 0;
+  const cooldownRemaining = PROFILE_BROADCAST_COOLDOWN_MS - (nowMs - lastMs);
+  const waitMs = Math.max(300, cooldownRemaining);
   profileBroadcastTimer = window.setTimeout(() => {
     profileBroadcastTimer = null;
+    lastProfileBroadcastMs = performance.now();
     broadcastLocalProfile();
-  }, 300);
+  }, waitMs);
+}
+
+function applyLobbyNameFromInput() {
+  if (!lobbyRoom || netplayState?.role !== 'host') {
+    return;
+  }
+  const sanitized = sanitizeLobbyName(lobbyRoomNameInput?.value ?? '');
+  if (lobbyRoomNameInput && (sanitized ?? '') !== lobbyRoomNameInput.value) {
+    lobbyRoomNameInput.value = sanitized ?? '';
+  }
+  const nextName = sanitized ?? undefined;
+  const baseMeta = buildRoomMeta() ?? lobbyRoom.meta ?? { status: 'lobby' };
+  if (baseMeta.roomName === nextName) {
+    return;
+  }
+  lobbyRoom.meta = { ...baseMeta, roomName: nextName };
+  lastLobbyNameUpdateMs = performance.now();
+  broadcastRoomUpdate();
+  sendLobbyHeartbeat(performance.now(), true);
+  updateLobbyUi();
+}
+
+function scheduleLobbyNameUpdate() {
+  if (lobbyNameUpdateTimer !== null) {
+    window.clearTimeout(lobbyNameUpdateTimer);
+  }
+  const nowMs = performance.now();
+  const lastMs = lastLobbyNameUpdateMs ?? 0;
+  const cooldownRemaining = LOBBY_NAME_UPDATE_COOLDOWN_MS - (nowMs - lastMs);
+  const waitMs = Math.max(300, cooldownRemaining);
+  lobbyNameUpdateTimer = window.setTimeout(() => {
+    lobbyNameUpdateTimer = null;
+    applyLobbyNameFromInput();
+  }, waitMs);
+}
+
+function applyLobbyStageSelection() {
+  if (!lobbyRoom || netplayState?.role !== 'host') {
+    return;
+  }
+  const meta = buildRoomMeta();
+  if (!meta) {
+    return;
+  }
+  lobbyRoom.meta = meta;
+  lastRoomMetaKey = JSON.stringify(meta);
+  broadcastRoomUpdate();
+  sendLobbyHeartbeat(performance.now(), true);
+  updateLobbyUi();
 }
 
 localProfile = loadLocalProfile();
 updateProfileUi();
+privacySettings = loadPrivacySettings();
+updatePrivacyUi();
+setSettingsTab(activeSettingsTab);
 
 function startLobbyHeartbeat(roomId: string) {
   if (!lobbyClient) {
@@ -1653,6 +2155,10 @@ function resetNetplayConnections({ preserveLobby = false }: { preserveLobby?: bo
     lobbyHostToken = null;
     lastLobbyHeartbeatMs = null;
     lobbyProfiles.clear();
+    pendingAvatarByPlayer.clear();
+    profileUpdateThrottle.clear();
+    lastProfileBroadcastMs = null;
+    lastLobbyNameUpdateMs = null;
     allowHostMigration = false;
     lastRoomMetaKey = null;
   }
@@ -2308,6 +2814,45 @@ function requestSnapshot(reason: 'mismatch' | 'lag', frame?: number, force = fal
   });
 }
 
+function applyIncomingProfile(
+  playerId: number,
+  incoming: PlayerProfile,
+  { broadcast }: { broadcast?: boolean } = {},
+) {
+  const sanitized = sanitizeProfile(incoming);
+  const baseProfile: PlayerProfile = { name: sanitized.name };
+  lobbyProfiles.set(playerId, baseProfile);
+  if (broadcast) {
+    hostRelay?.broadcast({ type: 'player_profile', playerId, profile: baseProfile });
+  }
+  updateLobbyUi();
+  if (!sanitized.avatarData) {
+    pendingAvatarByPlayer.delete(playerId);
+    return;
+  }
+  const avatarData = sanitized.avatarData;
+  pendingAvatarByPlayer.set(playerId, avatarData);
+  void getAvatarValidationPromise(avatarData).then((ok) => {
+    if (!ok) {
+      if (pendingAvatarByPlayer.get(playerId) === avatarData) {
+        pendingAvatarByPlayer.delete(playerId);
+      }
+      return;
+    }
+    if (pendingAvatarByPlayer.get(playerId) !== avatarData) {
+      return;
+    }
+    pendingAvatarByPlayer.delete(playerId);
+    const current = lobbyProfiles.get(playerId);
+    const finalProfile: PlayerProfile = { name: current?.name ?? sanitized.name, avatarData };
+    lobbyProfiles.set(playerId, finalProfile);
+    if (broadcast) {
+      hostRelay?.broadcast({ type: 'player_profile', playerId, profile: finalProfile });
+    }
+    updateLobbyUi();
+  });
+}
+
 function cloneCourseConfig(config: any) {
   if (!config || typeof config !== 'object') {
     return config;
@@ -2343,6 +2888,20 @@ function getHostCourseConfig() {
 }
 
 function handleHostMessage(msg: HostToClientMessage) {
+  if (msg.type === 'kick') {
+    suppressHostDisconnectUntil = performance.now() + 1500;
+    allowHostMigration = false;
+    lobbySignalShouldReconnect = false;
+    lobbySignalReconnectFn = null;
+    clearLobbySignalRetry();
+    resetNetplayConnections();
+    game.pause();
+    setActiveMenu('multiplayer');
+    if (lobbyStatus) {
+      lobbyStatus.textContent = msg.reason ? `Lobby: ${msg.reason}` : 'Lobby: removed by host';
+    }
+    return;
+  }
   const state = netplayState;
   if (!state) {
     return;
@@ -2463,13 +3022,12 @@ function handleHostMessage(msg: HostToClientMessage) {
   if (msg.type === 'player_leave') {
     game.removePlayer(msg.playerId);
     lobbyProfiles.delete(msg.playerId);
+    pendingAvatarByPlayer.delete(msg.playerId);
     updateLobbyUi();
     return;
   }
   if (msg.type === 'player_profile') {
-    const profile = sanitizeProfile(msg.profile);
-    lobbyProfiles.set(msg.playerId, profile);
-    updateLobbyUi();
+    applyIncomingProfile(msg.playerId, msg.profile);
     return;
   }
   if (msg.type === 'room_update') {
@@ -2605,10 +3163,13 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
     return;
   }
   if (msg.type === 'player_profile') {
-    const profile = sanitizeProfile(msg.profile);
-    lobbyProfiles.set(playerId, profile);
-    hostRelay?.broadcast({ type: 'player_profile', playerId, profile });
-    updateLobbyUi();
+    const nowMs = performance.now();
+    const lastMs = profileUpdateThrottle.get(playerId) ?? 0;
+    if ((nowMs - lastMs) < PROFILE_REMOTE_COOLDOWN_MS) {
+      return;
+    }
+    profileUpdateThrottle.set(playerId, nowMs);
+    applyIncomingProfile(playerId, msg.profile, { broadcast: true });
     return;
   }
 }
@@ -3067,22 +3628,27 @@ async function refreshLobbyList() {
       info.className = 'lobby-item-main';
       const title = document.createElement('div');
       title.className = 'lobby-item-title';
+      title.textContent = getRoomDisplayName(room);
+      const subtitle = document.createElement('div');
+      subtitle.className = 'lobby-item-subtitle';
       const sourceLabel = formatGameSourceLabel(room.meta?.gameSource);
       const courseLabel = room.meta?.courseLabel ?? room.courseId ?? 'Unknown';
       const stageLabel = room.meta?.stageLabel ? ` • ${room.meta.stageLabel}` : '';
-      title.textContent = `${sourceLabel} • ${courseLabel}${stageLabel}`;
+      subtitle.textContent = `${sourceLabel} • ${courseLabel}${stageLabel}`;
       const meta = document.createElement('div');
       meta.className = 'lobby-item-meta';
       const status = room.meta?.status === 'in_game' ? 'In Game' : 'Waiting';
       const playerCount = room.playerCount ?? 0;
       const maxPlayers = room.settings?.maxPlayers ?? 8;
-      meta.textContent = `${status} • ${playerCount}/${maxPlayers} players`;
-      info.append(title, meta);
+      const locked = !!room.settings?.locked;
+      const lockLabel = locked ? ' • Locked' : '';
+      meta.textContent = `${status} • ${playerCount}/${maxPlayers} players${lockLabel}`;
+      info.append(title, subtitle, meta);
       const join = document.createElement('button');
       join.className = 'ghost compact';
       join.type = 'button';
       join.textContent = 'Join';
-      if (playerCount >= maxPlayers) {
+      if (playerCount >= maxPlayers || locked) {
         join.disabled = true;
       }
       join.addEventListener('click', async () => {
@@ -3111,7 +3677,8 @@ async function createRoom() {
     const result = await lobbyClient.createRoom({
       isPublic,
       courseId: 'smb1-main',
-      settings: { maxPlayers: LOBBY_MAX_PLAYERS, collisionEnabled: true },
+      settings: { maxPlayers: LOBBY_MAX_PLAYERS, collisionEnabled: true, locked: false },
+      meta: buildRoomMetaForCreation(),
     });
     lobbyRoom = result.room;
     lobbySelfId = result.playerId;
@@ -3148,7 +3715,14 @@ async function joinRoom(roomId: string) {
     startClient(result.room, result.playerId, result.playerToken);
   } catch (err) {
     console.error(err);
-    lobbyStatus.textContent = 'Lobby: join failed';
+    const message = err instanceof Error ? err.message : '';
+    if (message === 'room_locked') {
+      lobbyStatus.textContent = 'Lobby: room is locked';
+    } else if (message === 'room_full') {
+      lobbyStatus.textContent = 'Lobby: room is full';
+    } else {
+      lobbyStatus.textContent = 'Lobby: join failed';
+    }
   }
 }
 
@@ -3181,7 +3755,14 @@ async function joinRoomByCode() {
     startClient(result.room, result.playerId, result.playerToken);
   } catch (err) {
     console.error(err);
-    lobbyStatus.textContent = 'Lobby: join failed';
+    const message = err instanceof Error ? err.message : '';
+    if (message === 'room_locked') {
+      lobbyStatus.textContent = 'Lobby: room is locked';
+    } else if (message === 'room_full') {
+      lobbyStatus.textContent = 'Lobby: room is full';
+    } else {
+      lobbyStatus.textContent = 'Lobby: join failed';
+    }
   }
 }
 
@@ -3208,6 +3789,26 @@ async function leaveRoom() {
   if (lobbyStatus) {
     lobbyStatus.textContent = 'Lobby: idle';
   }
+}
+
+async function kickPlayerFromRoom(playerId: number) {
+  if (!lobbyClient || !lobbyRoom || netplayState?.role !== 'host' || !lobbyHostToken) {
+    return;
+  }
+  if (playerId === lobbyRoom.hostId) {
+    return;
+  }
+  try {
+    await lobbyClient.kickPlayer(lobbyRoom.roomId, lobbyHostToken, playerId);
+  } catch (err) {
+    console.error(err);
+  }
+  hostRelay?.sendTo(playerId, { type: 'kick', reason: 'Removed by host' });
+  window.setTimeout(() => {
+    hostRelay?.disconnect(playerId);
+    broadcastRoomUpdate();
+    sendLobbyHeartbeat(performance.now(), true);
+  }, 80);
 }
 
 function startHost(room: LobbyRoom, playerToken: string) {
@@ -3287,6 +3888,7 @@ function startHost(room: LobbyRoom, playerToken: string) {
     game.removePlayer(playerId);
     netplayState?.clientStates.delete(playerId);
     lobbyProfiles.delete(playerId);
+    pendingAvatarByPlayer.delete(playerId);
     hostRelay?.broadcast({ type: 'player_leave', playerId });
     updateLobbyUi();
     maybeSendStageSync();
@@ -3655,12 +4257,26 @@ function syncTouchPreviewVisibility() {
   game.input?.setTouchPreview?.(shouldPreview);
 }
 
+function getActiveOverlayPanel(): HTMLElement | null {
+  if (levelSelectMenuPanel && !levelSelectMenuPanel.classList.contains('hidden')) {
+    return levelSelectMenuPanel;
+  }
+  if (settingsMenuPanel && !settingsMenuPanel.classList.contains('hidden')) {
+    return settingsMenuPanel;
+  }
+  if (multiplayerMenuPanel && !multiplayerMenuPanel.classList.contains('hidden')) {
+    return multiplayerMenuPanel;
+  }
+  return mainMenuPanel;
+}
+
 function isOverlayPanelNearBottom() {
-  if (!overlayPanel) {
+  const panel = getActiveOverlayPanel();
+  if (!panel) {
     return false;
   }
   const buffer = 24;
-  return overlayPanel.scrollTop + overlayPanel.clientHeight >= overlayPanel.scrollHeight - buffer;
+  return panel.scrollTop + panel.clientHeight >= panel.scrollHeight - buffer;
 }
 
 function renderFrame(now: number) {
@@ -4007,9 +4623,11 @@ document.addEventListener('webkitfullscreenchange', () => {
   updateFullscreenButtonVisibility();
 });
 
-overlayPanel?.addEventListener('scroll', () => {
-  syncTouchPreviewVisibility();
-});
+for (const panel of [mainMenuPanel, multiplayerMenuPanel, settingsMenuPanel, levelSelectMenuPanel]) {
+  panel?.addEventListener('scroll', () => {
+    syncTouchPreviewVisibility();
+  });
+}
 
 gamepadCalibrationButton?.addEventListener('click', () => {
   startGamepadCalibration();
@@ -4033,14 +4651,39 @@ if (interpolationToggle) {
 }
 
 multiplayerOpenButton?.addEventListener('click', () => {
-  setMultiplayerMenuOpen(true);
+  setActiveMenu('multiplayer');
 });
 
 multiplayerBackButton?.addEventListener('click', () => {
-  setMultiplayerMenuOpen(false);
+  setActiveMenu('main');
 });
 
-startButton.addEventListener('click', () => {
+levelSelectOpenButton?.addEventListener('click', () => {
+  openLevelSelectMenu('main');
+});
+
+levelSelectBackButton?.addEventListener('click', () => {
+  setActiveMenu(levelSelectReturnMenu);
+});
+
+settingsOpenButton?.addEventListener('click', () => {
+  openSettingsMenu();
+});
+
+settingsBackButton?.addEventListener('click', () => {
+  setActiveMenu(settingsReturnMenu);
+});
+
+for (const button of settingsTabButtons) {
+  button.addEventListener('click', () => {
+    const tab = button.dataset.settingsTab as SettingsTab | undefined;
+    if (tab) {
+      setSettingsTab(tab);
+    }
+  });
+}
+
+function handleStartRequest() {
   if (netplayEnabled && netplayState?.role === 'client') {
     if (hudStatus) {
       hudStatus.textContent = 'Waiting for host to start...';
@@ -4072,7 +4715,9 @@ startButton.addEventListener('click', () => {
     }
     console.error(error);
   });
-});
+}
+
+startButton.addEventListener('click', handleStartRequest);
 
 resumeButton.addEventListener('click', () => {
   paused = false;
@@ -4126,6 +4771,11 @@ if (lobbyCollisionToggle) {
     applyLobbySettingsFromInputs();
   });
 }
+if (lobbyLockToggle) {
+  lobbyLockToggle.addEventListener('change', () => {
+    applyLobbySettingsFromInputs();
+  });
+}
 if (profileNameInput) {
   profileNameInput.addEventListener('input', () => {
     const sanitized = sanitizeProfileName(profileNameInput.value);
@@ -4139,20 +4789,102 @@ if (profileNameInput) {
     }
   });
 }
-if (profileAvatarGrid) {
-  profileAvatarGrid.addEventListener('click', (event) => {
-    const target = event.target as HTMLElement | null;
-    const button = target?.closest('button[data-avatar]') as HTMLButtonElement | null;
-    if (!button) {
+if (profileAvatarInput) {
+  profileAvatarInput.addEventListener('change', async () => {
+    const file = profileAvatarInput.files?.[0] ?? null;
+    profileAvatarInput.value = '';
+    if (!file) {
       return;
     }
-    const avatarId = sanitizeAvatarId(button.dataset.avatar ?? '');
-    if (avatarId !== localProfile.avatarId) {
-      localProfile = { ...localProfile, avatarId };
-      saveLocalProfile(localProfile);
-      updateProfileUi();
-      scheduleProfileBroadcast();
+    const dataUrl = await validateAvatarFile(file);
+    if (!dataUrl) {
+      return;
     }
+    localProfile = { ...localProfile, avatarData: dataUrl };
+    saveLocalProfile(localProfile);
+    updateProfileUi();
+    scheduleProfileBroadcast();
+  });
+}
+if (profileAvatarClearButton) {
+  profileAvatarClearButton.addEventListener('click', () => {
+    if (!localProfile.avatarData) {
+      return;
+    }
+    localProfile = { ...localProfile, avatarData: undefined };
+    saveLocalProfile(localProfile);
+    updateProfileUi();
+    scheduleProfileBroadcast();
+    setProfileAvatarError();
+  });
+}
+if (hidePlayerNamesToggle) {
+  hidePlayerNamesToggle.addEventListener('change', () => {
+    privacySettings = { ...privacySettings, hidePlayerNames: hidePlayerNamesToggle.checked };
+    savePrivacySettings(privacySettings);
+    updateLobbyUi();
+  });
+}
+if (hideLobbyNamesToggle) {
+  hideLobbyNamesToggle.addEventListener('change', () => {
+    privacySettings = { ...privacySettings, hideLobbyNames: hideLobbyNamesToggle.checked };
+    savePrivacySettings(privacySettings);
+    updateLobbyUi();
+    void refreshLobbyList();
+  });
+}
+if (lobbyNameInput) {
+  lobbyNameInput.addEventListener('input', () => {
+    const sanitized = sanitizeLobbyNameDraft(lobbyNameInput.value);
+    if (sanitized !== lobbyNameInput.value) {
+      lobbyNameInput.value = sanitized;
+    }
+  });
+}
+if (lobbyRoomNameInput) {
+  lobbyRoomNameInput.addEventListener('input', () => {
+    if (netplayState?.role !== 'host') {
+      return;
+    }
+    const sanitized = sanitizeLobbyNameDraft(lobbyRoomNameInput.value);
+    if (sanitized !== lobbyRoomNameInput.value) {
+      lobbyRoomNameInput.value = sanitized;
+    }
+  });
+  lobbyRoomNameInput.addEventListener('blur', () => {
+    if (netplayState?.role !== 'host') {
+      return;
+    }
+    scheduleLobbyNameUpdate();
+  });
+  lobbyRoomNameInput.addEventListener('keydown', (event) => {
+    if (netplayState?.role !== 'host') {
+      return;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      lobbyRoomNameInput.blur();
+      scheduleLobbyNameUpdate();
+    }
+  });
+}
+if (lobbyStageButton) {
+  lobbyStageButton.addEventListener('click', () => {
+    if (netplayState?.role !== 'host') {
+      return;
+    }
+    openLevelSelectMenu('multiplayer');
+  });
+}
+if (lobbyStageChooseButton) {
+  lobbyStageChooseButton.addEventListener('click', () => {
+    applyLobbyStageSelection();
+    setActiveMenu('multiplayer');
+  });
+}
+if (lobbyStartButton) {
+  lobbyStartButton.addEventListener('click', () => {
+    handleStartRequest();
   });
 }
 if (lobbyClient) {
