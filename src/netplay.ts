@@ -11,6 +11,13 @@ export type SignalMessage = {
   payload: any;
 };
 
+export type RoomJoinResult = {
+  room: RoomInfo;
+  playerId: number;
+  playerToken: string;
+  hostToken?: string;
+};
+
 const DEFAULT_STUN = [{ urls: 'stun:stun.l.google.com:19302' }];
 const FAST_MESSAGE_TYPES = new Set(['frame', 'input', 'ack', 'ping', 'pong']);
 
@@ -31,44 +38,72 @@ export class LobbyClient {
     return data.rooms ?? [];
   }
 
-  async createRoom(room: Partial<RoomInfo>): Promise<RoomInfo> {
+  async createRoom(room: Partial<RoomInfo>): Promise<RoomJoinResult> {
     const res = await fetch(`${this.baseUrl}/rooms`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(room),
     });
-    const data = await res.json();
-    return data.room;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error ?? `create_room_${res.status}`);
+    }
+    return {
+      room: data.room,
+      playerId: data.playerId,
+      playerToken: data.playerToken,
+      hostToken: data.hostToken,
+    };
   }
 
-  async joinRoom(roomIdOrCode: { roomId?: string; roomCode?: string }): Promise<RoomInfo> {
+  async joinRoom(roomIdOrCode: {
+    roomId?: string;
+    roomCode?: string;
+    playerId?: number;
+    token?: string;
+  }): Promise<RoomJoinResult> {
     const res = await fetch(`${this.baseUrl}/rooms/join`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(roomIdOrCode),
     });
-    const data = await res.json();
-    return data.room;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error ?? `join_room_${res.status}`);
+    }
+    return {
+      room: data.room,
+      playerId: data.playerId,
+      playerToken: data.playerToken,
+    };
   }
 
-  async heartbeat(roomId: string): Promise<void> {
+  async heartbeat(roomId: string, playerId: number, token: string): Promise<void> {
     await fetch(`${this.baseUrl}/rooms/heartbeat`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ roomId }),
+      body: JSON.stringify({ roomId, playerId, token }),
     });
   }
 
-  async closeRoom(roomId: string): Promise<void> {
+  async closeRoom(roomId: string, hostToken: string): Promise<void> {
     await fetch(`${this.baseUrl}/rooms/close`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ roomId }),
+      body: JSON.stringify({ roomId, hostToken }),
     });
   }
 
-  openSignal(roomId: string, playerId: number, onMessage: (msg: SignalMessage) => void, onClose: () => void) {
-    const ws = new WebSocket(`${this.baseUrl.replace('http', 'ws')}/room/${roomId}?playerId=${playerId}`);
+  openSignal(
+    roomId: string,
+    playerId: number,
+    token: string,
+    onMessage: (msg: SignalMessage) => void,
+    onClose: () => void,
+  ) {
+    const ws = new WebSocket(
+      `${this.baseUrl.replace('http', 'ws')}/room/${roomId}?playerId=${playerId}&token=${encodeURIComponent(token)}`,
+    );
     const pending: SignalMessage[] = [];
     ws.addEventListener('open', () => {
       while (pending.length > 0) {

@@ -63,6 +63,10 @@ function clamp(value: number, min: number, max: number) {
   return value;
 }
 
+function clampInt(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
 const DEFAULT_PAD_GATE = [
   [84, 0],
   [59, 59],
@@ -646,6 +650,9 @@ const lobbyList = document.getElementById('lobby-list') as HTMLElement | null;
 const lobbyPlayers = document.getElementById('lobby-players') as HTMLElement | null;
 
 let lobbyRoom: LobbyRoom | null = null;
+let lobbySelfId: number | null = null;
+let lobbyPlayerToken: string | null = null;
+let lobbyHostToken: string | null = null;
 let lobbySignal: { send: (msg: any) => void; close: () => void } | null = null;
 let lobbySignalRetryTimer: number | null = null;
 let lobbySignalRetryMs = 1000;
@@ -688,6 +695,9 @@ const NETPLAY_PING_INTERVAL_MS = 1000;
 const NETPLAY_HOST_STALL_MS = 3000;
 const NETPLAY_HOST_SNAPSHOT_BEHIND_FRAMES = 120;
 const NETPLAY_HOST_SNAPSHOT_COOLDOWN_MS = 1500;
+const NETPLAY_SNAPSHOT_MISMATCH_COOLDOWN_MS = 250;
+const NETPLAY_MAX_INPUT_AHEAD = 60;
+const NETPLAY_MAX_INPUT_BEHIND = 60;
 const NETPLAY_DEBUG_STORAGE_KEY = 'smb_netplay_debug';
 const LOBBY_HEARTBEAT_INTERVAL_MS = 15000;
 const LOBBY_HEARTBEAT_FALLBACK_MS = 12000;
@@ -799,6 +809,7 @@ type NetplayClientState = {
   lastAckedHostFrame: number;
   lastAckedClientInput: number;
   lastSnapshotMs: number | null;
+  lastSnapshotRequestMs: number | null;
 };
 type NetplayState = {
   role: NetplayRole;
@@ -846,6 +857,34 @@ function createNetplayId() {
 
 function quantizedEqual(a: QuantizedInput, b: QuantizedInput) {
   return a.x === b.x && a.y === b.y && (a.buttons ?? 0) === (b.buttons ?? 0);
+}
+
+function coerceFrame(value: unknown): number | null {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return null;
+  }
+  return Math.max(0, Math.floor(num));
+}
+
+function clampQuantizedAxis(value: unknown): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return 0;
+  }
+  return clampInt(Math.round(num), -127, 127);
+}
+
+function normalizeInput(input: any): QuantizedInput | null {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+  const buttonsNum = Number(input.buttons ?? 0);
+  return {
+    x: clampQuantizedAxis(input.x),
+    y: clampQuantizedAxis(input.y),
+    buttons: Number.isFinite(buttonsNum) ? (buttonsNum | 0) : 0,
+  };
 }
 
 function ensureNetplayState(role: NetplayRole) {
@@ -932,6 +971,7 @@ function resetNetplayForStage() {
     clientState.lastAckedHostFrame = -1;
     clientState.lastAckedClientInput = -1;
     clientState.lastSnapshotMs = null;
+    clientState.lastSnapshotRequestMs = null;
   }
   resetNetplaySession();
 }
@@ -1222,19 +1262,28 @@ function resetNetplayConnections() {
   game.allowCourseAdvance = true;
   stopLobbyHeartbeat();
   lobbyRoom = null;
+  lobbySelfId = null;
+  lobbyPlayerToken = null;
+  lobbyHostToken = null;
   lastLobbyHeartbeatMs = null;
   updateLobbyUi();
 }
 
-function sendLobbyHeartbeat(nowMs: number, force = false, roomId = lobbyRoom?.roomId) {
-  if (!lobbyClient || !roomId) {
+function sendLobbyHeartbeat(
+  nowMs: number,
+  force = false,
+  roomId = lobbyRoom?.roomId,
+  playerId = lobbySelfId,
+  token = lobbyPlayerToken,
+) {
+  if (!lobbyClient || !roomId || playerId === null || !token) {
     return;
   }
   if (!force && lastLobbyHeartbeatMs !== null && (nowMs - lastLobbyHeartbeatMs) < LOBBY_HEARTBEAT_FALLBACK_MS) {
     return;
   }
   lastLobbyHeartbeatMs = nowMs;
-  void lobbyClient.heartbeat(roomId);
+  void lobbyClient.heartbeat(roomId, playerId, token);
 }
 
 function recordInputForFrame(frame: number, playerId: number, input: QuantizedInput) {
@@ -1814,14 +1863,20 @@ async function startStage(
 }
 
 function requestSnapshot(reason: 'mismatch' | 'lag', frame?: number, force = false) {
-  if (!clientPeer || !netplayState || netplayState.awaitingSnapshot) {
-    if (!force) {
-      return;
-    }
-    if (!clientPeer || !netplayState) {
-      return;
-    }
+  if (!clientPeer || !netplayState) {
+    return;
   }
+  const nowMs = performance.now();
+  const lastRequest = netplayState.lastSnapshotRequestTimeMs ?? 0;
+  const cooldownOk = netplayState.lastSnapshotRequestTimeMs === null
+    || (nowMs - lastRequest) >= NETPLAY_SNAPSHOT_COOLDOWN_MS;
+  if (netplayState.awaitingSnapshot && !force && !cooldownOk) {
+    return;
+  }
+  if (!cooldownOk) {
+    return;
+  }
+  netplayState.lastSnapshotRequestTimeMs = nowMs;
   netplayState.awaitingSnapshot = true;
   const targetFrame = frame ?? netplayState.session.getFrame();
   clientPeer.send({
@@ -1909,15 +1964,22 @@ function handleHostMessage(msg: HostToClientMessage) {
       return;
     }
     const frameMsg = msg as FrameBundleMessage;
+    const frame = coerceFrame(frameMsg.frame);
+    if (frame === null) {
+      return;
+    }
     if (frameMsg.lastAck !== undefined) {
-      state.lastAckedLocalFrame = Math.max(state.lastAckedLocalFrame, frameMsg.lastAck);
-      for (const frame of Array.from(state.pendingLocalInputs.keys())) {
-        if (frame <= state.lastAckedLocalFrame) {
-          state.pendingLocalInputs.delete(frame);
+      const ackFrame = coerceFrame(frameMsg.lastAck);
+      if (ackFrame !== null) {
+        state.lastAckedLocalFrame = Math.max(state.lastAckedLocalFrame, ackFrame);
+      }
+      for (const pendingFrame of Array.from(state.pendingLocalInputs.keys())) {
+        if (pendingFrame <= state.lastAckedLocalFrame) {
+          state.pendingLocalInputs.delete(pendingFrame);
         }
       }
     }
-    state.lastReceivedHostFrame = Math.max(state.lastReceivedHostFrame, frameMsg.frame);
+    state.lastReceivedHostFrame = Math.max(state.lastReceivedHostFrame, frame);
     state.lastHostFrameTimeMs = performance.now();
     let changed = false;
     for (const [id, input] of Object.entries(frameMsg.inputs)) {
@@ -1925,21 +1987,27 @@ function handleHostMessage(msg: HostToClientMessage) {
       if (state.role === 'client' && playerId === game.localPlayerId) {
         continue;
       }
-      if (recordInputForFrame(frameMsg.frame, playerId, input)) {
+      const normalized = normalizeInput(input);
+      if (!normalized) {
+        continue;
+      }
+      if (recordInputForFrame(frame, playerId, normalized)) {
         changed = true;
       }
     }
     if (frameMsg.hash !== undefined && frameMsg.hashFrame !== undefined) {
-      const hashFrame = frameMsg.hashFrame;
-      state.expectedHashes.set(hashFrame, frameMsg.hash);
-      const localHash = state.hashHistory.get(hashFrame);
-      if (localHash !== undefined && localHash !== frameMsg.hash) {
-        requestSnapshot('mismatch', hashFrame);
+      const hashFrame = coerceFrame(frameMsg.hashFrame);
+      if (hashFrame !== null && Number.isFinite(frameMsg.hash)) {
+        state.expectedHashes.set(hashFrame, frameMsg.hash);
+        const localHash = state.hashHistory.get(hashFrame);
+        if (localHash !== undefined && localHash !== frameMsg.hash) {
+          requestSnapshot('mismatch', hashFrame);
+        }
       }
     }
     const currentFrame = state.session.getFrame();
-    if (changed && frameMsg.frame <= currentFrame) {
-      if (!rollbackAndResim(frameMsg.frame)) {
+    if (changed && frame <= currentFrame) {
+      if (!rollbackAndResim(frame)) {
         requestSnapshot('lag');
       }
     }
@@ -2009,36 +2077,66 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
   }
   let clientState = state.clientStates.get(playerId);
   if (!clientState) {
-    clientState = { lastAckedHostFrame: -1, lastAckedClientInput: -1, lastSnapshotMs: null };
+    clientState = {
+      lastAckedHostFrame: -1,
+      lastAckedClientInput: -1,
+      lastSnapshotMs: null,
+      lastSnapshotRequestMs: null,
+    };
     state.clientStates.set(playerId, clientState);
   }
   if (!game.players.some((player) => player.id === playerId)) {
+    if (game.players.length >= game.maxPlayers) {
+      return;
+    }
     game.addPlayer(playerId, { spectator: false });
     updateLobbyUi();
   }
   if (msg.type === 'input') {
+    const frame = coerceFrame(msg.frame);
+    const input = normalizeInput(msg.input);
+    if (frame === null || !input) {
+      return;
+    }
     const player = game.players.find((entry) => entry.id === playerId);
     if (player) {
       player.pendingSpawn = false;
       player.isSpectator = false;
     }
     if (msg.lastAck !== undefined) {
-      clientState.lastAckedHostFrame = Math.max(clientState.lastAckedHostFrame, msg.lastAck);
+      const ackFrame = coerceFrame(msg.lastAck);
+      if (ackFrame !== null) {
+        clientState.lastAckedHostFrame = Math.max(
+          clientState.lastAckedHostFrame,
+          Math.min(ackFrame, state.session.getFrame()),
+        );
+      }
     }
-    clientState.lastAckedClientInput = Math.max(clientState.lastAckedClientInput, msg.frame);
-    const changed = recordInputForFrame(msg.frame, playerId, msg.input);
+    clientState.lastAckedClientInput = Math.max(clientState.lastAckedClientInput, frame);
     const currentFrame = state.session.getFrame();
-    if (changed && msg.frame <= currentFrame) {
-      if (!rollbackAndResim(msg.frame)) {
-        sendSnapshotToClient(playerId, msg.frame);
+    const minFrame = Math.max(0, currentFrame - Math.min(state.maxRollback, NETPLAY_MAX_INPUT_BEHIND));
+    const maxFrame = currentFrame + NETPLAY_MAX_INPUT_AHEAD;
+    if (frame < minFrame || frame > maxFrame) {
+      return;
+    }
+    const changed = recordInputForFrame(frame, playerId, input);
+    if (changed && frame <= currentFrame) {
+      if (!rollbackAndResim(frame)) {
+        sendSnapshotToClient(playerId, frame);
       } else {
-        state.pendingHostUpdates.add(msg.frame);
+        state.pendingHostUpdates.add(frame);
       }
     }
     return;
   }
   if (msg.type === 'ack') {
-    clientState.lastAckedHostFrame = Math.max(clientState.lastAckedHostFrame, msg.frame);
+    const frame = coerceFrame(msg.frame);
+    if (frame !== null) {
+      clientState.lastAckedHostFrame = Math.max(
+        clientState.lastAckedHostFrame,
+        Math.min(frame, state.session.getFrame()),
+      );
+    }
     return;
   }
   if (msg.type === 'ping') {
@@ -2061,7 +2159,18 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
     return;
   }
   if (msg.type === 'snapshot_request') {
-    sendSnapshotToClient(playerId, msg.frame);
+    const nowMs = performance.now();
+    const lastRequest = clientState.lastSnapshotRequestMs ?? 0;
+    if (clientState.lastSnapshotRequestMs !== null
+      && (nowMs - lastRequest) < NETPLAY_SNAPSHOT_COOLDOWN_MS) {
+      return;
+    }
+    clientState.lastSnapshotRequestMs = nowMs;
+    const currentFrame = state.session.getFrame();
+    const frame = coerceFrame(msg.frame) ?? currentFrame;
+    const minFrame = Math.max(0, currentFrame - state.maxRollback);
+    const clampedFrame = Math.min(currentFrame, Math.max(minFrame, frame));
+    sendSnapshotToClient(playerId, clampedFrame);
   }
 }
 
@@ -2535,26 +2644,50 @@ async function createRoom() {
     return;
   }
   const isPublic = lobbyPublicCheckbox?.checked ?? true;
-  const hostId = game.localPlayerId ?? 0;
-  const room = await lobbyClient.createRoom({
-    isPublic,
-    hostId,
-    courseId: 'smb1-main',
-    settings: { maxPlayers: 8, collisionEnabled: true },
-  });
-  lobbyRoom = room;
-  lobbyStatus.textContent = `Lobby: hosting ${room.roomCode ?? room.roomId}`;
-  startHost(room);
+  lobbyStatus.textContent = 'Lobby: creating...';
+  try {
+    const result = await lobbyClient.createRoom({
+      isPublic,
+      courseId: 'smb1-main',
+      settings: { maxPlayers: 8, collisionEnabled: true },
+    });
+    lobbyRoom = result.room;
+    lobbySelfId = result.playerId;
+    lobbyPlayerToken = result.playerToken;
+    lobbyHostToken = result.hostToken ?? null;
+    lobbyStatus.textContent = `Lobby: hosting ${result.room.roomCode ?? result.room.roomId}`;
+    startHost(result.room, result.playerToken);
+  } catch (err) {
+    console.error(err);
+    lobbyStatus.textContent = 'Lobby: create failed';
+  }
 }
 
 async function joinRoom(roomId: string) {
   if (!lobbyClient || !lobbyStatus) {
     return;
   }
-  const room = await lobbyClient.joinRoom({ roomId });
-  lobbyRoom = room;
-  lobbyStatus.textContent = `Lobby: joining ${room.roomCode ?? room.roomId}`;
-  startClient(room);
+  if (lobbyRoom) {
+    if (lobbyRoom.roomId === roomId) {
+      lobbyStatus.textContent = 'Lobby: already in room';
+      return;
+    }
+    lobbyStatus.textContent = 'Lobby: leave current room first';
+    return;
+  }
+  lobbyStatus.textContent = 'Lobby: joining...';
+  try {
+    const result = await lobbyClient.joinRoom({ roomId });
+    lobbyRoom = result.room;
+    lobbySelfId = result.playerId;
+    lobbyPlayerToken = result.playerToken;
+    lobbyHostToken = null;
+    lobbyStatus.textContent = `Lobby: joining ${result.room.roomCode ?? result.room.roomId}`;
+    startClient(result.room, result.playerId, result.playerToken);
+  } catch (err) {
+    console.error(err);
+    lobbyStatus.textContent = 'Lobby: join failed';
+  }
 }
 
 async function joinRoomByCode() {
@@ -2566,10 +2699,28 @@ async function joinRoomByCode() {
     lobbyStatus.textContent = 'Lobby: enter a room code';
     return;
   }
-  const room = await lobbyClient.joinRoom({ roomCode: code });
-  lobbyRoom = room;
-  lobbyStatus.textContent = `Lobby: joining ${room.roomCode ?? room.roomId}`;
-  startClient(room);
+  if (lobbyRoom) {
+    const existingCode = lobbyRoom.roomCode?.trim().toUpperCase();
+    if (existingCode && existingCode === code.trim().toUpperCase()) {
+      lobbyStatus.textContent = 'Lobby: already in room';
+      return;
+    }
+    lobbyStatus.textContent = 'Lobby: leave current room first';
+    return;
+  }
+  lobbyStatus.textContent = 'Lobby: joining...';
+  try {
+    const result = await lobbyClient.joinRoom({ roomCode: code });
+    lobbyRoom = result.room;
+    lobbySelfId = result.playerId;
+    lobbyPlayerToken = result.playerToken;
+    lobbyHostToken = null;
+    lobbyStatus.textContent = `Lobby: joining ${result.room.roomCode ?? result.room.roomId}`;
+    startClient(result.room, result.playerId, result.playerToken);
+  } catch (err) {
+    console.error(err);
+    lobbyStatus.textContent = 'Lobby: join failed';
+  }
 }
 
 async function leaveRoom() {
@@ -2579,13 +2730,14 @@ async function leaveRoom() {
   }
   const roomId = lobbyRoom?.roomId;
   const wasHost = netplayState?.role === 'host';
+  const hostToken = lobbyHostToken;
   lobbySignalShouldReconnect = false;
   lobbySignalReconnectFn = null;
   clearLobbySignalRetry();
   resetNetplayConnections();
-  if (roomId && wasHost) {
+  if (roomId && wasHost && hostToken) {
     try {
-      await lobbyClient.closeRoom(roomId);
+      await lobbyClient.closeRoom(roomId, hostToken);
     } catch {
       // Ignore.
     }
@@ -2595,8 +2747,14 @@ async function leaveRoom() {
   }
 }
 
-function startHost(room: LobbyRoom) {
+function startHost(room: LobbyRoom, playerToken: string) {
   if (!lobbyClient) {
+    return;
+  }
+  if (!playerToken) {
+    if (lobbyStatus) {
+      lobbyStatus.textContent = 'Lobby: auth failed';
+    }
     return;
   }
   netplayEnabled = true;
@@ -2614,8 +2772,16 @@ function startHost(room: LobbyRoom) {
     if (!state) {
       return;
     }
+    if (game.players.length >= game.maxPlayers) {
+      return;
+    }
     if (!state.clientStates.has(playerId)) {
-      state.clientStates.set(playerId, { lastAckedHostFrame: -1, lastAckedClientInput: -1, lastSnapshotMs: null });
+      state.clientStates.set(playerId, {
+        lastAckedHostFrame: -1,
+        lastAckedClientInput: -1,
+        lastSnapshotMs: null,
+        lastSnapshotRequestMs: null,
+      });
     }
     game.addPlayer(playerId, { spectator: false });
     const player = game.players.find((p) => p.id === playerId);
@@ -2653,7 +2819,7 @@ function startHost(room: LobbyRoom) {
   clearLobbySignalRetry();
   lobbySignalReconnectFn = () => {
     lobbySignal?.close();
-    lobbySignal = lobbyClient.openSignal(room.roomId, room.hostId, async (msg) => {
+    lobbySignal = lobbyClient.openSignal(room.roomId, room.hostId, playerToken, async (msg) => {
       if (msg.to !== room.hostId) {
         return;
       }
@@ -2678,13 +2844,18 @@ function startHost(room: LobbyRoom) {
   updateLobbyUi();
 }
 
-async function startClient(room: LobbyRoom) {
+async function startClient(room: LobbyRoom, playerId: number, playerToken: string) {
   if (!lobbyClient) {
+    return;
+  }
+  if (!playerToken) {
+    if (lobbyStatus) {
+      lobbyStatus.textContent = 'Lobby: auth failed';
+    }
     return;
   }
   netplayEnabled = true;
   ensureNetplayState('client');
-  const playerId = createNetplayId();
   game.setLocalPlayerId(playerId);
   game.maxPlayers = room.settings.maxPlayers;
   game.playerCollisionEnabled = room.settings.collisionEnabled;
@@ -2700,7 +2871,7 @@ async function startClient(room: LobbyRoom) {
   clearLobbySignalRetry();
   lobbySignalReconnectFn = () => {
     lobbySignal?.close();
-    lobbySignal = lobbyClient.openSignal(room.roomId, playerId, async (msg) => {
+    lobbySignal = lobbyClient.openSignal(room.roomId, playerId, playerToken, async (msg) => {
       if (msg.to !== playerId) {
         return;
       }

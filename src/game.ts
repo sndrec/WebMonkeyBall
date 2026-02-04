@@ -901,6 +901,11 @@ export class Game {
     if (!state || !this.stageRuntime) {
       return;
     }
+    const localPlayerBefore = this.getLocalPlayer();
+    const localWasSpectator = localPlayerBefore?.isSpectator ?? false;
+    const localCameraState = localPlayerBefore?.camera?.getState?.() ?? null;
+    const localCameraRotY = localPlayerBefore?.cameraRotY ?? 0;
+    const localFreeFly = localPlayerBefore?.freeFly ?? false;
     this.simTick = state.simTick ?? this.simTick;
     this.stageTimerFrames = state.stageTimerFrames ?? this.stageTimerFrames;
     this.stageTimeLimitFrames = state.stageTimeLimitFrames ?? this.stageTimeLimitFrames;
@@ -972,6 +977,17 @@ export class Game {
     const localPlayer = this.getLocalPlayer();
     if (localPlayer) {
       this.cameraController = localPlayer.camera;
+    }
+    if (localPlayer && localWasSpectator && localPlayer.isSpectator) {
+      localPlayer.freeFly = localFreeFly;
+      localPlayer.cameraRotY = localCameraRotY;
+      if (localCameraState && localPlayer.camera) {
+        localPlayer.camera.setState(localCameraState);
+      }
+      if (localPlayer.freeFly) {
+        this.cameraController = localPlayer.camera;
+      }
+      this.syncCameraPose();
     }
     this.noCollidePairs = new Set(state.noCollidePairs ?? []);
     if (state.playerCollisionEnabled !== undefined) {

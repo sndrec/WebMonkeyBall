@@ -1554,6 +1554,9 @@ export class StageRuntime {
   }
 
   getState({ includeVisual = true } = {}) {
+    const visualState = includeVisual
+      ? { visualRngState: this.visualRng?.state ?? 0 }
+      : {};
     return {
       timerFrames: this.timerFrames,
       animGroups: structuredClone(this.animGroups),
@@ -1573,7 +1576,7 @@ export class StageRuntime {
       goalHoldOpen: this.goalHoldOpen,
       switchesEnabled: this.switchesEnabled,
       simRngState: this.simRng?.state ?? 0,
-      visualRngState: this.visualRng?.state ?? 0,
+      ...visualState,
     };
   }
 
