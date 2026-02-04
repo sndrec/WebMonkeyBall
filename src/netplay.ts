@@ -2,6 +2,8 @@ import type {
   ClientToHostMessage,
   HostToClientMessage,
   RoomInfo,
+  RoomMeta,
+  RoomSettings,
 } from './netcode_protocol.js';
 
 export type SignalMessage = {
@@ -75,14 +77,21 @@ export class LobbyClient {
       room: data.room,
       playerId: data.playerId,
       playerToken: data.playerToken,
+      hostToken: data.hostToken,
     };
   }
 
-  async heartbeat(roomId: string, playerId: number, token: string): Promise<void> {
+  async heartbeat(
+    roomId: string,
+    playerId: number,
+    token: string,
+    meta?: RoomMeta,
+    settings?: RoomSettings,
+  ): Promise<void> {
     await fetch(`${this.baseUrl}/rooms/heartbeat`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ roomId, playerId, token }),
+      body: JSON.stringify({ roomId, playerId, token, meta, settings }),
     });
   }
 
@@ -133,6 +142,24 @@ export class LobbyClient {
         }
       },
       close: () => ws.close(),
+    };
+  }
+
+  async promoteHost(roomId: string, playerId: number, token: string): Promise<RoomJoinResult> {
+    const res = await fetch(`${this.baseUrl}/rooms/promote`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ roomId, playerId, token }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error ?? `promote_host_${res.status}`);
+    }
+    return {
+      room: data.room,
+      playerId,
+      playerToken: token,
+      hostToken: data.hostToken,
     };
   }
 }
@@ -286,6 +313,11 @@ export class ClientPeer {
     } else {
       this.ctrlChannel = channel;
     }
+    channel.addEventListener('open', () => {
+      if (role === 'ctrl') {
+        this.onConnect?.();
+      }
+    });
     channel.addEventListener('message', (event) => {
       try {
         const msg = JSON.parse(event.data) as HostToClientMessage;
@@ -375,6 +407,7 @@ export class ClientPeer {
   hostId = 0;
   onSignal?: (msg: SignalMessage) => void;
   onDisconnect?: () => void;
+  onConnect?: () => void;
 }
 
 export async function createHostOffer(host: HostRelay, playerId: number) {

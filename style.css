@@ -317,6 +317,54 @@ body.gameplay-active {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.menu-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.menu-header h1 {
+  margin: 0;
+}
+
+.menu-header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.menu-button {
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(16, 16, 24, 0.7);
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.menu-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 159, 28, 0.6);
+  background: rgba(20, 20, 30, 0.85);
+}
+
+.menu-button-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.menu-button-subtitle {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .panel-section-header {
   display: flex;
   align-items: center;
@@ -330,6 +378,10 @@ body.gameplay-active {
   gap: 10px;
   align-items: center;
   margin-bottom: 10px;
+}
+
+.multiplayer-view.hidden {
+  display: none;
 }
 
 .text-input {
@@ -360,8 +412,149 @@ body.gameplay-active {
   font-size: 13px;
 }
 
-.lobby-item span {
+.lobby-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lobby-item-title {
+  font-weight: 600;
+}
+
+.lobby-item-meta {
   color: var(--muted);
+  font-size: 12px;
+}
+
+.lobby-room-info {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.lobby-room-status {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.lobby-player-list {
+  display: grid;
+  gap: 8px;
+}
+
+.lobby-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(12, 12, 18, 0.4);
+}
+
+.lobby-player-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lobby-player-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.lobby-player-tags {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.lobby-player-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.lobby-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(12, 12, 18, 0.35);
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.lobby-setting-value {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  flex: 0 0 auto;
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0) 55%),
+    rgba(255, 255, 255, 0.2);
+}
+
+.avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(36px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.avatar-option {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(12, 12, 18, 0.6);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 120ms ease, border-color 120ms ease;
+}
+
+.avatar-option.selected {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 2px rgba(255, 159, 28, 0.2);
+}
+
+.avatar-amber {
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 55%),
+    linear-gradient(135deg, #ffb347, #ff7b00);
+}
+
+.avatar-mint {
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 55%),
+    linear-gradient(135deg, #7fe8c8, #28a88b);
+}
+
+.avatar-sky {
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 55%),
+    linear-gradient(135deg, #7fb2ff, #3f6fd9);
+}
+
+.avatar-rose {
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 55%),
+    linear-gradient(135deg, #ff9aa2, #d46a7e);
+}
+
+.avatar-slate {
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 55%),
+    linear-gradient(135deg, #a0a7b8, #5d6676);
+}
+
+.avatar-lime {
+  background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 55%),
+    linear-gradient(135deg, #b6ff6b, #5ccf2a);
 }
 
 .lobby-players {

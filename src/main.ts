@@ -31,7 +31,14 @@ import { GameplaySyncState, Renderer } from './noclip/Render.js';
 import { LobbyClient, HostRelay, ClientPeer, createHostOffer, applyHostSignal } from './netplay.js';
 import type { QuantizedInput } from './determinism.js';
 import { hashSimState } from './sim_hash.js';
-import type { ClientToHostMessage, FrameBundleMessage, HostToClientMessage } from './netcode_protocol.js';
+import type {
+  ClientToHostMessage,
+  FrameBundleMessage,
+  HostToClientMessage,
+  PlayerProfile,
+  RoomInfo,
+  RoomMeta,
+} from './netcode_protocol.js';
 import { parseStagedefLz } from './noclip/SuperMonkeyBall/Stagedef.js';
 import { StageId, STAGE_INFO_MAP } from './noclip/SuperMonkeyBall/StageInfo.js';
 import type { StageData } from './noclip/SuperMonkeyBall/World.js';
@@ -181,7 +188,9 @@ function syncPackEnabled() {
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hudCanvas = document.getElementById('hud-canvas') as HTMLCanvasElement;
 const overlay = document.getElementById('overlay') as HTMLElement;
-const overlayPanel = document.querySelector('.panel') as HTMLElement | null;
+const mainMenuPanel = document.getElementById('main-menu') as HTMLElement | null;
+const multiplayerMenuPanel = document.getElementById('multiplayer-menu') as HTMLElement | null;
+const overlayPanel = mainMenuPanel;
 const stageFade = document.getElementById('stage-fade') as HTMLElement;
 const mobileMenuButton = document.getElementById('mobile-menu-button') as HTMLButtonElement | null;
 const fullscreenButton = document.getElementById('fullscreen-button') as HTMLButtonElement | null;
@@ -627,18 +636,16 @@ const syncState: GameplaySyncState = {
   stageTilt: null,
 };
 
-type LobbyRoom = {
-  roomId: string;
-  roomCode?: string;
-  isPublic: boolean;
-  hostId: number;
-  courseId: string;
-  settings: { maxPlayers: number; collisionEnabled: boolean };
-};
+type LobbyRoom = RoomInfo;
 
 const lobbyBaseUrl = (window as any).LOBBY_URL ?? "";
 const lobbyClient = lobbyBaseUrl ? new LobbyClient(lobbyBaseUrl) : null;
 
+const multiplayerOpenButton = document.getElementById('open-multiplayer') as HTMLButtonElement | null;
+const multiplayerBackButton = document.getElementById('multiplayer-back') as HTMLButtonElement | null;
+const multiplayerOnlineCount = document.getElementById('lobby-online-count') as HTMLElement | null;
+const multiplayerBrowser = document.getElementById('multiplayer-browser') as HTMLElement | null;
+const multiplayerLobby = document.getElementById('multiplayer-lobby') as HTMLElement | null;
 const lobbyRefreshButton = document.getElementById('lobby-refresh') as HTMLButtonElement | null;
 const lobbyCreateButton = document.getElementById('lobby-create') as HTMLButtonElement | null;
 const lobbyJoinButton = document.getElementById('lobby-join') as HTMLButtonElement | null;
@@ -647,7 +654,20 @@ const lobbyCodeInput = document.getElementById('lobby-code') as HTMLInputElement
 const lobbyLeaveButton = document.getElementById('lobby-leave') as HTMLButtonElement | null;
 const lobbyStatus = document.getElementById('lobby-status') as HTMLElement | null;
 const lobbyList = document.getElementById('lobby-list') as HTMLElement | null;
-const lobbyPlayers = document.getElementById('lobby-players') as HTMLElement | null;
+const lobbyRoomInfo = document.getElementById('lobby-room-info') as HTMLElement | null;
+const lobbyRoomStatus = document.getElementById('lobby-room-status') as HTMLElement | null;
+const lobbyPlayerList = document.getElementById('lobby-player-list') as HTMLElement | null;
+const lobbyMaxPlayersSelect = document.getElementById('lobby-max-players') as HTMLSelectElement | null;
+const lobbyCollisionToggle = document.getElementById('lobby-collision') as HTMLInputElement | null;
+const lobbyStageInfo = document.getElementById('lobby-stage-info') as HTMLElement | null;
+const profileNameInput = document.getElementById('profile-name') as HTMLInputElement | null;
+const profileAvatarGrid = document.getElementById('profile-avatars') as HTMLElement | null;
+
+const PROFILE_STORAGE_KEY = 'smb_netplay_profile';
+const PROFILE_NAME_MAX = 16;
+const PROFILE_NAME_SAFE = /[^A-Za-z0-9 _.-]/g;
+const PROFILE_AVATARS = ['amber', 'mint', 'sky', 'rose', 'slate', 'lime'] as const;
+type ProfileAvatarId = (typeof PROFILE_AVATARS)[number];
 
 let lobbyRoom: LobbyRoom | null = null;
 let lobbySelfId: number | null = null;
@@ -661,6 +681,9 @@ let lobbySignalReconnectFn: (() => void) | null = null;
 let hostRelay: HostRelay | null = null;
 let clientPeer: ClientPeer | null = null;
 let netplayEnabled = false;
+let lobbyProfiles = new Map<number, PlayerProfile>();
+let localProfile: PlayerProfile = { name: 'Player', avatarId: PROFILE_AVATARS[0] };
+let allowHostMigration = true;
 let pendingSnapshot: {
   frame: number;
   state: any;
@@ -671,6 +694,9 @@ let pendingSnapshot: {
 let lobbyHeartbeatTimer: number | null = null;
 let lastLobbyHeartbeatMs: number | null = null;
 let netplayAccumulator = 0;
+let multiplayerMenuOpen = false;
+let profileBroadcastTimer: number | null = null;
+let lastRoomMetaKey: string | null = null;
 const NETPLAY_MAX_FRAME_DELTA = 5;
 const NETPLAY_CLIENT_LEAD = 2;
 const NETPLAY_CLIENT_AHEAD_SLACK = 2;
@@ -698,6 +724,7 @@ const NETPLAY_HOST_SNAPSHOT_COOLDOWN_MS = 1500;
 const NETPLAY_SNAPSHOT_MISMATCH_COOLDOWN_MS = 250;
 const NETPLAY_MAX_INPUT_AHEAD = 60;
 const NETPLAY_MAX_INPUT_BEHIND = 60;
+const LOBBY_MAX_PLAYERS = 8;
 const NETPLAY_DEBUG_STORAGE_KEY = 'smb_netplay_debug';
 const LOBBY_HEARTBEAT_INTERVAL_MS = 15000;
 const LOBBY_HEARTBEAT_FALLBACK_MS = 12000;
@@ -1178,22 +1205,380 @@ function getClientLeadFrames(state: NetplayState) {
   return Math.max(0, Math.floor(lead * scale));
 }
 
-function updateLobbyUi() {
-  if (!lobbyStatus || !lobbyLeaveButton || !lobbyPlayers) {
-    return;
+function sanitizeProfileName(value: string) {
+  if (typeof value !== 'string') {
+    return 'Player';
   }
-  if (!netplayEnabled || !lobbyRoom) {
-    lobbyLeaveButton.classList.add('hidden');
-    lobbyPlayers.classList.add('hidden');
-    lobbyPlayers.textContent = '';
-    return;
-  }
-  lobbyLeaveButton.classList.remove('hidden');
-  const role = netplayState?.role ?? 'offline';
-  const playerIds = game.players.map((player) => player.id);
-  lobbyPlayers.textContent = `Connected (${role}): ${playerIds.join(', ') || 'none'}`;
-  lobbyPlayers.classList.remove('hidden');
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, '').replace(PROFILE_NAME_SAFE, '').trim();
+  const collapsed = cleaned.replace(/\s+/g, ' ');
+  const trimmed = collapsed.slice(0, PROFILE_NAME_MAX);
+  return trimmed || 'Player';
 }
+
+function sanitizeAvatarId(value: string): ProfileAvatarId {
+  const entry = PROFILE_AVATARS.find((id) => id === value);
+  return entry ?? PROFILE_AVATARS[0];
+}
+
+function sanitizeProfile(profile?: Partial<PlayerProfile>): PlayerProfile {
+  return {
+    name: sanitizeProfileName(profile?.name ?? ''),
+    avatarId: sanitizeAvatarId(String(profile?.avatarId ?? PROFILE_AVATARS[0])),
+  };
+}
+
+function loadLocalProfile(): PlayerProfile {
+  try {
+    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
+    if (!raw) {
+      return sanitizeProfile({});
+    }
+    return sanitizeProfile(JSON.parse(raw));
+  } catch {
+    return sanitizeProfile({});
+  }
+}
+
+function saveLocalProfile(profile: PlayerProfile) {
+  try {
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile));
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+function profileFallbackForPlayer(playerId: number): PlayerProfile {
+  const suffix = String(playerId).slice(-4);
+  const avatarId = PROFILE_AVATARS[playerId % PROFILE_AVATARS.length] ?? PROFILE_AVATARS[0];
+  return {
+    name: `Player ${suffix}`,
+    avatarId,
+  };
+}
+
+function formatGameSourceLabel(source?: GameSource) {
+  if (source === GAME_SOURCES.SMB2) {
+    return 'SMB2';
+  }
+  if (source === GAME_SOURCES.MB2WS) {
+    return 'MB2WS';
+  }
+  return 'SMB1';
+}
+
+function titleCaseLabel(value: string) {
+  if (!value) {
+    return '';
+  }
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function formatCourseMeta(gameSource: GameSource, course: any) {
+  if (!course) {
+    return { courseLabel: formatGameSourceLabel(gameSource), stageLabel: '' };
+  }
+  if (gameSource === GAME_SOURCES.SMB1) {
+    const difficulty = titleCaseLabel(course.difficulty ?? 'Beginner');
+    const stageIndexRaw = Number(course.stageIndex ?? 0);
+    const stageIndex = Number.isFinite(stageIndexRaw) ? stageIndexRaw : 0;
+    return { courseLabel: difficulty || 'Beginner', stageLabel: `Stage ${stageIndex + 1}` };
+  }
+  const mode = course.mode ?? 'story';
+  if (mode === 'story') {
+    const worldIndexRaw = Number(course.worldIndex ?? 0);
+    const stageIndexRaw = Number(course.stageIndex ?? 0);
+    const worldIndex = Number.isFinite(worldIndexRaw) ? worldIndexRaw : 0;
+    const stageIndex = Number.isFinite(stageIndexRaw) ? stageIndexRaw : 0;
+    return { courseLabel: 'Story', stageLabel: `World ${worldIndex + 1}-${stageIndex + 1}` };
+  }
+  const difficulty = titleCaseLabel(course.difficulty ?? 'Beginner');
+  const stageIndexRaw = Number(course.stageIndex ?? 0);
+  const stageIndex = Number.isFinite(stageIndexRaw) ? stageIndexRaw : 0;
+  const modeLabel = mode === 'challenge' ? 'Challenge' : titleCaseLabel(mode);
+  return { courseLabel: `${modeLabel} ${difficulty}`.trim(), stageLabel: `Stage ${stageIndex + 1}` };
+}
+
+function buildRoomMeta(): RoomMeta | null {
+  if (!netplayState || netplayState.role !== 'host') {
+    return null;
+  }
+  const resolvedSource = resolveSelectedGameSource();
+  const gameSource = netplayState.currentGameSource ?? resolvedSource.gameSource ?? activeGameSource;
+  const course = netplayState.currentCourse ?? (() => {
+    if (gameSource === GAME_SOURCES.SMB2) {
+      return buildSmb2CourseConfig();
+    }
+    if (gameSource === GAME_SOURCES.MB2WS) {
+      return buildMb2wsCourseConfig();
+    }
+    return buildSmb1CourseConfig();
+  })();
+  const labels = formatCourseMeta(gameSource, course);
+  const stageId = game.stage?.stageId ?? undefined;
+  const status = netplayState.currentCourse ? 'in_game' : 'lobby';
+  return {
+    status,
+    gameSource,
+    courseLabel: labels.courseLabel,
+    stageLabel: labels.stageLabel,
+    stageId,
+  };
+}
+
+function updateLobbyUi() {
+  const inLobby = !!(netplayEnabled && lobbyRoom);
+  multiplayerBrowser?.classList.toggle('hidden', inLobby);
+  multiplayerLobby?.classList.toggle('hidden', !inLobby);
+
+  if (!lobbyLeaveButton) {
+    return;
+  }
+  if (!inLobby || !lobbyRoom) {
+    lobbyLeaveButton.classList.add('hidden');
+    if (lobbyPlayerList) {
+      lobbyPlayerList.innerHTML = '';
+    }
+    if (lobbyRoomInfo) {
+      lobbyRoomInfo.textContent = '';
+    }
+    if (lobbyRoomStatus) {
+      lobbyRoomStatus.textContent = '';
+    }
+    return;
+  }
+
+  lobbyLeaveButton.classList.remove('hidden');
+  const roomLabel = lobbyRoom.roomCode ? `Room ${lobbyRoom.roomCode}` : `Room ${lobbyRoom.roomId.slice(0, 8)}`;
+  const statusLabel = lobbyRoom.meta?.status === 'in_game' ? 'In Game' : 'Waiting';
+  const playerCount = Math.max(lobbyRoom.playerCount ?? 0, game.players.length);
+  const maxPlayers = lobbyRoom.settings?.maxPlayers ?? game.maxPlayers;
+  if (lobbyRoomInfo) {
+    lobbyRoomInfo.textContent = roomLabel;
+  }
+  if (lobbyRoomStatus) {
+    lobbyRoomStatus.textContent = `${statusLabel} • ${playerCount}/${maxPlayers} players`;
+  }
+
+  if (lobbyPlayerList) {
+    lobbyPlayerList.innerHTML = '';
+    for (const player of game.players) {
+      const profile = lobbyProfiles.get(player.id) ?? profileFallbackForPlayer(player.id);
+      const row = document.createElement('div');
+      row.className = 'lobby-player';
+      const avatar = document.createElement('div');
+      avatar.className = `avatar avatar-${profile.avatarId}`;
+      avatar.setAttribute('aria-hidden', 'true');
+      const info = document.createElement('div');
+      info.className = 'lobby-player-info';
+      const name = document.createElement('div');
+      name.className = 'lobby-player-name';
+      name.textContent = profile.name;
+      const tags = document.createElement('span');
+      tags.className = 'lobby-player-tags';
+      const tagParts: string[] = [];
+      if (player.id === lobbyRoom.hostId) {
+        tagParts.push('Host');
+      }
+      if (player.id === game.localPlayerId) {
+        tagParts.push('You');
+      }
+      if (tagParts.length > 0) {
+        tags.textContent = ` (${tagParts.join(', ')})`;
+        name.appendChild(tags);
+      }
+      const sub = document.createElement('div');
+      sub.className = 'lobby-player-sub';
+      sub.textContent = `ID ${player.id}`;
+      info.append(name, sub);
+      row.append(avatar, info);
+      lobbyPlayerList.appendChild(row);
+    }
+  }
+
+  const meta = lobbyRoom.meta ?? buildRoomMeta();
+  if (meta && !lobbyRoom.meta) {
+    lobbyRoom.meta = meta;
+  }
+  if (lobbyStageInfo) {
+    if (meta) {
+      const sourceLabel = formatGameSourceLabel(meta.gameSource);
+      const courseLabel = meta.courseLabel ?? 'Unknown';
+      const stageLabel = meta.stageLabel ? ` • ${meta.stageLabel}` : '';
+      lobbyStageInfo.textContent = `${sourceLabel} • ${courseLabel}${stageLabel}`;
+    } else {
+      lobbyStageInfo.textContent = 'Unknown';
+    }
+  }
+
+  if (lobbyMaxPlayersSelect) {
+    lobbyMaxPlayersSelect.value = String(maxPlayers);
+  }
+  if (lobbyCollisionToggle) {
+    lobbyCollisionToggle.checked = !!(lobbyRoom.settings?.collisionEnabled ?? true);
+  }
+  const isHost = netplayState?.role === 'host';
+  if (lobbyMaxPlayersSelect) {
+    lobbyMaxPlayersSelect.disabled = !isHost;
+  }
+  if (lobbyCollisionToggle) {
+    lobbyCollisionToggle.disabled = !isHost;
+  }
+  updateProfileUi();
+}
+
+function setMultiplayerMenuOpen(open: boolean) {
+  if (multiplayerMenuOpen === open) {
+    return;
+  }
+  multiplayerMenuOpen = open;
+  mainMenuPanel?.classList.toggle('hidden', open);
+  multiplayerMenuPanel?.classList.toggle('hidden', !open);
+  updateLobbyUi();
+  if (open && lobbyClient) {
+    void refreshLobbyList();
+  }
+}
+
+function broadcastRoomUpdate() {
+  if (!lobbyRoom || netplayState?.role !== 'host') {
+    return;
+  }
+  lobbyRoom.playerCount = game.players.length;
+  hostRelay?.broadcast({ type: 'room_update', room: lobbyRoom });
+}
+
+function applyLobbySettingsFromInputs() {
+  if (!lobbyRoom || netplayState?.role !== 'host') {
+    return;
+  }
+  const currentPlayers = game.players.length;
+  const requestedRaw = lobbyMaxPlayersSelect ? Number(lobbyMaxPlayersSelect.value) : lobbyRoom.settings.maxPlayers;
+  const requestedMax = Number.isFinite(requestedRaw) ? requestedRaw : lobbyRoom.settings.maxPlayers;
+  const minPlayers = Math.max(2, currentPlayers);
+  const nextMax = clampInt(requestedMax, minPlayers, LOBBY_MAX_PLAYERS);
+  const collisionEnabled = lobbyCollisionToggle ? !!lobbyCollisionToggle.checked : lobbyRoom.settings.collisionEnabled;
+  lobbyRoom.settings = {
+    ...lobbyRoom.settings,
+    maxPlayers: nextMax,
+    collisionEnabled,
+  };
+  game.maxPlayers = nextMax;
+  game.playerCollisionEnabled = collisionEnabled;
+  if (lobbyMaxPlayersSelect) {
+    lobbyMaxPlayersSelect.value = String(nextMax);
+  }
+  broadcastRoomUpdate();
+  sendLobbyHeartbeat(performance.now(), true);
+  updateLobbyUi();
+}
+
+async function handleHostDisconnect() {
+  if (!allowHostMigration) {
+    resetNetplayConnections();
+    return;
+  }
+  if (!lobbyClient || !lobbyRoom || lobbySelfId === null || !lobbyPlayerToken) {
+    resetNetplayConnections();
+    return;
+  }
+  const roomId = lobbyRoom.roomId;
+  const previousHost = lobbyRoom.hostId;
+  if (lobbyStatus) {
+    lobbyStatus.textContent = 'Lobby: host lost, reassigning...';
+  }
+  resetNetplayConnections({ preserveLobby: true });
+  try {
+    const join = await lobbyClient.joinRoom({ roomId, playerId: lobbySelfId, token: lobbyPlayerToken });
+    lobbyRoom = join.room;
+    lobbySelfId = join.playerId;
+    lobbyPlayerToken = join.playerToken;
+    lobbyHostToken = join.hostToken ?? lobbyHostToken;
+    if (lobbyRoom.hostId !== previousHost) {
+      startClient(lobbyRoom, lobbySelfId, lobbyPlayerToken);
+      return;
+    }
+    const promote = await lobbyClient.promoteHost(roomId, lobbySelfId, lobbyPlayerToken);
+    lobbyRoom = promote.room;
+    lobbySelfId = promote.playerId;
+    lobbyPlayerToken = promote.playerToken;
+    lobbyHostToken = promote.hostToken ?? null;
+    if (lobbyRoom.hostId === lobbySelfId && lobbyHostToken) {
+      startHost(lobbyRoom, lobbyPlayerToken);
+    } else {
+      startClient(lobbyRoom, lobbySelfId, lobbyPlayerToken);
+    }
+    return;
+  } catch (err) {
+    try {
+      const retry = await lobbyClient.joinRoom({ roomId, playerId: lobbySelfId, token: lobbyPlayerToken });
+      lobbyRoom = retry.room;
+      lobbySelfId = retry.playerId;
+      lobbyPlayerToken = retry.playerToken;
+      lobbyHostToken = retry.hostToken ?? lobbyHostToken;
+      if (lobbyRoom.hostId === lobbySelfId) {
+        startHost(lobbyRoom, lobbyPlayerToken);
+      } else {
+        startClient(lobbyRoom, lobbySelfId, lobbyPlayerToken);
+      }
+    } catch {
+      resetNetplayConnections();
+    }
+  }
+}
+
+function applyLocalProfileToSession() {
+  if (!Number.isFinite(game.localPlayerId) || game.localPlayerId <= 0) {
+    return;
+  }
+  lobbyProfiles.set(game.localPlayerId, localProfile);
+}
+
+function broadcastLocalProfile() {
+  if (!netplayState) {
+    return;
+  }
+  if (!Number.isFinite(game.localPlayerId) || game.localPlayerId <= 0) {
+    return;
+  }
+  applyLocalProfileToSession();
+  const payload = { type: 'player_profile', playerId: game.localPlayerId, profile: localProfile } as const;
+  if (netplayState.role === 'host') {
+    hostRelay?.broadcast(payload);
+  } else if (netplayState.role === 'client') {
+    clientPeer?.send(payload);
+  }
+  updateLobbyUi();
+}
+
+function updateProfileUi() {
+  if (profileNameInput) {
+    profileNameInput.value = localProfile.name;
+  }
+  if (profileAvatarGrid) {
+    const buttons = Array.from(profileAvatarGrid.querySelectorAll<HTMLButtonElement>('button[data-avatar]'));
+    for (const button of buttons) {
+      const avatarId = button.dataset.avatar;
+      button.classList.toggle('selected', avatarId === localProfile.avatarId);
+    }
+  }
+}
+
+function scheduleProfileBroadcast() {
+  if (profileBroadcastTimer !== null) {
+    window.clearTimeout(profileBroadcastTimer);
+  }
+  profileBroadcastTimer = window.setTimeout(() => {
+    profileBroadcastTimer = null;
+    broadcastLocalProfile();
+  }, 300);
+}
+
+localProfile = loadLocalProfile();
+updateProfileUi();
 
 function startLobbyHeartbeat(roomId: string) {
   if (!lobbyClient) {
@@ -1240,7 +1625,7 @@ function scheduleLobbySignalReconnect() {
   }, delay);
 }
 
-function resetNetplayConnections() {
+function resetNetplayConnections({ preserveLobby = false }: { preserveLobby?: boolean } = {}) {
   lobbySignal?.close();
   lobbySignal = null;
   lobbySignalShouldReconnect = false;
@@ -1261,11 +1646,16 @@ function resetNetplayConnections() {
   }
   game.allowCourseAdvance = true;
   stopLobbyHeartbeat();
-  lobbyRoom = null;
-  lobbySelfId = null;
-  lobbyPlayerToken = null;
-  lobbyHostToken = null;
-  lastLobbyHeartbeatMs = null;
+  if (!preserveLobby) {
+    lobbyRoom = null;
+    lobbySelfId = null;
+    lobbyPlayerToken = null;
+    lobbyHostToken = null;
+    lastLobbyHeartbeatMs = null;
+    lobbyProfiles.clear();
+    allowHostMigration = false;
+    lastRoomMetaKey = null;
+  }
   updateLobbyUi();
 }
 
@@ -1283,7 +1673,22 @@ function sendLobbyHeartbeat(
     return;
   }
   lastLobbyHeartbeatMs = nowMs;
-  void lobbyClient.heartbeat(roomId, playerId, token);
+  let meta: RoomMeta | undefined;
+  let settings: RoomInfo['settings'] | undefined;
+  if (netplayState?.role === 'host' && lobbyRoom) {
+    meta = buildRoomMeta() ?? lobbyRoom.meta;
+    settings = lobbyRoom.settings;
+    lobbyRoom.playerCount = game.players.length;
+    if (meta) {
+      lobbyRoom.meta = meta;
+      const metaKey = JSON.stringify(meta);
+      if (metaKey !== lastRoomMetaKey) {
+        lastRoomMetaKey = metaKey;
+        broadcastRoomUpdate();
+      }
+    }
+  }
+  void lobbyClient.heartbeat(roomId, playerId, token, meta, settings);
 }
 
 function recordInputForFrame(frame: number, playerId: number, input: QuantizedInput) {
@@ -1655,6 +2060,14 @@ async function handleStageLoaded(stageId: number) {
     markStageReady(stageId);
     tryApplyPendingSnapshot(stageId);
     preloadNextStages();
+    if (netplayEnabled && netplayState?.role === 'host' && lobbyRoom) {
+      const meta = buildRoomMeta();
+      if (meta) {
+        lobbyRoom.meta = meta;
+        broadcastRoomUpdate();
+        sendLobbyHeartbeat(performance.now(), true);
+      }
+    }
     return;
   }
 
@@ -1684,6 +2097,14 @@ async function handleStageLoaded(stageId: number) {
   markStageReady(stageId);
   tryApplyPendingSnapshot(stageId);
   preloadNextStages();
+  if (netplayEnabled && netplayState?.role === 'host' && lobbyRoom) {
+    const meta = buildRoomMeta();
+    if (meta) {
+      lobbyRoom.meta = meta;
+      broadcastRoomUpdate();
+      sendLobbyHeartbeat(performance.now(), true);
+    }
+  }
 }
 
 function setSelectOptions(select: HTMLSelectElement, values: { value: string; label: string }[]) {
@@ -2033,11 +2454,21 @@ function handleHostMessage(msg: HostToClientMessage) {
     if (player && msg.pendingSpawn) {
       player.pendingSpawn = true;
     }
+    if (!lobbyProfiles.has(msg.playerId)) {
+      lobbyProfiles.set(msg.playerId, profileFallbackForPlayer(msg.playerId));
+    }
     updateLobbyUi();
     return;
   }
   if (msg.type === 'player_leave') {
     game.removePlayer(msg.playerId);
+    lobbyProfiles.delete(msg.playerId);
+    updateLobbyUi();
+    return;
+  }
+  if (msg.type === 'player_profile') {
+    const profile = sanitizeProfile(msg.profile);
+    lobbyProfiles.set(msg.playerId, profile);
     updateLobbyUi();
     return;
   }
@@ -2171,6 +2602,14 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
     const minFrame = Math.max(0, currentFrame - state.maxRollback);
     const clampedFrame = Math.min(currentFrame, Math.max(minFrame, frame));
     sendSnapshotToClient(playerId, clampedFrame);
+    return;
+  }
+  if (msg.type === 'player_profile') {
+    const profile = sanitizeProfile(msg.profile);
+    lobbyProfiles.set(playerId, profile);
+    hostRelay?.broadcast({ type: 'player_profile', playerId, profile });
+    updateLobbyUi();
+    return;
   }
 }
 
@@ -2617,25 +3056,48 @@ async function refreshLobbyList() {
   try {
     const rooms = await lobbyClient.listRooms();
     lobbyList.innerHTML = '';
+    const totalPlayers = rooms.reduce((sum, room) => sum + (room.playerCount ?? 0), 0);
+    if (multiplayerOnlineCount) {
+      multiplayerOnlineCount.textContent = `${totalPlayers} player${totalPlayers === 1 ? '' : 's'} online`;
+    }
     for (const room of rooms) {
       const item = document.createElement('div');
       item.className = 'lobby-item';
-      const label = document.createElement('span');
-      label.textContent = `${room.courseId} • host ${room.hostId}`;
+      const info = document.createElement('div');
+      info.className = 'lobby-item-main';
+      const title = document.createElement('div');
+      title.className = 'lobby-item-title';
+      const sourceLabel = formatGameSourceLabel(room.meta?.gameSource);
+      const courseLabel = room.meta?.courseLabel ?? room.courseId ?? 'Unknown';
+      const stageLabel = room.meta?.stageLabel ? ` • ${room.meta.stageLabel}` : '';
+      title.textContent = `${sourceLabel} • ${courseLabel}${stageLabel}`;
+      const meta = document.createElement('div');
+      meta.className = 'lobby-item-meta';
+      const status = room.meta?.status === 'in_game' ? 'In Game' : 'Waiting';
+      const playerCount = room.playerCount ?? 0;
+      const maxPlayers = room.settings?.maxPlayers ?? 8;
+      meta.textContent = `${status} • ${playerCount}/${maxPlayers} players`;
+      info.append(title, meta);
       const join = document.createElement('button');
       join.className = 'ghost compact';
       join.type = 'button';
       join.textContent = 'Join';
+      if (playerCount >= maxPlayers) {
+        join.disabled = true;
+      }
       join.addEventListener('click', async () => {
         await joinRoom(room.roomId);
       });
-      item.append(label, join);
+      item.append(info, join);
       lobbyList.appendChild(item);
     }
     lobbyStatus.textContent = `Lobby: ${rooms.length} room(s)`;
   } catch (err) {
     console.error(err);
     lobbyStatus.textContent = 'Lobby: failed';
+    if (multiplayerOnlineCount) {
+      multiplayerOnlineCount.textContent = '0 players online';
+    }
   }
 }
 
@@ -2649,7 +3111,7 @@ async function createRoom() {
     const result = await lobbyClient.createRoom({
       isPublic,
       courseId: 'smb1-main',
-      settings: { maxPlayers: 8, collisionEnabled: true },
+      settings: { maxPlayers: LOBBY_MAX_PLAYERS, collisionEnabled: true },
     });
     lobbyRoom = result.room;
     lobbySelfId = result.playerId;
@@ -2731,6 +3193,7 @@ async function leaveRoom() {
   const roomId = lobbyRoom?.roomId;
   const wasHost = netplayState?.role === 'host';
   const hostToken = lobbyHostToken;
+  allowHostMigration = false;
   lobbySignalShouldReconnect = false;
   lobbySignalReconnectFn = null;
   clearLobbySignalRetry();
@@ -2758,8 +3221,10 @@ function startHost(room: LobbyRoom, playerToken: string) {
     return;
   }
   netplayEnabled = true;
+  allowHostMigration = true;
   ensureNetplayState('host');
   game.setLocalPlayerId(room.hostId);
+  applyLocalProfileToSession();
   game.maxPlayers = room.settings.maxPlayers;
   game.playerCollisionEnabled = room.settings.collisionEnabled;
   game.allowCourseAdvance = true;
@@ -2786,6 +3251,9 @@ function startHost(room: LobbyRoom, playerToken: string) {
     game.addPlayer(playerId, { spectator: false });
     const player = game.players.find((p) => p.id === playerId);
     const pendingSpawn = !!player?.pendingSpawn;
+    if (!lobbyProfiles.has(playerId)) {
+      lobbyProfiles.set(playerId, profileFallbackForPlayer(playerId));
+    }
     for (const existing of game.players) {
       hostRelay?.sendTo(playerId, {
         type: 'player_join',
@@ -2795,7 +3263,14 @@ function startHost(room: LobbyRoom, playerToken: string) {
       });
     }
     hostRelay?.broadcast({ type: 'player_join', playerId, spectator: false, pendingSpawn });
-    hostRelay?.sendTo(playerId, { type: 'room_update', room });
+    const nextRoom = lobbyRoom ?? room;
+    if (nextRoom) {
+      nextRoom.playerCount = game.players.length;
+      hostRelay?.sendTo(playerId, { type: 'room_update', room: nextRoom });
+    }
+    for (const [id, profile] of lobbyProfiles.entries()) {
+      hostRelay?.sendTo(playerId, { type: 'player_profile', playerId: id, profile });
+    }
     if (state.currentCourse && state.currentGameSource) {
       hostRelay?.sendTo(playerId, {
         type: 'start',
@@ -2811,6 +3286,7 @@ function startHost(room: LobbyRoom, playerToken: string) {
   hostRelay.onDisconnect = (playerId) => {
     game.removePlayer(playerId);
     netplayState?.clientStates.delete(playerId);
+    lobbyProfiles.delete(playerId);
     hostRelay?.broadcast({ type: 'player_leave', playerId });
     updateLobbyUi();
     maybeSendStageSync();
@@ -2841,6 +3317,7 @@ function startHost(room: LobbyRoom, playerToken: string) {
   hostRelay.onSignal = (signal) => lobbySignal?.send(signal);
   startLobbyHeartbeat(room.roomId);
   lobbyStatus!.textContent = `Lobby: hosting ${room.roomCode ?? room.roomId}`;
+  broadcastLocalProfile();
   updateLobbyUi();
 }
 
@@ -2855,8 +3332,10 @@ async function startClient(room: LobbyRoom, playerId: number, playerToken: strin
     return;
   }
   netplayEnabled = true;
+  allowHostMigration = true;
   ensureNetplayState('client');
   game.setLocalPlayerId(playerId);
+  applyLocalProfileToSession();
   game.maxPlayers = room.settings.maxPlayers;
   game.playerCollisionEnabled = room.settings.collisionEnabled;
   game.allowCourseAdvance = false;
@@ -2866,6 +3345,9 @@ async function startClient(room: LobbyRoom, playerId: number, playerToken: strin
   });
   clientPeer.playerId = playerId;
   clientPeer.hostId = room.hostId;
+  clientPeer.onConnect = () => {
+    broadcastLocalProfile();
+  };
   await clientPeer.createConnection();
   lobbySignalShouldReconnect = true;
   clearLobbySignalRetry();
@@ -2887,8 +3369,10 @@ async function startClient(room: LobbyRoom, playerId: number, playerToken: strin
   lobbySignalReconnectFn();
   clientPeer.onSignal = (signal) => lobbySignal?.send(signal);
   clientPeer.onDisconnect = () => {
-    lobbyStatus!.textContent = 'Lobby: disconnected';
-    resetNetplayConnections();
+    if (lobbyStatus) {
+      lobbyStatus.textContent = 'Lobby: disconnected';
+    }
+    void handleHostDisconnect();
   };
   lobbySignal.send({ type: 'signal', from: playerId, to: room.hostId, payload: { join: true } });
   startLobbyHeartbeat(room.roomId);
@@ -3548,6 +4032,14 @@ if (interpolationToggle) {
   interpolationEnabled = true;
 }
 
+multiplayerOpenButton?.addEventListener('click', () => {
+  setMultiplayerMenuOpen(true);
+});
+
+multiplayerBackButton?.addEventListener('click', () => {
+  setMultiplayerMenuOpen(false);
+});
+
 startButton.addEventListener('click', () => {
   if (netplayEnabled && netplayState?.role === 'client') {
     if (hudStatus) {
@@ -3565,6 +4057,14 @@ startButton.addEventListener('click', () => {
   if (netplayEnabled && netplayState?.role === 'host') {
     netplayState.currentCourse = difficulty;
     netplayState.currentGameSource = activeGameSource;
+    if (lobbyRoom) {
+      const meta = buildRoomMeta();
+      if (meta) {
+        lobbyRoom.meta = meta;
+      }
+      broadcastRoomUpdate();
+      sendLobbyHeartbeat(performance.now(), true);
+    }
   }
   startStage(difficulty).catch((error) => {
     if (hudStatus) {
@@ -3616,8 +4116,49 @@ if (lobbyLeaveButton) {
     void leaveRoom();
   });
 }
+if (lobbyMaxPlayersSelect) {
+  lobbyMaxPlayersSelect.addEventListener('change', () => {
+    applyLobbySettingsFromInputs();
+  });
+}
+if (lobbyCollisionToggle) {
+  lobbyCollisionToggle.addEventListener('change', () => {
+    applyLobbySettingsFromInputs();
+  });
+}
+if (profileNameInput) {
+  profileNameInput.addEventListener('input', () => {
+    const sanitized = sanitizeProfileName(profileNameInput.value);
+    if (sanitized !== profileNameInput.value) {
+      profileNameInput.value = sanitized;
+    }
+    if (sanitized !== localProfile.name) {
+      localProfile = { ...localProfile, name: sanitized };
+      saveLocalProfile(localProfile);
+      scheduleProfileBroadcast();
+    }
+  });
+}
+if (profileAvatarGrid) {
+  profileAvatarGrid.addEventListener('click', (event) => {
+    const target = event.target as HTMLElement | null;
+    const button = target?.closest('button[data-avatar]') as HTMLButtonElement | null;
+    if (!button) {
+      return;
+    }
+    const avatarId = sanitizeAvatarId(button.dataset.avatar ?? '');
+    if (avatarId !== localProfile.avatarId) {
+      localProfile = { ...localProfile, avatarId };
+      saveLocalProfile(localProfile);
+      updateProfileUi();
+      scheduleProfileBroadcast();
+    }
+  });
+}
 if (lobbyClient) {
   void refreshLobbyList();
+} else if (multiplayerOnlineCount) {
+  multiplayerOnlineCount.textContent = 'Offline';
 }
 
 requestAnimationFrame(renderFrame);

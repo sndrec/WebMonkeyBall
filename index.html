@@ -62,7 +62,7 @@
         </div>
       </div>
     </div>
-    <div class="panel">
+    <div class="panel" id="main-menu">
       <h1>Super Monkey Ball 1</h1>
       <p>Standard gameplay (Beginner / Advanced / Expert).</p>
       <label class="field">
@@ -91,27 +91,10 @@
       <input id="replay-file" class="hidden" type="file" accept=".json" />
 
       <div class="panel-section">
-        <div class="panel-section-header">
-          <h2>Multiplayer</h2>
-          <button id="lobby-refresh" class="ghost compact" type="button">Refresh</button>
-        </div>
-        <div class="multiplayer-row">
-          <button id="lobby-create" class="ghost compact" type="button">Create Room</button>
-          <label class="checkbox-field">
-            <input id="lobby-public" type="checkbox" checked />
-            <span>Public</span>
-          </label>
-        </div>
-        <div class="multiplayer-row">
-          <input id="lobby-code" class="text-input" type="text" placeholder="Room code" />
-          <button id="lobby-join" class="ghost compact" type="button">Join</button>
-        </div>
-        <div class="multiplayer-row">
-          <button id="lobby-leave" class="ghost compact hidden" type="button">Leave Room</button>
-        </div>
-        <div id="lobby-status" class="pack-status">Lobby: idle</div>
-        <div id="lobby-players" class="lobby-players hidden"></div>
-        <div id="lobby-list" class="lobby-list"></div>
+        <button id="open-multiplayer" class="menu-button" type="button">
+          <span class="menu-button-title">Online Multiplayer</span>
+          <span id="lobby-online-count" class="menu-button-subtitle">0 players online</span>
+        </button>
       </div>
 
       <label id="control-mode-field" class="field hidden">
@@ -247,6 +230,106 @@
         <div>Controls: WASD / Arrow Keys = tilt, R = reset stage, N = skip stage</div>
         <div>If you have a controller plugged in, it should work too.</div>
         <div>Don't worry about reporting bugs. I probably already know about it - it'll get fixed.</div>
+      </div>
+    </div>
+    <div class="panel hidden" id="multiplayer-menu">
+      <div class="menu-header">
+        <button id="multiplayer-back" class="ghost compact" type="button">Back</button>
+        <div>
+          <h1>Online Multiplayer</h1>
+          <p>Join public lobbies, invite friends, or host your own room.</p>
+        </div>
+      </div>
+      <div id="multiplayer-browser" class="multiplayer-view">
+        <div class="panel-section">
+          <div class="panel-section-header">
+            <h2>Public Lobbies</h2>
+            <button id="lobby-refresh" class="ghost compact" type="button">Refresh</button>
+          </div>
+          <div id="lobby-status" class="pack-status">Lobby: idle</div>
+          <div id="lobby-list" class="lobby-list"></div>
+        </div>
+        <div class="panel-section">
+          <div class="panel-section-header">
+            <h2>Join Private Room</h2>
+          </div>
+          <div class="multiplayer-row">
+            <input id="lobby-code" class="text-input" type="text" placeholder="Room code" />
+            <button id="lobby-join" class="ghost compact" type="button">Join</button>
+          </div>
+        </div>
+        <div class="panel-section">
+          <div class="panel-section-header">
+            <h2>Host Room</h2>
+          </div>
+          <div class="multiplayer-row">
+            <button id="lobby-create" class="ghost compact" type="button">Create Room</button>
+            <label class="checkbox-field">
+              <input id="lobby-public" type="checkbox" checked />
+              <span>Public</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div id="multiplayer-lobby" class="multiplayer-view hidden">
+        <div class="panel-section">
+          <div class="panel-section-header">
+            <h2>Lobby</h2>
+            <button id="lobby-leave" class="ghost compact hidden" type="button">Leave Room</button>
+          </div>
+          <div id="lobby-room-info" class="lobby-room-info"></div>
+          <div id="lobby-room-status" class="lobby-room-status"></div>
+        </div>
+        <div class="panel-section">
+          <div class="panel-section-header">
+            <h2>Players</h2>
+          </div>
+          <div id="lobby-player-list" class="lobby-player-list"></div>
+        </div>
+        <div class="panel-section">
+          <div class="panel-section-header">
+            <h2>Match Settings</h2>
+          </div>
+          <div class="lobby-setting">
+            <span>Selected Stage</span>
+            <div id="lobby-stage-info" class="lobby-setting-value">Unknown</div>
+          </div>
+          <label class="field">
+            <span>Max Players</span>
+            <select id="lobby-max-players">
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+            </select>
+          </label>
+          <label class="checkbox-field">
+            <input id="lobby-collision" type="checkbox" checked />
+            <span>Player Collision</span>
+          </label>
+          <div class="control-hint">Only the host can change match settings.</div>
+        </div>
+        <div class="panel-section">
+          <div class="panel-section-header">
+            <h2>Your Profile</h2>
+          </div>
+          <label class="field">
+            <span>Display Name</span>
+            <input id="profile-name" class="text-input" type="text" maxlength="16" />
+          </label>
+          <div id="profile-avatars" class="avatar-grid">
+            <button type="button" class="avatar-option avatar-amber" data-avatar="amber" aria-label="Amber avatar"></button>
+            <button type="button" class="avatar-option avatar-mint" data-avatar="mint" aria-label="Mint avatar"></button>
+            <button type="button" class="avatar-option avatar-sky" data-avatar="sky" aria-label="Sky avatar"></button>
+            <button type="button" class="avatar-option avatar-rose" data-avatar="rose" aria-label="Rose avatar"></button>
+            <button type="button" class="avatar-option avatar-slate" data-avatar="slate" aria-label="Slate avatar"></button>
+            <button type="button" class="avatar-option avatar-lime" data-avatar="lime" aria-label="Lime avatar"></button>
+          </div>
+          <div class="control-hint">Names are sanitized and avatars are from a fixed set.</div>
+        </div>
       </div>
     </div>
   </div>

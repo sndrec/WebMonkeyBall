@@ -8,6 +8,14 @@ export type RoomSettings = {
   collisionEnabled: boolean;
 };
 
+export type RoomMeta = {
+  status: 'lobby' | 'in_game';
+  gameSource?: GameSource;
+  courseLabel?: string;
+  stageLabel?: string;
+  stageId?: number;
+};
+
 export type RoomInfo = {
   roomId: string;
   roomCode?: string;
@@ -15,6 +23,8 @@ export type RoomInfo = {
   hostId: PlayerId;
   courseId: string;
   settings: RoomSettings;
+  playerCount?: number;
+  meta?: RoomMeta;
 };
 
 export type InputFrameMessage = {
@@ -99,6 +109,17 @@ export type RoomUpdateMessage = {
   room: RoomInfo;
 };
 
+export type PlayerProfile = {
+  name: string;
+  avatarId: string;
+};
+
+export type PlayerProfileMessage = {
+  type: 'player_profile';
+  playerId: PlayerId;
+  profile: PlayerProfile;
+};
+
 export type StartMatchMessage = {
   type: 'start';
   stageSeq: number;
@@ -117,7 +138,8 @@ export type HostToClientMessage =
   | StartMatchMessage
   | PlayerJoinMessage
   | PlayerLeaveMessage
-  | RoomUpdateMessage;
+  | RoomUpdateMessage
+  | PlayerProfileMessage;
 
 export type ClientToHostMessage =
   | InputFrameMessage
@@ -126,4 +148,5 @@ export type ClientToHostMessage =
   | StageReadyMessage
   | SnapshotRequestMessage
   | PlayerJoinMessage
-  | PlayerLeaveMessage;
+  | PlayerLeaveMessage
+  | PlayerProfileMessage;

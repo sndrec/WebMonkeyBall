@@ -9,6 +9,14 @@ type RoomSettings = {
   collisionEnabled: boolean;
 };
 
+type RoomMeta = {
+  status: "lobby" | "in_game";
+  gameSource?: "smb1" | "smb2" | "mb2ws";
+  courseLabel?: string;
+  stageLabel?: string;
+  stageId?: number;
+};
+
 type PlayerRecord = {
   playerId: number;
   token: string;
@@ -25,6 +33,7 @@ type RoomRecord = {
   hostToken: string;
   courseId: string;
   settings: RoomSettings;
+  meta?: RoomMeta;
   createdAt: number;
   lastActiveAt: number;
   players: Record<string, PlayerRecord>;
@@ -125,11 +134,31 @@ function sanitizeSettings(input?: Partial<RoomSettings>): RoomSettings {
   };
 }
 
+function sanitizeMeta(input?: Partial<RoomMeta>): RoomMeta {
+  const status = input?.status === "in_game" ? "in_game" : "lobby";
+  const source =
+    input?.gameSource === "smb2" || input?.gameSource === "mb2ws" ? input.gameSource : "smb1";
+  const courseLabelRaw = typeof input?.courseLabel === "string" ? input.courseLabel.slice(0, 64) : "";
+  const stageLabelRaw = typeof input?.stageLabel === "string" ? input.stageLabel.slice(0, 64) : "";
+  const courseLabel = courseLabelRaw.trim() ? courseLabelRaw.trim() : undefined;
+  const stageLabel = stageLabelRaw.trim() ? stageLabelRaw.trim() : undefined;
+  const stageId = Number.isFinite(input?.stageId) ? Number(input?.stageId) : undefined;
+  return {
+    status,
+    gameSource: source,
+    courseLabel,
+    stageLabel,
+    stageId,
+  };
+}
+
 function publicRoomInfo(room: RoomRecord) {
   const { hostToken: _hostToken, players: _players, ...rest } = room;
   return {
     ...rest,
     settings: room.settings ?? sanitizeSettings(),
+    playerCount: Object.keys(room.players ?? {}).length,
+    meta: room.meta ?? sanitizeMeta({}),
   };
 }
 
@@ -273,6 +302,7 @@ export class Lobby implements DurableObject {
         hostToken,
         courseId,
         settings,
+        meta: sanitizeMeta({ status: "lobby", gameSource: "smb1", courseLabel: courseId }),
         createdAt,
         lastActiveAt: createdAt,
         players: {
@@ -300,7 +330,12 @@ export class Lobby implements DurableObject {
       if (this.isRateLimited(`join:${ip}`, JOIN_RATE_LIMIT)) {
         return jsonResponse({ error: "rate_limited" }, 429, origin);
       }
-      const body = await parseJson<{ roomCode?: string; roomId?: string; playerId?: number; token?: string }>(request);
+      const body = await parseJson<{
+        roomCode?: string;
+        roomId?: string;
+        playerId?: number;
+        token?: string;
+      }>(request);
       const roomCode = body.roomCode ? body.roomCode.trim().toUpperCase() : null;
       const roomId = body.roomId ?? (roomCode ? this.data.codes[roomCode] : null);
       if (!roomId || !this.data.rooms[roomId]) {
@@ -323,7 +358,12 @@ export class Lobby implements DurableObject {
         room.players[playerKey(requestedPlayerId)] = existing;
         this.data.rooms[roomId] = room;
         await this.save();
-        return jsonResponse({ room: publicRoomInfo(room), playerId: existing.playerId, playerToken: existing.token }, 200, origin);
+        return jsonResponse({
+          room: publicRoomInfo(room),
+          playerId: existing.playerId,
+          playerToken: existing.token,
+          hostToken: room.hostId === existing.playerId ? room.hostToken : undefined,
+        }, 200, origin);
       }
       const playerCount = Object.keys(room.players ?? {}).length;
       if (playerCount >= room.settings.maxPlayers) {
@@ -348,7 +388,13 @@ export class Lobby implements DurableObject {
     }
 
     if (request.method === "POST" && url.pathname === "/rooms/heartbeat") {
-      const body = await parseJson<{ roomId?: string; playerId?: number; token?: string }>(request);
+      const body = await parseJson<{
+        roomId?: string;
+        playerId?: number;
+        token?: string;
+        meta?: Partial<RoomMeta>;
+        settings?: Partial<RoomSettings>;
+      }>(request);
       const roomId = body.roomId ?? null;
       if (!roomId || !this.data.rooms[roomId]) {
         return jsonResponse({ ok: false, error: "room_not_found" }, 404, origin);
@@ -365,6 +411,14 @@ export class Lobby implements DurableObject {
       player.connected = true;
       player.lastActiveAt = now;
       room.lastActiveAt = now;
+      if (playerId === room.hostId) {
+        if (body.settings) {
+          room.settings = sanitizeSettings(body.settings);
+        }
+        if (body.meta) {
+          room.meta = sanitizeMeta(body.meta);
+        }
+      }
       room.players[playerKey(playerId)] = player;
       this.data.rooms[roomId] = room;
       await this.save();
@@ -439,6 +493,41 @@ export class Lobby implements DurableObject {
       }
       await this.save();
       return jsonResponse({ ok: true }, 200, origin);
+    }
+
+    if (request.method === "POST" && url.pathname === "/rooms/promote") {
+      const body = await parseJson<{ roomId?: string; playerId?: number; token?: string }>(request);
+      const roomId = body.roomId ?? null;
+      if (!roomId || !this.data.rooms[roomId]) {
+        return jsonResponse({ ok: false, error: "room_not_found" }, 404, origin);
+      }
+      const room = this.data.rooms[roomId];
+      room.players = room.players ?? {};
+      const playerId = Number(body.playerId ?? 0);
+      const token = body.token ?? "";
+      const caller = room.players?.[playerKey(playerId)];
+      if (!caller || caller.token !== token) {
+        return jsonResponse({ ok: false, error: "unauthorized" }, 401, origin);
+      }
+      if (room.players?.[playerKey(room.hostId)]) {
+        return jsonResponse({ ok: false, error: "host_present" }, 409, origin);
+      }
+      const connected = Object.values(room.players ?? {}).filter((entry) => entry.connected);
+      const pool = connected.length > 0 ? connected : Object.values(room.players ?? {});
+      if (pool.length === 0) {
+        return jsonResponse({ ok: false, error: "no_candidates" }, 409, origin);
+      }
+      const chosen = pool[Math.floor(Math.random() * pool.length)];
+      room.hostId = chosen.playerId;
+      room.hostToken = randomToken();
+      room.lastActiveAt = nowMs();
+      this.data.rooms[roomId] = room;
+      await this.save();
+      return jsonResponse({
+        ok: true,
+        room: publicRoomInfo(room),
+        hostToken: room.hostId === playerId ? room.hostToken : undefined,
+      }, 200, origin);
     }
 
     return jsonResponse({ error: "not_found" }, 404, origin);
