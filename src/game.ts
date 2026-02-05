@@ -847,6 +847,13 @@ export class Game {
     if (!this.stageRuntime) {
       return null;
     }
+    const cloneWorldState = (world) => ({
+      xrot: world.xrot,
+      zrot: world.zrot,
+      xrotPrev: world.xrotPrev,
+      zrotPrev: world.zrotPrev,
+      gravity: this.cloneVec3(world.gravity),
+    });
     return {
       simTick: this.simTick,
       stageTimerFrames: this.stageTimerFrames,
@@ -861,15 +868,7 @@ export class Game {
       hurryUpAnnouncerPlayed: this.hurryUpAnnouncerPlayed,
       timeOverAnnouncerPlayed: this.timeOverAnnouncerPlayed,
       pendingAdvance: this.pendingAdvance,
-      world: this.world
-        ? {
-          xrot: this.world.xrot,
-          zrot: this.world.zrot,
-          xrotPrev: this.world.xrotPrev,
-          zrotPrev: this.world.zrotPrev,
-          gravity: structuredClone(this.world.gravity),
-        }
-        : null,
+      world: this.world ? cloneWorldState(this.world) : null,
       players: this.players.map((player) => ({
         id: player.id,
         isSpectator: player.isSpectator,
@@ -879,25 +878,131 @@ export class Game {
         goalType: player.goalType,
         goalTimerFrames: player.goalTimerFrames,
         goalSkipTimerFrames: player.goalSkipTimerFrames,
-        goalInfo: structuredClone(player.goalInfo),
+        goalInfo: player.goalInfo ? structuredClone(player.goalInfo) : null,
         spectateTimerFrames: player.spectateTimerFrames,
         respawnTimerFrames: player.respawnTimerFrames,
         ringoutTimerFrames: player.ringoutTimerFrames,
         ringoutSkipTimerFrames: player.ringoutSkipTimerFrames,
         cameraRotY: player.cameraRotY,
         camera: player.camera?.getState?.() ?? null,
-        world: {
-          xrot: player.world.xrot,
-          zrot: player.world.zrot,
-          xrotPrev: player.world.xrotPrev,
-          zrotPrev: player.world.zrotPrev,
-          gravity: structuredClone(player.world.gravity),
-        },
-        ball: structuredClone(player.ball),
+        world: cloneWorldState(player.world),
+        ball: this.cloneBallState(player.ball),
       })),
       noCollidePairs: Array.from(this.noCollidePairs),
       playerCollisionEnabled: this.playerCollisionEnabled,
       stageRuntime: this.stageRuntime.getState({ includeVisual: false }),
+    };
+  }
+
+  private cloneVec3(source) {
+    const finite = (value) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : 0;
+    };
+    return {
+      x: finite(source?.x),
+      y: finite(source?.y),
+      z: finite(source?.z),
+    };
+  }
+
+  private cloneQuat(source) {
+    const finite = (value, fallback = 0) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : fallback;
+    };
+    return {
+      x: finite(source?.x),
+      y: finite(source?.y),
+      z: finite(source?.z),
+      w: finite(source?.w, 1),
+    };
+  }
+
+  private cloneNumericArray(source, size) {
+    const out = new Float32Array(size);
+    if (!source) {
+      return out;
+    }
+    const src = source as any;
+    const length = Number(src.length);
+    if (Number.isFinite(length) && length > 0) {
+      const safeLength = Math.min(size, length | 0);
+      for (let i = 0; i < safeLength; i += 1) {
+        const num = Number(src[i]);
+        out[i] = Number.isFinite(num) ? num : 0;
+      }
+      return out;
+    }
+    for (let i = 0; i < size; i += 1) {
+      const num = Number(src[i]);
+      out[i] = Number.isFinite(num) ? num : 0;
+    }
+    return out;
+  }
+
+  private cloneBallState(source) {
+    if (!source) {
+      return null;
+    }
+    return {
+      playerId: source.playerId ?? 0,
+      pos: this.cloneVec3(source.pos),
+      prevPos: this.cloneVec3(source.prevPos),
+      vel: this.cloneVec3(source.vel),
+      rotX: source.rotX ?? 0,
+      rotY: source.rotY ?? 0,
+      rotZ: source.rotZ ?? 0,
+      flags: source.flags ?? 0,
+      state: source.state ?? 0,
+      startPos: this.cloneVec3(source.startPos),
+      startRotY: source.startRotY ?? 0,
+      goalTimer: source.goalTimer ?? 0,
+      currRadius: source.currRadius ?? 0.5,
+      accel: source.accel ?? 0,
+      restitution: source.restitution ?? 0,
+      unk60: source.unk60 ?? 0,
+      unk62: source.unk62 ?? 0,
+      unk64: source.unk64 ?? 0,
+      unk80: source.unk80 ?? 0,
+      unk92: source.unk92 ?? 0,
+      apeYaw: source.apeYaw ?? 0,
+      unkA8: this.cloneQuat(source.unkA8),
+      unkB8: this.cloneVec3(source.unkB8),
+      unkC4: source.unkC4 ?? 0,
+      unkF8: source.unkF8 ?? 0,
+      apeQuat: this.cloneQuat(source.apeQuat),
+      apeFlags: source.apeFlags ?? 0,
+      transform: this.cloneNumericArray(source.transform, 12),
+      prevTransform: this.cloneNumericArray(source.prevTransform, 12),
+      unk114: this.cloneVec3(source.unk114),
+      deltaQuat: this.cloneQuat(source.deltaQuat),
+      orientation: this.cloneQuat(source.orientation),
+      prevOrientation: this.cloneQuat(source.prevOrientation),
+      speed: source.speed ?? 0,
+      bananas: source.bananas ?? 0,
+      wormholeCooldown: source.wormholeCooldown ?? 0,
+      wormholeTransform: source.wormholeTransform ? this.cloneNumericArray(source.wormholeTransform, 16) : null,
+      physBall: source.physBall
+        ? {
+          flags: source.physBall.flags ?? 0,
+          pos: this.cloneVec3(source.physBall.pos),
+          prevPos: this.cloneVec3(source.physBall.prevPos),
+          vel: this.cloneVec3(source.physBall.vel),
+          radius: source.physBall.radius ?? 0.5,
+          gravityAccel: source.physBall.gravityAccel ?? 0,
+          restitution: source.physBall.restitution ?? 0,
+          hardestColiSpeed: source.physBall.hardestColiSpeed ?? 0,
+          hardestColiPlane: {
+            point: this.cloneVec3(source.physBall.hardestColiPlane?.point),
+            normal: this.cloneVec3(source.physBall.hardestColiPlane?.normal),
+          },
+          hardestColiAnimGroupId: source.physBall.hardestColiAnimGroupId ?? 0,
+          friction: source.physBall.friction ?? 0,
+          frictionMode: source.physBall.frictionMode ?? 'smb1',
+          animGroupId: source.physBall.animGroupId ?? 0,
+        }
+        : null,
     };
   }
 
