@@ -314,6 +314,9 @@ function setOverlayVisible(visible: boolean) {
   overlay.classList.toggle('hidden', !visible);
   canvas.style.pointerEvents = visible ? 'none' : 'auto';
   document.body.classList.toggle('gameplay-active', !visible);
+  if (!visible) {
+    blurActiveInput();
+  }
   updateMobileMenuButtonVisibility();
   updateFullscreenButtonVisibility();
   syncTouchPreviewVisibility();
@@ -1631,6 +1634,16 @@ function isTextInputElement(el: Element | null) {
   return (el as HTMLElement).isContentEditable;
 }
 
+function blurActiveInput() {
+  const active = document.activeElement as HTMLElement | null;
+  if (!active) {
+    return;
+  }
+  if (isTextInputElement(active)) {
+    active.blur();
+  }
+}
+
 function getNameplateEntry(playerId: number): NameplateEntry {
   let entry = nameplateEntries.get(playerId);
   if (entry) {
@@ -2473,6 +2486,33 @@ function handleCourseComplete() {
     return;
   }
   endMatchToMenu();
+}
+
+function openMenuOverlay(preferredMenu?: MenuPanel) {
+  if (!running) {
+    return;
+  }
+  if (netplayEnabled) {
+    const menu = preferredMenu ?? 'multiplayer';
+    setActiveMenu(menu);
+    setOverlayVisible(true);
+    return;
+  }
+  setActiveMenu(preferredMenu ?? 'main');
+  paused = true;
+  game.pause();
+}
+
+function closeMenuOverlay() {
+  if (!running) {
+    return;
+  }
+  if (netplayEnabled) {
+    setOverlayVisible(false);
+    return;
+  }
+  paused = false;
+  game.resume();
 }
 
 localProfile = loadLocalProfile();
@@ -5155,9 +5195,7 @@ function handleStartRequest() {
 startButton.addEventListener('click', handleStartRequest);
 
 resumeButton.addEventListener('click', () => {
-  paused = false;
-  void audio.resume();
-  game.resume();
+  closeMenuOverlay();
 });
 
 gyroRecalibrateButton?.addEventListener('click', () => {
@@ -5165,8 +5203,11 @@ gyroRecalibrateButton?.addEventListener('click', () => {
 });
 
 mobileMenuButton?.addEventListener('click', () => {
-  paused = true;
-  game.pause();
+  if (netplayEnabled) {
+    openMenuOverlay(activeMenu === 'level-select' ? 'level-select' : 'multiplayer');
+  } else {
+    openMenuOverlay('main');
+  }
 });
 
 window.addEventListener('keydown', (event) => {
@@ -5176,8 +5217,16 @@ window.addEventListener('keydown', (event) => {
       setIngameChatOpen(false);
       return;
     }
-    paused = true;
-    game.pause();
+    if (running && !overlay.classList.contains('hidden')) {
+      event.preventDefault();
+      closeMenuOverlay();
+      return;
+    }
+    if (running) {
+      event.preventDefault();
+      openMenuOverlay(netplayEnabled ? 'multiplayer' : 'main');
+      return;
+    }
     return;
   }
   if (event.key === 'Enter') {
@@ -5187,8 +5236,14 @@ window.addEventListener('keydown', (event) => {
     if (!overlay.classList.contains('hidden')) {
       return;
     }
-    if (ingameChatOpen || isTextInputElement(document.activeElement)) {
+    if (ingameChatOpen) {
       return;
+    }
+    if (isTextInputElement(document.activeElement)) {
+      blurActiveInput();
+      if (isTextInputElement(document.activeElement)) {
+        return;
+      }
     }
     event.preventDefault();
     setIngameChatOpen(true);
