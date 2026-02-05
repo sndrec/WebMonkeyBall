@@ -1434,6 +1434,7 @@ export class StageRuntime {
             state: 0,
             pressImpulse: false,
             triggered: false,
+            counter: this.format === 'smb2' ? 0x3c : 0,
           };
           this.switches.push(runtimeSwitch);
           this.switchesByGroup[i].push(runtimeSwitch);
@@ -1464,6 +1465,7 @@ export class StageRuntime {
           state: 0,
           pressImpulse: false,
           triggered: false,
+          counter: this.format === 'smb2' ? 0x3c : 0,
         };
         this.switches.push(runtimeSwitch);
         if (this.switchesByGroup[0]) {
@@ -1493,8 +1495,15 @@ export class StageRuntime {
     }
   }
 
+  getSwitchTargetAnimGroupIndices(animGroupId) {
+    if (this.format === 'smb2') {
+      return this.animGroupIdMap.get(animGroupId) ?? [];
+    }
+    return this.animGroupIdMap.get(animGroupId) ?? [animGroupId];
+  }
+
   isAnimGroupInPlaybackState(animGroupId, playbackState) {
-    const targetIndices = this.animGroupIdMap.get(animGroupId) ?? [animGroupId];
+    const targetIndices = this.getSwitchTargetAnimGroupIndices(animGroupId);
     for (const index of targetIndices) {
       const group = this.animGroups[index];
       if (!group || (group.playbackState & 7) !== playbackState) {
@@ -1509,8 +1518,7 @@ export class StageRuntime {
     if (countSound && stageSwitch.state < 2) {
       this.switchPressCount = (this.switchPressCount ?? 0) + 1;
     }
-    const targetIndices = this.animGroupIdMap.get(stageSwitch.animGroupId)
-      ?? [stageSwitch.animGroupId];
+    const targetIndices = this.getSwitchTargetAnimGroupIndices(stageSwitch.animGroupId);
     for (const targetIndex of targetIndices) {
       const targetInfo = this.animGroups[targetIndex];
       const targetAg = this.stage.animGroups[targetIndex];
@@ -1546,10 +1554,10 @@ export class StageRuntime {
     } else {
       this.timerFrames += frameDelta;
     }
-    if (this.format === 'smb2') {
-      this.updateSwitchesSmb2PreAnim();
-    }
     this.updateAnimGroups(this.timerFrames / 60, frameDelta, smb2LoadInFrames);
+    if (this.format === 'smb2') {
+      this.updateSwitchesSmb2();
+    }
     if (world) {
       this.updateObjects(world, ball, camera, includeVisuals);
     }
@@ -1702,6 +1710,7 @@ export class StageRuntime {
       state: num(stageSwitch.state) | 0,
       pressImpulse: !!stageSwitch.pressImpulse,
       triggered: !!stageSwitch.triggered,
+      counter: num(stageSwitch.counter) | 0,
       cooldown: num(stageSwitch.cooldown) | 0,
     }));
     const visualState = includeVisual
@@ -1970,6 +1979,7 @@ export class StageRuntime {
       target.state = num(source.state, target.state ?? 0) | 0;
       target.pressImpulse = !!source.pressImpulse;
       target.triggered = !!source.triggered;
+      target.counter = num(source.counter, target.counter ?? 0) | 0;
       target.cooldown = num(source.cooldown, target.cooldown ?? 0) | 0;
     }
 
@@ -2003,22 +2013,33 @@ export class StageRuntime {
     }
   }
 
-  updateSwitchesSmb2PreAnim() {
+  updateSwitchesSmb2() {
     const stack = this.matrixStack;
     for (const stageSwitch of this.switches) {
+      if ((stageSwitch.counter | 0) > 0) {
+        stageSwitch.counter = (stageSwitch.counter | 0) - 1;
+      }
       stageSwitch.prevPos.x = stageSwitch.pos.x;
       stageSwitch.prevPos.y = stageSwitch.pos.y;
       stageSwitch.prevPos.z = stageSwitch.pos.z;
       const playbackState = stageSwitch.type & 7;
-      const groupMatches = this.isAnimGroupInPlaybackState(stageSwitch.animGroupId, playbackState);
-      if (stageSwitch.state === 2) {
+      const switchState = stageSwitch.state & 0xff;
+      let ranActiveSpring = false;
+      if (switchState === 2) {
         stageSwitch.state = 3;
-      }
-      if (stageSwitch.state < 2) {
-        if (stageSwitch.state === 0) {
+        if (!stageSwitch.triggered) {
+          stageSwitch.triggered = true;
+          this.applySwitchPlayback(stageSwitch, false);
+        }
+        if ((stageSwitch.counter | 0) < 1) {
+          this.switchPressCount = (this.switchPressCount ?? 0) + 1;
+        }
+        ranActiveSpring = true;
+      } else if (switchState < 2) {
+        if (switchState === 0) {
           stageSwitch.state = 1;
-          stageSwitch.pressImpulse = false;
           stageSwitch.triggered = false;
+          stageSwitch.pressImpulse = false;
         }
         stageSwitch.localVel.y += -stageSwitch.localPos.y * 0.1;
         stageSwitch.localVel.y *= 0.95;
@@ -2034,25 +2055,19 @@ export class StageRuntime {
             stageSwitch.localVel.y *= -0.8;
           }
         }
-        if (groupMatches) {
+        if (this.isAnimGroupInPlaybackState(stageSwitch.animGroupId, playbackState)) {
           stageSwitch.state = 2;
-          if (!stageSwitch.triggered) {
-            this.applySwitchPlayback(stageSwitch, false);
-            stageSwitch.triggered = true;
-          }
         }
         if (stageSwitch.pressImpulse && stageSwitch.localPos.y < -0.025) {
           stageSwitch.state = 2;
-          if (!stageSwitch.triggered) {
-            this.switchPressCount = (this.switchPressCount ?? 0) + 1;
-            this.applySwitchPlayback(stageSwitch, false);
-            stageSwitch.triggered = true;
-          }
         }
-      } else if (!groupMatches) {
-        stageSwitch.state = 0;
+      } else if (switchState < 4) {
+        if (!this.isAnimGroupInPlaybackState(stageSwitch.animGroupId, playbackState)) {
+          stageSwitch.state = 0;
+        }
+        ranActiveSpring = true;
       }
-      if (stageSwitch.state >= 2) {
+      if (ranActiveSpring) {
         stageSwitch.localVel.y += (-0.1 - stageSwitch.localPos.y) * 0.1;
         stageSwitch.localVel.y *= 0.9;
         stageSwitch.localPos.y += stageSwitch.localVel.y;
