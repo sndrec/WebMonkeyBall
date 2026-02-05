@@ -721,6 +721,8 @@ const LOBBY_NAME_UPDATE_COOLDOWN_MS = 1200;
 const CHAT_MAX_CHARS = 200;
 const CHAT_MAX_MESSAGES = 160;
 const CHAT_SEND_COOLDOWN_MS = 800;
+const CHAT_INGAME_VISIBLE_MS = 5000;
+const CHAT_INGAME_FADE_MS = 1000;
 
 let lobbyRoom: LobbyRoom | null = null;
 let lobbySelfId: number | null = null;
@@ -1540,16 +1542,42 @@ function appendChatMessage(playerId: number, text: string) {
   updateChatUi();
 }
 
-function renderChatList(target: HTMLElement | null, limit: number | null) {
+function renderChatList(
+  target: HTMLElement | null,
+  options: {
+    limit: number | null;
+    nowMs: number;
+    fade: boolean;
+    maxAgeMs: number;
+    fadeMs: number;
+  },
+) {
   if (!target) {
     return;
   }
   const shouldStick = target.scrollTop + target.clientHeight >= target.scrollHeight - 24;
   target.innerHTML = '';
-  const entries = limit ? chatMessages.slice(-limit) : chatMessages;
+  const { limit, nowMs, fade, maxAgeMs, fadeMs } = options;
+  let entries = chatMessages;
+  if (fade) {
+    const maxAge = maxAgeMs + fadeMs;
+    entries = entries.filter((entry) => (nowMs - entry.time) <= maxAge);
+  }
+  if (limit) {
+    entries = entries.slice(-limit);
+  }
+  const totalFadeMs = maxAgeMs + fadeMs;
+  const totalFadeSec = totalFadeMs / 1000;
   for (const entry of entries) {
     const line = document.createElement('div');
     line.className = 'chat-line';
+    if (fade) {
+      const ageMs = Math.max(0, nowMs - entry.time);
+      const ageSec = Math.min(ageMs, totalFadeMs) / 1000;
+      line.classList.add('chat-fade');
+      line.style.animationDuration = `${totalFadeSec}s`;
+      line.style.animationDelay = `${-ageSec}s`;
+    }
     const profile = lobbyProfiles.get(entry.playerId) ?? profileFallbackForPlayer(entry.playerId);
     const name = getPlayerDisplayName(entry.playerId, profile);
     const nameSpan = document.createElement('span');
@@ -1569,9 +1597,31 @@ function renderChatList(target: HTMLElement | null, limit: number | null) {
 }
 
 function updateChatUi() {
-  renderChatList(lobbyChatList, null);
-  const ingameLimit = ingameChatOpen ? null : 6;
-  renderChatList(ingameChatList, ingameLimit);
+  const nowMs = Date.now();
+  renderChatList(lobbyChatList, {
+    limit: null,
+    nowMs,
+    fade: false,
+    maxAgeMs: CHAT_INGAME_VISIBLE_MS,
+    fadeMs: CHAT_INGAME_FADE_MS,
+  });
+  if (ingameChatOpen) {
+    renderChatList(ingameChatList, {
+      limit: 8,
+      nowMs,
+      fade: false,
+      maxAgeMs: CHAT_INGAME_VISIBLE_MS,
+      fadeMs: CHAT_INGAME_FADE_MS,
+    });
+  } else {
+    renderChatList(ingameChatList, {
+      limit: 6,
+      nowMs,
+      fade: true,
+      maxAgeMs: CHAT_INGAME_VISIBLE_MS,
+      fadeMs: CHAT_INGAME_FADE_MS,
+    });
+  }
 }
 
 function sendChatMessage(text: string) {
@@ -4795,7 +4845,6 @@ function renderFrame(now: number) {
   maybeUpdateControlModeSettings(now);
   updateInputPreview();
   updateGamepadCalibration();
-
   if (!running || !viewerInput || !camera) {
     lastTime = now;
     return;
