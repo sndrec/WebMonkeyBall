@@ -304,6 +304,7 @@
           <button id="lobby-start" type="button">Start Match</button>
         </div>
       </div>
+      </div>
       <div class="panel lobby-chat-panel hidden" id="lobby-chat-panel">
         <div class="panel-section-header">
           <h2>Chat</h2>
@@ -312,6 +313,26 @@
         <div class="chat-input-row">
           <input id="lobby-chat-input" class="text-input" type="text" placeholder="Type a message..." maxlength="200" />
           <button id="lobby-chat-send" class="ghost compact" type="button">Send</button>
+        </div>
+      </div>
+    </div>
+    <div class="panel hidden" id="multiplayer-ingame-menu">
+      <div class="menu-header">
+        <div>
+          <h1>Match Menu</h1>
+          <p>Multiplayer session controls.</p>
+        </div>
+      </div>
+      <div class="panel-section">
+        <div class="panel-section-header">
+          <h2>Players</h2>
+        </div>
+        <div id="ingame-player-list" class="lobby-player-list"></div>
+      </div>
+      <div class="panel-section">
+        <div class="row">
+          <button id="ingame-resume" class="ghost" type="button">Resume</button>
+          <button id="ingame-leave" type="button">Leave Match</button>
         </div>
       </div>
     </div>

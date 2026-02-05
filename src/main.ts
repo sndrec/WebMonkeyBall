@@ -191,6 +191,7 @@ const hudCanvas = document.getElementById('hud-canvas') as HTMLCanvasElement;
 const overlay = document.getElementById('overlay') as HTMLElement;
 const mainMenuPanel = document.getElementById('main-menu') as HTMLElement | null;
 const multiplayerMenuPanel = document.getElementById('multiplayer-menu') as HTMLElement | null;
+const multiplayerIngameMenuPanel = document.getElementById('multiplayer-ingame-menu') as HTMLElement | null;
 const settingsMenuPanel = document.getElementById('settings-menu') as HTMLElement | null;
 const levelSelectMenuPanel = document.getElementById('level-select-menu') as HTMLElement | null;
 const stageFade = document.getElementById('stage-fade') as HTMLElement;
@@ -222,6 +223,9 @@ const gamepadCalibrationOverlay = document.getElementById('gamepad-calibration')
 const gamepadCalibrationMap = document.getElementById('gamepad-calibration-map') as HTMLCanvasElement | null;
 const gamepadCalibrationButton = document.getElementById('gamepad-calibrate') as HTMLButtonElement | null;
 const gamepadCalibrationCtx = gamepadCalibrationMap?.getContext('2d') ?? null;
+const ingamePlayerList = document.getElementById('ingame-player-list') as HTMLElement | null;
+const ingameResumeButton = document.getElementById('ingame-resume') as HTMLButtonElement | null;
+const ingameLeaveButton = document.getElementById('ingame-leave') as HTMLButtonElement | null;
 const netplayDebugWrap = document.createElement('div');
 const netplayDebugWarningEl = document.createElement('div');
 const netplayDebugInfoEl = document.createElement('div');
@@ -745,7 +749,7 @@ let pendingSnapshot: {
 let lobbyHeartbeatTimer: number | null = null;
 let lastLobbyHeartbeatMs: number | null = null;
 let netplayAccumulator = 0;
-type MenuPanel = 'main' | 'multiplayer' | 'settings' | 'level-select';
+type MenuPanel = 'main' | 'multiplayer' | 'multiplayer-ingame' | 'settings' | 'level-select';
 type SettingsTab = 'input' | 'audio' | 'multiplayer';
 let activeMenu: MenuPanel = 'main';
 let settingsReturnMenu: MenuPanel = 'main';
@@ -1988,6 +1992,57 @@ function buildRoomMetaForCreation(): RoomMeta {
   };
 }
 
+function renderLobbyPlayerList(target: HTMLElement | null, isHost: boolean) {
+  if (!target) {
+    return;
+  }
+  target.innerHTML = '';
+  if (!lobbyRoom) {
+    return;
+  }
+  for (const player of game.players) {
+    const profile = lobbyProfiles.get(player.id) ?? profileFallbackForPlayer(player.id);
+    const row = document.createElement('div');
+    row.className = 'lobby-player';
+    const avatar = createAvatarElement(profile, player.id);
+    avatar.setAttribute('aria-hidden', 'true');
+    const info = document.createElement('div');
+    info.className = 'lobby-player-info';
+    const name = document.createElement('div');
+    name.className = 'lobby-player-name';
+    name.textContent = getPlayerDisplayName(player.id, profile);
+    const tags = document.createElement('span');
+    tags.className = 'lobby-player-tags';
+    const tagParts: string[] = [];
+    if (player.id === lobbyRoom.hostId) {
+      tagParts.push('Host');
+    }
+    if (player.id === game.localPlayerId) {
+      tagParts.push('You');
+    }
+    if (tagParts.length > 0) {
+      tags.textContent = ` (${tagParts.join(', ')})`;
+      name.appendChild(tags);
+    }
+    const sub = document.createElement('div');
+    sub.className = 'lobby-player-sub';
+    sub.textContent = `ID ${player.id}`;
+    info.append(name, sub);
+    row.append(avatar, info);
+    if (isHost && player.id !== lobbyRoom.hostId) {
+      const kickButton = document.createElement('button');
+      kickButton.type = 'button';
+      kickButton.className = 'ghost kick-button';
+      kickButton.textContent = 'Kick';
+      kickButton.addEventListener('click', () => {
+        void kickPlayerFromRoom(player.id);
+      });
+      row.append(kickButton);
+    }
+    target.appendChild(row);
+  }
+}
+
 function updateLobbyUi() {
   const inLobby = !!(netplayEnabled && lobbyRoom);
   multiplayerBrowser?.classList.toggle('hidden', inLobby);
@@ -2000,6 +2055,9 @@ function updateLobbyUi() {
     lobbyLeaveButton.classList.add('hidden');
     if (lobbyPlayerList) {
       lobbyPlayerList.innerHTML = '';
+    }
+    if (ingamePlayerList) {
+      ingamePlayerList.innerHTML = '';
     }
     if (lobbyRoomInfo) {
       lobbyRoomInfo.textContent = '';
@@ -2056,50 +2114,8 @@ function updateLobbyUi() {
     lobbyChatPanel.classList.toggle('hidden', inMatch);
   }
 
-  if (lobbyPlayerList) {
-    lobbyPlayerList.innerHTML = '';
-    for (const player of game.players) {
-      const profile = lobbyProfiles.get(player.id) ?? profileFallbackForPlayer(player.id);
-      const row = document.createElement('div');
-      row.className = 'lobby-player';
-      const avatar = createAvatarElement(profile, player.id);
-      avatar.setAttribute('aria-hidden', 'true');
-      const info = document.createElement('div');
-      info.className = 'lobby-player-info';
-      const name = document.createElement('div');
-      name.className = 'lobby-player-name';
-      name.textContent = getPlayerDisplayName(player.id, profile);
-      const tags = document.createElement('span');
-      tags.className = 'lobby-player-tags';
-      const tagParts: string[] = [];
-      if (player.id === lobbyRoom.hostId) {
-        tagParts.push('Host');
-      }
-      if (player.id === game.localPlayerId) {
-        tagParts.push('You');
-      }
-      if (tagParts.length > 0) {
-        tags.textContent = ` (${tagParts.join(', ')})`;
-        name.appendChild(tags);
-      }
-      const sub = document.createElement('div');
-      sub.className = 'lobby-player-sub';
-      sub.textContent = `ID ${player.id}`;
-      info.append(name, sub);
-      row.append(avatar, info);
-      if (isHost && player.id !== lobbyRoom.hostId) {
-        const kickButton = document.createElement('button');
-        kickButton.type = 'button';
-        kickButton.className = 'ghost kick-button';
-        kickButton.textContent = 'Kick';
-        kickButton.addEventListener('click', () => {
-          void kickPlayerFromRoom(player.id);
-        });
-        row.append(kickButton);
-      }
-      lobbyPlayerList.appendChild(row);
-    }
-  }
+  renderLobbyPlayerList(lobbyPlayerList, isHost);
+  renderLobbyPlayerList(ingamePlayerList, isHost);
 
   const meta = lobbyRoom.meta ?? buildRoomMeta();
   if (meta && !lobbyRoom.meta) {
@@ -2182,6 +2198,7 @@ function setActiveMenu(menu: MenuPanel) {
   mainMenuPanel?.classList.toggle('hidden', menu !== 'main');
   multiplayerLayout?.classList.toggle('hidden', menu !== 'multiplayer');
   multiplayerMenuPanel?.classList.toggle('hidden', menu !== 'multiplayer');
+  multiplayerIngameMenuPanel?.classList.toggle('hidden', menu !== 'multiplayer-ingame');
   settingsMenuPanel?.classList.toggle('hidden', menu !== 'settings');
   levelSelectMenuPanel?.classList.toggle('hidden', menu !== 'level-select');
   updateLobbyUi();
@@ -2465,6 +2482,18 @@ function endMatchToLobby() {
   updateLobbyUi();
 }
 
+function leaveMatchToLobbyList() {
+  if (!netplayEnabled) {
+    endMatchToMenu();
+    return;
+  }
+  resetMatchState();
+  endActiveMatch();
+  setOverlayVisible(true);
+  setActiveMenu('multiplayer');
+  void leaveRoom();
+}
+
 function handleCourseComplete() {
   if (!running) {
     return;
@@ -2493,8 +2522,7 @@ function openMenuOverlay(preferredMenu?: MenuPanel) {
     return;
   }
   if (netplayEnabled) {
-    const menu = preferredMenu ?? 'multiplayer';
-    setActiveMenu(menu);
+    setActiveMenu('multiplayer-ingame');
     setOverlayVisible(true);
     return;
   }
@@ -4738,6 +4766,9 @@ function getActiveOverlayPanel(): HTMLElement | null {
   if (settingsMenuPanel && !settingsMenuPanel.classList.contains('hidden')) {
     return settingsMenuPanel;
   }
+  if (multiplayerIngameMenuPanel && !multiplayerIngameMenuPanel.classList.contains('hidden')) {
+    return multiplayerIngameMenuPanel;
+  }
   if (multiplayerMenuPanel && !multiplayerMenuPanel.classList.contains('hidden')) {
     return multiplayerMenuPanel;
   }
@@ -5098,7 +5129,7 @@ document.addEventListener('webkitfullscreenchange', () => {
   updateFullscreenButtonVisibility();
 });
 
-for (const panel of [mainMenuPanel, multiplayerMenuPanel, settingsMenuPanel, levelSelectMenuPanel]) {
+for (const panel of [mainMenuPanel, multiplayerMenuPanel, multiplayerIngameMenuPanel, settingsMenuPanel, levelSelectMenuPanel]) {
   panel?.addEventListener('scroll', () => {
     syncTouchPreviewVisibility();
   });
@@ -5198,13 +5229,21 @@ resumeButton.addEventListener('click', () => {
   closeMenuOverlay();
 });
 
+ingameResumeButton?.addEventListener('click', () => {
+  closeMenuOverlay();
+});
+
+ingameLeaveButton?.addEventListener('click', () => {
+  leaveMatchToLobbyList();
+});
+
 gyroRecalibrateButton?.addEventListener('click', () => {
   game.input?.recalibrateGyro?.();
 });
 
 mobileMenuButton?.addEventListener('click', () => {
   if (netplayEnabled) {
-    openMenuOverlay(activeMenu === 'level-select' ? 'level-select' : 'multiplayer');
+    openMenuOverlay();
   } else {
     openMenuOverlay('main');
   }
@@ -5224,7 +5263,7 @@ window.addEventListener('keydown', (event) => {
     }
     if (running) {
       event.preventDefault();
-      openMenuOverlay(netplayEnabled ? 'multiplayer' : 'main');
+      openMenuOverlay(netplayEnabled ? 'multiplayer-ingame' : 'main');
       return;
     }
     return;
@@ -5244,6 +5283,10 @@ window.addEventListener('keydown', (event) => {
       if (isTextInputElement(document.activeElement)) {
         return;
       }
+    }
+    updateIngameChatVisibility();
+    if (ingameChatWrap?.classList.contains('hidden')) {
+      return;
     }
     event.preventDefault();
     setIngameChatOpen(true);
