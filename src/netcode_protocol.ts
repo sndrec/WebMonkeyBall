@@ -145,6 +145,7 @@ export type StartMatchMessage = {
   gameSource: GameSource;
   course: any;
   stageBasePath?: string;
+  lateJoin?: boolean;
 };
 
 export type HostToClientMessage =

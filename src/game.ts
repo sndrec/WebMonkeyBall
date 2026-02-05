@@ -985,7 +985,17 @@ export class Game {
     }
     const localIsSpectator = localPlayer?.isSpectator ?? false;
     const localIsPending = localPlayer?.pendingSpawn ?? false;
-    const preserveFreeFly = localFreeFly && (localWasSpectator || localWasPending || localIsSpectator || localIsPending);
+    const localFinished = localPlayer?.finished ?? false;
+    const localGoalTimer = localPlayer?.goalTimerFrames ?? 0;
+    const localRingoutTimer = localPlayer?.ringoutTimerFrames ?? 0;
+    const localSpectateTimer = localPlayer?.spectateTimerFrames ?? 0;
+    const localNonPlayable = localIsSpectator
+      || localIsPending
+      || localFinished
+      || localGoalTimer > 0
+      || localRingoutTimer > 0
+      || localSpectateTimer > 0;
+    const preserveFreeFly = localFreeFly && localNonPlayable;
     const preserveLocalCamera = preserveFreeFly || ((localWasSpectator || localWasPending) && (localIsSpectator || localIsPending));
     if (localPlayer && preserveLocalCamera) {
       if (preserveFreeFly) {
@@ -1000,7 +1010,7 @@ export class Game {
       }
       this.syncCameraPose();
     }
-    if (localPlayer && !localPlayer.isSpectator && !localPlayer.pendingSpawn) {
+    if (localPlayer && !localNonPlayable) {
       localPlayer.freeFly = false;
     }
     this.noCollidePairs = new Set(state.noCollidePairs ?? []);

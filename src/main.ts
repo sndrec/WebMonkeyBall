@@ -3484,7 +3484,13 @@ function handleHostMessage(msg: HostToClientMessage) {
     return;
   }
   const msgStageSeq = (msg as { stageSeq?: number }).stageSeq;
-  if (msgStageSeq !== undefined && msg.type !== 'start' && msgStageSeq !== state.stageSeq) {
+  if (
+    msgStageSeq !== undefined
+    && msg.type !== 'start'
+    && msg.type !== 'player_join'
+    && msg.type !== 'player_leave'
+    && msgStageSeq !== state.stageSeq
+  ) {
     return;
   }
   if (msg.type === 'stage_sync') {
@@ -3627,6 +3633,9 @@ function handleHostMessage(msg: HostToClientMessage) {
       netplayState.awaitingSnapshot = false;
       netplayState.expectedHashes.clear();
       netplayState.hashHistory.clear();
+    }
+    if (msg.lateJoin && Number.isFinite(game.localPlayerId) && game.localPlayerId > 0) {
+      markPlayerPendingSpawn(game.localPlayerId, msg.stageSeq);
     }
     promotePendingSpawns(msg.stageSeq);
     pendingSnapshot = null;
@@ -4499,6 +4508,7 @@ function startHost(room: LobbyRoom, playerToken: string) {
         gameSource: state.currentGameSource,
         course: state.currentCourse,
         stageBasePath: getStageBasePath(state.currentGameSource),
+        lateJoin: joinAsSpectator,
       });
     }
     sendSnapshotToClient(playerId);
