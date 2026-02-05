@@ -1277,6 +1277,14 @@ export class Game {
     this.syncCameraPose();
   }
 
+  enterLocalSpectatorFreeFly() {
+    const player = this.getLocalPlayer();
+    if (!player) {
+      return;
+    }
+    this.enterFreeFlyCamera(player);
+  }
+
   private hidePlayerBall(player: PlayerState) {
     const ball = player.ball;
     if (!ball) {

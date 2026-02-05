@@ -592,6 +592,7 @@ const game = new Game({
         netplayState.currentCourse = config;
         netplayState.currentGameSource = activeGameSource;
         netplayState.stageSeq += 1;
+        promotePendingSpawns(netplayState.stageSeq);
         hostRelay.broadcast({
           type: 'start',
           stageSeq: netplayState.stageSeq,
@@ -767,6 +768,7 @@ const profileUpdateThrottle = new Map<number, number>();
 type ChatEntry = { id: number; playerId: number; text: string; time: number };
 let chatMessages: ChatEntry[] = [];
 let chatSeq = 0;
+const pendingSpawnStageSeq = new Map<number, number>();
 let lastLocalChatSentMs = 0;
 const chatRateLimitByPlayer = new Map<number, number>();
 let ingameChatOpen = false;
@@ -2100,6 +2102,7 @@ function updateLobbyUi() {
   const inLobby = !!(netplayEnabled && lobbyRoom);
   multiplayerBrowser?.classList.toggle('hidden', inLobby);
   multiplayerLobby?.classList.toggle('hidden', !inLobby);
+  multiplayerBackButton?.classList.toggle('hidden', inLobby);
 
   if (!lobbyLeaveButton) {
     return;
@@ -2466,6 +2469,15 @@ function resetMatchState() {
   }
 }
 
+function destroySingleplayerForNetplay() {
+  if (!running || netplayEnabled) {
+    return;
+  }
+  resetMatchState();
+  endActiveMatch();
+  setOverlayVisible(true);
+}
+
 function endActiveMatch() {
   if (!running) {
     return;
@@ -2670,9 +2682,40 @@ function resetNetplayConnections({ preserveLobby = false }: { preserveLobby?: bo
     lastRoomMetaKey = null;
     resetLocalPlayersAfterNetplay();
   }
+  pendingSpawnStageSeq.clear();
   updateLobbyUi();
   updateChatUi();
   setIngameChatOpen(false);
+}
+
+function markPlayerPendingSpawn(playerId: number, stageSeq: number) {
+  const player = game.players.find((entry) => entry.id === playerId);
+  if (!player) {
+    return;
+  }
+  player.pendingSpawn = true;
+  player.isSpectator = true;
+  pendingSpawnStageSeq.set(playerId, stageSeq);
+  if (player.id === game.localPlayerId) {
+    game.enterLocalSpectatorFreeFly();
+  }
+}
+
+function promotePendingSpawns(stageSeq: number) {
+  if (pendingSpawnStageSeq.size === 0) {
+    return;
+  }
+  for (const [playerId, joinStageSeq] of pendingSpawnStageSeq) {
+    if (joinStageSeq >= stageSeq) {
+      continue;
+    }
+    const player = game.players.find((entry) => entry.id === playerId);
+    if (player) {
+      player.pendingSpawn = false;
+      player.isSpectator = false;
+    }
+    pendingSpawnStageSeq.delete(playerId);
+  }
 }
 
 function sendLobbyHeartbeat(
@@ -3076,6 +3119,10 @@ async function handleStageLoaded(stageId: number) {
     maybeStartSmb2LikeStageFade();
     markStageReady(stageId);
     tryApplyPendingSnapshot(stageId);
+    const localPlayer = game.getLocalPlayer();
+    if (localPlayer?.pendingSpawn && localPlayer.isSpectator) {
+      game.enterLocalSpectatorFreeFly();
+    }
     preloadNextStages();
     if (netplayEnabled && netplayState?.role === 'host' && lobbyRoom) {
       const meta = buildRoomMeta();
@@ -3114,6 +3161,10 @@ async function handleStageLoaded(stageId: number) {
   maybeStartSmb2LikeStageFade();
   markStageReady(stageId);
   tryApplyPendingSnapshot(stageId);
+  const localPlayer = game.getLocalPlayer();
+  if (localPlayer?.pendingSpawn && localPlayer.isSpectator) {
+    game.enterLocalSpectatorFreeFly();
+  }
   preloadNextStages();
   if (netplayEnabled && netplayState?.role === 'host' && lobbyRoom) {
     const meta = buildRoomMeta();
@@ -3521,8 +3572,14 @@ function handleHostMessage(msg: HostToClientMessage) {
   if (msg.type === 'player_join') {
     game.addPlayer(msg.playerId, { spectator: msg.spectator });
     const player = game.players.find((p) => p.id === msg.playerId);
-    if (player && msg.pendingSpawn) {
-      player.pendingSpawn = true;
+    if (player) {
+      player.isSpectator = msg.spectator;
+      if (msg.pendingSpawn) {
+        markPlayerPendingSpawn(msg.playerId, msg.stageSeq ?? netplayState?.stageSeq ?? 0);
+      } else {
+        player.pendingSpawn = false;
+        pendingSpawnStageSeq.delete(msg.playerId);
+      }
     }
     if (!lobbyProfiles.has(msg.playerId)) {
       lobbyProfiles.set(msg.playerId, profileFallbackForPlayer(msg.playerId));
@@ -3534,6 +3591,7 @@ function handleHostMessage(msg: HostToClientMessage) {
     game.removePlayer(msg.playerId);
     lobbyProfiles.delete(msg.playerId);
     pendingAvatarByPlayer.delete(msg.playerId);
+    pendingSpawnStageSeq.delete(msg.playerId);
     updateLobbyUi();
     return;
   }
@@ -3565,6 +3623,7 @@ function handleHostMessage(msg: HostToClientMessage) {
       netplayState.expectedHashes.clear();
       netplayState.hashHistory.clear();
     }
+    promotePendingSpawns(msg.stageSeq);
     pendingSnapshot = null;
     activeGameSource = msg.gameSource;
     game.setGameSource(activeGameSource);
@@ -3597,7 +3656,11 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
     if (game.players.length >= game.maxPlayers) {
       return;
     }
-    game.addPlayer(playerId, { spectator: false });
+    const joinAsSpectator = running && !!game.stageRuntime;
+    game.addPlayer(playerId, { spectator: joinAsSpectator });
+    if (joinAsSpectator) {
+      markPlayerPendingSpawn(playerId, state.stageSeq);
+    }
     updateLobbyUi();
   }
   if (msg.type === 'input') {
@@ -3607,10 +3670,7 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
       return;
     }
     const player = game.players.find((entry) => entry.id === playerId);
-    if (player) {
-      player.pendingSpawn = false;
-      player.isSpectator = false;
-    }
+    const awaitingSpawn = !!player?.pendingSpawn || !!player?.isSpectator;
     if (msg.lastAck !== undefined) {
       const ackFrame = coerceFrame(msg.lastAck);
       if (ackFrame !== null) {
@@ -3621,6 +3681,9 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
       }
     }
     clientState.lastAckedClientInput = Math.max(clientState.lastAckedClientInput, frame);
+    if (awaitingSpawn) {
+      return;
+    }
     const currentFrame = state.session.getFrame();
     const minFrame = Math.max(0, currentFrame - Math.min(state.maxRollback, NETPLAY_MAX_INPUT_BEHIND));
     const maxFrame = currentFrame + NETPLAY_MAX_INPUT_AHEAD;
@@ -4214,6 +4277,7 @@ async function createRoom() {
       settings: { maxPlayers: LOBBY_MAX_PLAYERS, collisionEnabled: true, locked: false },
       meta: buildRoomMetaForCreation(),
     });
+    destroySingleplayerForNetplay();
     lobbyRoom = result.room;
     lobbySelfId = result.playerId;
     lobbyPlayerToken = result.playerToken;
@@ -4241,6 +4305,7 @@ async function joinRoom(roomId: string) {
   lobbyStatus.textContent = 'Lobby: joining...';
   try {
     const result = await lobbyClient.joinRoom({ roomId });
+    destroySingleplayerForNetplay();
     lobbyRoom = result.room;
     lobbySelfId = result.playerId;
     lobbyPlayerToken = result.playerToken;
@@ -4281,6 +4346,7 @@ async function joinRoomByCode() {
   lobbyStatus.textContent = 'Lobby: joining...';
   try {
     const result = await lobbyClient.joinRoom({ roomCode: code });
+    destroySingleplayerForNetplay();
     lobbyRoom = result.room;
     lobbySelfId = result.playerId;
     lobbyPlayerToken = result.playerToken;
@@ -4387,8 +4453,12 @@ function startHost(room: LobbyRoom, playerToken: string) {
         lastSnapshotRequestMs: null,
       });
     }
-    game.addPlayer(playerId, { spectator: false });
+    const joinAsSpectator = running && !!game.stageRuntime;
+    game.addPlayer(playerId, { spectator: joinAsSpectator });
     const player = game.players.find((p) => p.id === playerId);
+    if (joinAsSpectator) {
+      markPlayerPendingSpawn(playerId, state.stageSeq);
+    }
     const pendingSpawn = !!player?.pendingSpawn;
     if (!lobbyProfiles.has(playerId)) {
       lobbyProfiles.set(playerId, profileFallbackForPlayer(playerId));
@@ -4397,11 +4467,18 @@ function startHost(room: LobbyRoom, playerToken: string) {
       hostRelay?.sendTo(playerId, {
         type: 'player_join',
         playerId: existing.id,
+        stageSeq: state.stageSeq,
         spectator: existing.isSpectator,
         pendingSpawn: existing.pendingSpawn,
       });
     }
-    hostRelay?.broadcast({ type: 'player_join', playerId, spectator: false, pendingSpawn });
+    hostRelay?.broadcast({
+      type: 'player_join',
+      playerId,
+      stageSeq: state.stageSeq,
+      spectator: joinAsSpectator,
+      pendingSpawn,
+    });
     const nextRoom = lobbyRoom ?? room;
     if (nextRoom) {
       nextRoom.playerCount = game.players.length;
@@ -4427,6 +4504,7 @@ function startHost(room: LobbyRoom, playerToken: string) {
     netplayState?.clientStates.delete(playerId);
     lobbyProfiles.delete(playerId);
     pendingAvatarByPlayer.delete(playerId);
+    pendingSpawnStageSeq.delete(playerId);
     hostRelay?.broadcast({ type: 'player_leave', playerId });
     updateLobbyUi();
     maybeSendStageSync();

@@ -46,8 +46,8 @@ type LobbyState = {
   codes: Record<string, string>;
 };
 
-const ROOM_TTL_MS = 1000 * 60;
-const PLAYER_TTL_MS = 1000 * 30;
+const ROOM_TTL_MS = 1000 * 60 * 5;
+const PLAYER_TTL_MS = 1000 * 120;
 const PLAYER_JOIN_GRACE_MS = 1000 * 20;
 const MAX_PLAYERS = 8;
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";

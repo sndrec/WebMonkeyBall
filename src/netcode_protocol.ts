@@ -97,6 +97,7 @@ export type SnapshotRequestMessage = {
 export type PlayerJoinMessage = {
   type: 'player_join';
   playerId: PlayerId;
+  stageSeq?: number;
   spectator: boolean;
   pendingSpawn?: boolean;
 };
