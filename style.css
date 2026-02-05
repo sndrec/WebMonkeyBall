@@ -459,6 +459,96 @@ body.gameplay-active {
   display: none;
 }
 
+.multiplayer-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.multiplayer-layout.hidden {
+  display: none;
+}
+
+.lobby-chat-panel {
+  width: min(320px, 94vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.chat-list-ingame {
+  max-height: 140px;
+  overflow: hidden;
+}
+
+.chat-line {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chat-name {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.chat-text {
+  color: var(--muted);
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chat-input-row .text-input {
+  flex: 1;
+}
+
+.ingame-chat {
+  position: fixed;
+  left: 16px;
+  bottom: 72px;
+  z-index: 9;
+  width: min(340px, 70vw);
+  color: #ffffff;
+  font: 12px/1.4 system-ui, sans-serif;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+
+.ingame-chat.open {
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 8px;
+  pointer-events: auto;
+}
+
+.ingame-chat.open .chat-list {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.ingame-chat .text-input {
+  background: rgba(10, 10, 15, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--fg);
+}
+
 .text-input {
   flex: 1 1 auto;
   padding: 10px 12px;
@@ -619,6 +709,45 @@ body.gameplay-active {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+#nameplate-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9;
+  font: 12px/1.2 system-ui, sans-serif;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.nameplate {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  white-space: nowrap;
+  transform: translate(-50%, -100%);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.nameplate.visible {
+  opacity: 1;
+}
+
+.nameplate .avatar {
+  width: 24px;
+  height: 24px;
+}
+
+.nameplate-name {
+  font-weight: 600;
+  font-size: 12px;
 }
 
 .avatar-grid {

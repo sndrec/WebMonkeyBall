@@ -206,7 +206,8 @@
         <div class="control-hint">Updates the lobby selection without starting the match.</div>
       </div>
     </div>
-    <div class="panel hidden" id="multiplayer-menu">
+    <div class="multiplayer-layout hidden" id="multiplayer-layout">
+      <div class="panel hidden" id="multiplayer-menu">
       <div class="menu-header">
         <button id="multiplayer-back" class="ghost compact" type="button">Back</button>
         <div>
@@ -301,6 +302,16 @@
         </div>
         <div class="panel-section">
           <button id="lobby-start" type="button">Start Match</button>
+        </div>
+      </div>
+      <div class="panel lobby-chat-panel hidden" id="lobby-chat-panel">
+        <div class="panel-section-header">
+          <h2>Chat</h2>
+        </div>
+        <div id="lobby-chat-list" class="chat-list"></div>
+        <div class="chat-input-row">
+          <input id="lobby-chat-input" class="text-input" type="text" placeholder="Type a message..." maxlength="200" />
+          <button id="lobby-chat-send" class="ghost compact" type="button">Send</button>
         </div>
       </div>
     </div>
@@ -433,6 +444,13 @@
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div id="ingame-chat" class="ingame-chat hidden">
+    <div id="ingame-chat-list" class="chat-list chat-list-ingame"></div>
+    <div id="ingame-chat-input-row" class="chat-input-row hidden">
+      <input id="ingame-chat-input" class="text-input" type="text" placeholder="Message..." maxlength="200" />
     </div>
   </div>
 

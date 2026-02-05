@@ -193,6 +193,7 @@ type GameOptions = {
   onResumed?: () => void;
   onStageLoadStart?: (stageId: number) => void;
   onStageLoaded?: (stageId: number) => void;
+  onCourseComplete?: (info: { flags: number; goalType: string | null; timerCurr: number; u_currStageId: number }) => void;
   stageBasePath?: string;
   gameSource?: GameSource;
   audio?: AudioManager;
@@ -286,6 +287,7 @@ export class Game {
   public onResumed?: () => void;
   public onStageLoadStart?: (stageId: number) => void;
   public onStageLoaded?: (stageId: number) => void;
+  public onCourseComplete?: (info: { flags: number; goalType: string | null; timerCurr: number; u_currStageId: number }) => void;
   public stageBasePath: string;
   public gameSource: GameSource;
   public audio: AudioManager | null;
@@ -406,6 +408,7 @@ export class Game {
     onResumed,
     onStageLoadStart,
     onStageLoaded,
+    onCourseComplete,
     stageBasePath,
     gameSource,
     audio,
@@ -416,6 +419,7 @@ export class Game {
     this.onResumed = onResumed;
     this.onStageLoadStart = onStageLoadStart;
     this.onStageLoaded = onStageLoaded;
+    this.onCourseComplete = onCourseComplete;
     this.gameSource = gameSource ?? GAME_SOURCES.SMB1;
     this.stageBasePath = stageBasePath ?? STAGE_BASE_PATHS[this.gameSource];
     this.audio = audio ?? null;
@@ -2502,6 +2506,9 @@ export class Game {
       this.statusText = 'Course complete.';
       this.updateHud();
       this.pendingAdvance = false;
+      if (!this.rollbackSession?.suppressVisuals) {
+        this.onCourseComplete?.(info);
+      }
       return;
     }
     try {
@@ -2619,6 +2626,14 @@ export class Game {
     });
     if (!advanced) {
       this.statusText = 'Course complete.';
+      if (!this.rollbackSession?.suppressVisuals) {
+        this.onCourseComplete?.({
+          flags: INFO_FLAGS.GOAL,
+          goalType,
+          timerCurr: this.stageTimerFrames,
+          u_currStageId: this.course.currentStageId,
+        });
+      }
       return;
     }
     void this.loadStage(this.course.currentStageId);

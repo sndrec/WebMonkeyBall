@@ -122,8 +122,19 @@ export type PlayerProfileMessage = {
   profile: PlayerProfile;
 };
 
+export type ChatMessage = {
+  type: 'chat';
+  playerId: PlayerId;
+  text: string;
+};
+
 export type KickMessage = {
   type: 'kick';
+  reason?: string;
+};
+
+export type MatchEndMessage = {
+  type: 'match_end';
   reason?: string;
 };
 
@@ -147,7 +158,9 @@ export type HostToClientMessage =
   | PlayerLeaveMessage
   | RoomUpdateMessage
   | PlayerProfileMessage
-  | KickMessage;
+  | ChatMessage
+  | KickMessage
+  | MatchEndMessage;
 
 export type ClientToHostMessage =
   | InputFrameMessage
@@ -157,4 +170,5 @@ export type ClientToHostMessage =
   | SnapshotRequestMessage
   | PlayerJoinMessage
   | PlayerLeaveMessage
-  | PlayerProfileMessage;
+  | PlayerProfileMessage
+  | ChatMessage;

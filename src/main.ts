@@ -1,4 +1,4 @@
-import { mat4, vec3 } from 'gl-matrix';
+import { mat4, vec3, vec4 } from 'gl-matrix';
 import { Game } from './game.js';
 import { AudioManager } from './audio.js';
 import { GAME_SOURCES, S16_TO_RAD, STAGE_BASE_PATHS, type GameSource } from './constants.js';
@@ -38,6 +38,7 @@ import type {
   PlayerProfile,
   RoomInfo,
   RoomMeta,
+  ChatMessage,
 } from './netcode_protocol.js';
 import { parseStagedefLz } from './noclip/SuperMonkeyBall/Stagedef.js';
 import { StageId, STAGE_INFO_MAP } from './noclip/SuperMonkeyBall/StageInfo.js';
@@ -241,6 +242,9 @@ netplayDebugWarningEl.style.marginBottom = '4px';
 netplayDebugInfoEl.style.whiteSpace = 'pre';
 netplayDebugWrap.append(netplayDebugWarningEl, netplayDebugInfoEl);
 document.body.appendChild(netplayDebugWrap);
+const nameplateLayer = document.createElement('div');
+nameplateLayer.id = 'nameplate-layer';
+document.body.appendChild(nameplateLayer);
 const startButton = document.getElementById('start') as HTMLButtonElement;
 const resumeButton = document.getElementById('resume') as HTMLButtonElement;
 const difficultySelect = document.getElementById('difficulty') as HTMLSelectElement;
@@ -313,6 +317,7 @@ function setOverlayVisible(visible: boolean) {
   updateMobileMenuButtonVisibility();
   updateFullscreenButtonVisibility();
   syncTouchPreviewVisibility();
+  updateIngameChatVisibility();
 }
 
 const STAGE_FADE_MS = 333;
@@ -597,6 +602,9 @@ const game = new Game({
     }
     void handleStageLoaded(stageId);
   },
+  onCourseComplete: () => {
+    handleCourseComplete();
+  },
 });
 game.init();
 game.simPerf.enabled = perfEnabled;
@@ -651,6 +659,7 @@ const settingsBackButton = document.getElementById('settings-back') as HTMLButto
 const settingsTabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]'));
 const settingsTabPanels = Array.from(document.querySelectorAll<HTMLElement>('[data-settings-panel]'));
 const multiplayerOnlineCount = document.getElementById('lobby-online-count') as HTMLElement | null;
+const multiplayerLayout = document.getElementById('multiplayer-layout') as HTMLElement | null;
 const multiplayerBrowser = document.getElementById('multiplayer-browser') as HTMLElement | null;
 const multiplayerLobby = document.getElementById('multiplayer-lobby') as HTMLElement | null;
 const lobbyRefreshButton = document.getElementById('lobby-refresh') as HTMLButtonElement | null;
@@ -674,6 +683,14 @@ const lobbyStageInfo = document.getElementById('lobby-stage-info') as HTMLElemen
 const lobbyStageActions = document.getElementById('lobby-stage-actions') as HTMLElement | null;
 const lobbyStageChooseButton = document.getElementById('lobby-stage-choose') as HTMLButtonElement | null;
 const lobbyStartButton = document.getElementById('lobby-start') as HTMLButtonElement | null;
+const lobbyChatPanel = document.getElementById('lobby-chat-panel') as HTMLElement | null;
+const lobbyChatList = document.getElementById('lobby-chat-list') as HTMLElement | null;
+const lobbyChatInput = document.getElementById('lobby-chat-input') as HTMLInputElement | null;
+const lobbyChatSendButton = document.getElementById('lobby-chat-send') as HTMLButtonElement | null;
+const ingameChatWrap = document.getElementById('ingame-chat') as HTMLElement | null;
+const ingameChatList = document.getElementById('ingame-chat-list') as HTMLElement | null;
+const ingameChatInputRow = document.getElementById('ingame-chat-input-row') as HTMLElement | null;
+const ingameChatInput = document.getElementById('ingame-chat-input') as HTMLInputElement | null;
 const profileNameInput = document.getElementById('profile-name') as HTMLInputElement | null;
 const profileAvatarInput = document.getElementById('profile-avatar-input') as HTMLInputElement | null;
 const profileAvatarPreview = document.getElementById('profile-avatar-preview') as HTMLElement | null;
@@ -694,6 +711,9 @@ const PRIVACY_STORAGE_KEY = 'smb_netplay_privacy';
 const PROFILE_BROADCAST_COOLDOWN_MS = 1200;
 const PROFILE_REMOTE_COOLDOWN_MS = 1500;
 const LOBBY_NAME_UPDATE_COOLDOWN_MS = 1200;
+const CHAT_MAX_CHARS = 200;
+const CHAT_MAX_MESSAGES = 160;
+const CHAT_SEND_COOLDOWN_MS = 800;
 
 let lobbyRoom: LobbyRoom | null = null;
 let lobbySelfId: number | null = null;
@@ -736,6 +756,24 @@ let lastRoomMetaKey: string | null = null;
 let privacySettings = { hidePlayerNames: false, hideLobbyNames: false };
 const avatarValidationCache = new Map<string, Promise<boolean>>();
 const profileUpdateThrottle = new Map<number, number>();
+type ChatEntry = { id: number; playerId: number; text: string; time: number };
+let chatMessages: ChatEntry[] = [];
+let chatSeq = 0;
+let lastLocalChatSentMs = 0;
+const chatRateLimitByPlayer = new Map<number, number>();
+let ingameChatOpen = false;
+type NameplateEntry = {
+  el: HTMLElement;
+  nameEl: HTMLElement;
+  avatarEl: HTMLElement;
+  lastName: string;
+  lastAvatarKey: string;
+};
+const nameplateEntries = new Map<number, NameplateEntry>();
+const nameplateScratch = vec4.create();
+const nameplateTiltPivot = vec3.create();
+const nameplateViewScratch = mat4.create();
+const nameplateClipScratch = mat4.create();
 const NETPLAY_MAX_FRAME_DELTA = 5;
 const NETPLAY_CLIENT_LEAD = 2;
 const NETPLAY_CLIENT_AHEAD_SLACK = 2;
@@ -764,6 +802,8 @@ const NETPLAY_SNAPSHOT_MISMATCH_COOLDOWN_MS = 250;
 const NETPLAY_MAX_INPUT_AHEAD = 60;
 const NETPLAY_MAX_INPUT_BEHIND = 60;
 const LOBBY_MAX_PLAYERS = 8;
+const NAMEPLATE_OFFSET_SCALE = 1.6;
+const STAGE_TILT_SCALE = 0.6;
 const NETPLAY_DEBUG_STORAGE_KEY = 'smb_netplay_debug';
 const LOBBY_HEARTBEAT_INTERVAL_MS = 15000;
 const LOBBY_HEARTBEAT_FALLBACK_MS = 12000;
@@ -1273,6 +1313,16 @@ function sanitizeLobbyNameDraft(value: string) {
   return collapsed.slice(0, LOBBY_NAME_MAX);
 }
 
+function sanitizeChatText(value: string) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, '');
+  const collapsed = cleaned.replace(/\s+/g, ' ');
+  const trimmed = collapsed.trim().slice(0, CHAT_MAX_CHARS);
+  return trimmed;
+}
+
 function base64ByteLength(base64: string) {
   const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
   return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
@@ -1463,6 +1513,279 @@ function updatePrivacyUi() {
   }
   if (hideLobbyNamesToggle) {
     hideLobbyNamesToggle.checked = privacySettings.hideLobbyNames;
+  }
+}
+
+function appendChatMessage(playerId: number, text: string) {
+  const sanitized = sanitizeChatText(text);
+  if (!sanitized) {
+    return;
+  }
+  chatMessages.push({
+    id: chatSeq++,
+    playerId,
+    text: sanitized,
+    time: Date.now(),
+  });
+  if (chatMessages.length > CHAT_MAX_MESSAGES) {
+    chatMessages = chatMessages.slice(-CHAT_MAX_MESSAGES);
+  }
+  updateChatUi();
+}
+
+function renderChatList(target: HTMLElement | null, limit: number | null) {
+  if (!target) {
+    return;
+  }
+  const shouldStick = target.scrollTop + target.clientHeight >= target.scrollHeight - 24;
+  target.innerHTML = '';
+  const entries = limit ? chatMessages.slice(-limit) : chatMessages;
+  for (const entry of entries) {
+    const line = document.createElement('div');
+    line.className = 'chat-line';
+    const profile = lobbyProfiles.get(entry.playerId) ?? profileFallbackForPlayer(entry.playerId);
+    const name = getPlayerDisplayName(entry.playerId, profile);
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'chat-name';
+    nameSpan.textContent = name;
+    const sep = document.createElement('span');
+    sep.textContent = ':';
+    const textSpan = document.createElement('span');
+    textSpan.className = 'chat-text';
+    textSpan.textContent = entry.text;
+    line.append(nameSpan, sep, textSpan);
+    target.appendChild(line);
+  }
+  if (shouldStick) {
+    target.scrollTop = target.scrollHeight;
+  }
+}
+
+function updateChatUi() {
+  renderChatList(lobbyChatList, null);
+  const ingameLimit = ingameChatOpen ? null : 6;
+  renderChatList(ingameChatList, ingameLimit);
+}
+
+function sendChatMessage(text: string) {
+  if (!netplayEnabled || !netplayState) {
+    return;
+  }
+  if (!Number.isFinite(game.localPlayerId) || game.localPlayerId <= 0) {
+    return;
+  }
+  const sanitized = sanitizeChatText(text);
+  if (!sanitized) {
+    return;
+  }
+  const nowMs = performance.now();
+  if ((nowMs - lastLocalChatSentMs) < CHAT_SEND_COOLDOWN_MS) {
+    return;
+  }
+  lastLocalChatSentMs = nowMs;
+  const payload: ChatMessage = { type: 'chat', playerId: game.localPlayerId, text: sanitized };
+  if (netplayState.role === 'host') {
+    appendChatMessage(game.localPlayerId, sanitized);
+    hostRelay?.broadcast(payload);
+  } else {
+    clientPeer?.send(payload);
+  }
+}
+
+function setIngameChatOpen(open: boolean) {
+  ingameChatOpen = open;
+  if (ingameChatWrap) {
+    ingameChatWrap.classList.toggle('open', open);
+  }
+  if (ingameChatInputRow) {
+    ingameChatInputRow.classList.toggle('hidden', !open);
+  }
+  if (open && ingameChatInput) {
+    ingameChatInput.focus();
+  }
+  if (!open && ingameChatInput) {
+    ingameChatInput.blur();
+  }
+  updateChatUi();
+}
+
+function updateIngameChatVisibility() {
+  if (!ingameChatWrap) {
+    return;
+  }
+  const overlayVisible = !overlay.classList.contains('hidden');
+  const shouldShow = netplayEnabled && running && !overlayVisible;
+  ingameChatWrap.classList.toggle('hidden', !shouldShow);
+  if (!shouldShow) {
+    setIngameChatOpen(false);
+  }
+}
+
+function isTextInputElement(el: Element | null) {
+  if (!el) {
+    return false;
+  }
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+    return true;
+  }
+  return (el as HTMLElement).isContentEditable;
+}
+
+function getNameplateEntry(playerId: number): NameplateEntry {
+  let entry = nameplateEntries.get(playerId);
+  if (entry) {
+    return entry;
+  }
+  const profile = lobbyProfiles.get(playerId) ?? profileFallbackForPlayer(playerId);
+  const name = getPlayerDisplayName(playerId, profile);
+  const avatarKey = profile.avatarData ?? 'default';
+  const el = document.createElement('div');
+  el.className = 'nameplate';
+  const avatar = createAvatarElement(profile, playerId);
+  const nameEl = document.createElement('div');
+  nameEl.className = 'nameplate-name';
+  nameEl.textContent = name;
+  el.append(avatar, nameEl);
+  nameplateLayer.appendChild(el);
+  entry = { el, nameEl, avatarEl: avatar, lastName: name, lastAvatarKey: avatarKey };
+  nameplateEntries.set(playerId, entry);
+  return entry;
+}
+
+function updateNameplateContent(entry: NameplateEntry, playerId: number) {
+  const profile = lobbyProfiles.get(playerId) ?? profileFallbackForPlayer(playerId);
+  const name = getPlayerDisplayName(playerId, profile);
+  if (entry.lastName !== name) {
+    entry.lastName = name;
+    entry.nameEl.textContent = name;
+  }
+  const avatarKey = profile.avatarData ?? 'default';
+  if (entry.lastAvatarKey !== avatarKey) {
+    entry.lastAvatarKey = avatarKey;
+    const avatar = createAvatarElement(profile, playerId);
+    entry.avatarEl.replaceWith(avatar);
+    entry.avatarEl = avatar;
+  }
+}
+
+function projectWorldToScreen(
+  pos: { x: number; y: number; z: number },
+  rect: DOMRect,
+  clipFromWorld: mat4,
+  offsetY = 0,
+): { x: number; y: number } | null {
+  nameplateScratch[0] = pos.x;
+  nameplateScratch[1] = pos.y + offsetY;
+  nameplateScratch[2] = pos.z;
+  nameplateScratch[3] = 1;
+  vec4.transformMat4(nameplateScratch, nameplateScratch, clipFromWorld);
+  const w = nameplateScratch[3];
+  if (w <= 0.0001) {
+    return null;
+  }
+  const ndcX = nameplateScratch[0] / w;
+  const ndcY = nameplateScratch[1] / w;
+  if (ndcX < -1.05 || ndcX > 1.05 || ndcY < -1.05 || ndcY > 1.05) {
+    return null;
+  }
+  const screenX = rect.left + (ndcX * 0.5 + 0.5) * rect.width;
+  const screenY = rect.top + (1 - (ndcY * 0.5 + 0.5)) * rect.height;
+  return { x: screenX, y: screenY };
+}
+
+function updateNameplates(interpolationAlpha: number) {
+  const overlayVisible = !overlay.classList.contains('hidden');
+  if (!netplayEnabled || !running || overlayVisible) {
+    for (const entry of nameplateEntries.values()) {
+      entry.el.classList.remove('visible');
+    }
+    return;
+  }
+  const localPlayer = game.getLocalPlayer();
+  const localId = game.localPlayerId;
+  const spectator = localPlayer?.isSpectator ?? false;
+  const ballStates = game.getBallRenderStates(interpolationAlpha);
+  if (!ballStates || !canvas) {
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+  let clipFromWorld = camera?.clipFromWorldMatrix ?? null;
+  const tilt = game.getStageTiltRenderState(interpolationAlpha);
+  if (camera && tilt) {
+    const rotX = tilt.xrot * STAGE_TILT_SCALE * S16_TO_RAD;
+    const rotZ = tilt.zrot * STAGE_TILT_SCALE * S16_TO_RAD;
+    if (rotX !== 0 || rotZ !== 0) {
+      let pivot = ballStates.find((state) => state.visible) ?? ballStates[0] ?? null;
+      if (pivot) {
+        vec3.set(nameplateTiltPivot, pivot.pos.x, pivot.pos.y, pivot.pos.z);
+        mat4.copy(nameplateViewScratch, camera.viewMatrix);
+        mat4.translate(nameplateViewScratch, nameplateViewScratch, nameplateTiltPivot);
+        mat4.rotateX(nameplateViewScratch, nameplateViewScratch, rotX);
+        mat4.rotateZ(nameplateViewScratch, nameplateViewScratch, rotZ);
+        vec3.negate(nameplateTiltPivot, nameplateTiltPivot);
+        mat4.translate(nameplateViewScratch, nameplateViewScratch, nameplateTiltPivot);
+        mat4.mul(nameplateClipScratch, camera.projectionMatrix, nameplateViewScratch);
+        clipFromWorld = nameplateClipScratch;
+      }
+    }
+  }
+  if (!clipFromWorld) {
+    return;
+  }
+  let closestId: number | null = null;
+  let closestDist = Infinity;
+  const activeIds = new Set<number>();
+  const positions = new Map<number, { x: number; y: number }>();
+  for (let i = 0; i < game.players.length; i += 1) {
+    const player = game.players[i];
+    if (player.id === localId) {
+      continue;
+    }
+    activeIds.add(player.id);
+    const renderState = ballStates[i];
+    if (!renderState?.visible) {
+      continue;
+    }
+    const screen = projectWorldToScreen(
+      renderState.pos,
+      rect,
+      clipFromWorld,
+      renderState.radius * NAMEPLATE_OFFSET_SCALE
+    );
+    if (!screen) {
+      continue;
+    }
+    positions.set(player.id, screen);
+    if (!spectator) {
+      const dx = screen.x - centerX;
+      const dy = screen.y - centerY;
+      const dist = (dx * dx) + (dy * dy);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestId = player.id;
+      }
+    }
+  }
+
+  for (const [playerId, entry] of nameplateEntries.entries()) {
+    if (!activeIds.has(playerId)) {
+      entry.el.remove();
+      nameplateEntries.delete(playerId);
+    }
+  }
+
+  for (const playerId of activeIds) {
+    const entry = getNameplateEntry(playerId);
+    const pos = positions.get(playerId) ?? null;
+    const shouldShow = !!pos && (spectator || playerId === closestId);
+    entry.el.classList.toggle('visible', shouldShow);
+    if (pos) {
+      updateNameplateContent(entry, playerId);
+      entry.el.style.left = `${pos.x}px`;
+      entry.el.style.top = `${pos.y}px`;
+    }
   }
 }
 
@@ -1679,6 +2002,9 @@ function updateLobbyUi() {
       lobbyLockToggle.checked = false;
       lobbyLockToggle.disabled = true;
     }
+    if (lobbyChatPanel) {
+      lobbyChatPanel.classList.add('hidden');
+    }
     if (lobbyStartButton) {
       lobbyStartButton.classList.add('hidden');
       lobbyStartButton.disabled = true;
@@ -1710,6 +2036,11 @@ function updateLobbyUi() {
   }
   if (lobbyRoomStatus) {
     lobbyRoomStatus.textContent = `${statusLabel} • ${playerCount}/${maxPlayers} players`;
+  }
+
+  const inMatch = lobbyRoom.meta?.status === 'in_game' || !!netplayState?.currentCourse;
+  if (lobbyChatPanel) {
+    lobbyChatPanel.classList.toggle('hidden', inMatch);
   }
 
   if (lobbyPlayerList) {
@@ -1802,6 +2133,7 @@ function updateLobbyUi() {
     levelSelectOpenButton.disabled = !isHost;
   }
   updateProfileUi();
+  updateChatUi();
   updateLevelSelectUi();
 }
 
@@ -1835,6 +2167,7 @@ function setActiveMenu(menu: MenuPanel) {
   }
   activeMenu = menu;
   mainMenuPanel?.classList.toggle('hidden', menu !== 'main');
+  multiplayerLayout?.classList.toggle('hidden', menu !== 'multiplayer');
   multiplayerMenuPanel?.classList.toggle('hidden', menu !== 'multiplayer');
   settingsMenuPanel?.classList.toggle('hidden', menu !== 'settings');
   levelSelectMenuPanel?.classList.toggle('hidden', menu !== 'level-select');
@@ -2076,11 +2409,78 @@ function applyLobbyStageSelection() {
   updateLobbyUi();
 }
 
+function resetMatchState() {
+  if (netplayState) {
+    netplayState.currentCourse = null;
+    netplayState.currentGameSource = null;
+    netplayState.awaitingSnapshot = false;
+  }
+  pendingSnapshot = null;
+  if (netplayEnabled) {
+    resetNetplayForStage();
+  }
+}
+
+function endActiveMatch() {
+  if (!running) {
+    return;
+  }
+  game.pause();
+  running = false;
+  resumeButton.disabled = true;
+  if (hudStatus) {
+    hudStatus.textContent = '';
+  }
+  for (const entry of nameplateEntries.values()) {
+    entry.el.classList.remove('visible');
+  }
+  updateIngameChatVisibility();
+}
+
+function endMatchToMenu() {
+  resetMatchState();
+  endActiveMatch();
+  setOverlayVisible(true);
+  setActiveMenu('main');
+}
+
+function endMatchToLobby() {
+  resetMatchState();
+  endActiveMatch();
+  setOverlayVisible(true);
+  setActiveMenu('multiplayer');
+  updateLobbyUi();
+}
+
+function handleCourseComplete() {
+  if (!running) {
+    return;
+  }
+  if (netplayEnabled) {
+    if (netplayState?.role !== 'host') {
+      return;
+    }
+    endMatchToLobby();
+    if (lobbyRoom) {
+      const meta = buildRoomMeta();
+      if (meta) {
+        lobbyRoom.meta = meta;
+      }
+      broadcastRoomUpdate();
+      sendLobbyHeartbeat(performance.now(), true);
+    }
+    hostRelay?.broadcast({ type: 'match_end' });
+    return;
+  }
+  endMatchToMenu();
+}
+
 localProfile = loadLocalProfile();
 updateProfileUi();
 privacySettings = loadPrivacySettings();
 updatePrivacyUi();
 setSettingsTab(activeSettingsTab);
+updateChatUi();
 
 function startLobbyHeartbeat(roomId: string) {
   if (!lobbyClient) {
@@ -2157,12 +2557,21 @@ function resetNetplayConnections({ preserveLobby = false }: { preserveLobby?: bo
     lobbyProfiles.clear();
     pendingAvatarByPlayer.clear();
     profileUpdateThrottle.clear();
+    chatMessages = [];
+    chatRateLimitByPlayer.clear();
+    lastLocalChatSentMs = 0;
+    for (const entry of nameplateEntries.values()) {
+      entry.el.remove();
+    }
+    nameplateEntries.clear();
     lastProfileBroadcastMs = null;
     lastLobbyNameUpdateMs = null;
     allowHostMigration = false;
     lastRoomMetaKey = null;
   }
   updateLobbyUi();
+  updateChatUi();
+  setIngameChatOpen(false);
 }
 
 function sendLobbyHeartbeat(
@@ -2562,6 +2971,7 @@ async function handleStageLoaded(stageId: number) {
     renderReady = true;
     lastTime = performance.now();
     updateMobileMenuButtonVisibility();
+    updateIngameChatVisibility();
     maybeStartSmb2LikeStageFade();
     markStageReady(stageId);
     tryApplyPendingSnapshot(stageId);
@@ -2599,6 +3009,7 @@ async function handleStageLoaded(stageId: number) {
   renderReady = true;
   lastTime = performance.now();
   updateMobileMenuButtonVisibility();
+  updateIngameChatVisibility();
   maybeStartSmb2LikeStageFade();
   markStageReady(stageId);
   tryApplyPendingSnapshot(stageId);
@@ -3030,6 +3441,14 @@ function handleHostMessage(msg: HostToClientMessage) {
     applyIncomingProfile(msg.playerId, msg.profile);
     return;
   }
+  if (msg.type === 'chat') {
+    appendChatMessage(msg.playerId, msg.text);
+    return;
+  }
+  if (msg.type === 'match_end') {
+    endMatchToLobby();
+    return;
+  }
   if (msg.type === 'room_update') {
     game.maxPlayers = msg.room.settings.maxPlayers;
     game.playerCollisionEnabled = msg.room.settings.collisionEnabled;
@@ -3170,6 +3589,21 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
     }
     profileUpdateThrottle.set(playerId, nowMs);
     applyIncomingProfile(playerId, msg.profile, { broadcast: true });
+    return;
+  }
+  if (msg.type === 'chat') {
+    const sanitized = sanitizeChatText(msg.text);
+    if (!sanitized) {
+      return;
+    }
+    const nowMs = performance.now();
+    const lastMs = chatRateLimitByPlayer.get(playerId) ?? 0;
+    if ((nowMs - lastMs) < CHAT_SEND_COOLDOWN_MS) {
+      return;
+    }
+    chatRateLimitByPlayer.set(playerId, nowMs);
+    appendChatMessage(playerId, sanitized);
+    hostRelay?.broadcast({ type: 'chat', playerId, text: sanitized });
     return;
   }
 }
@@ -4367,6 +4801,7 @@ function renderFrame(now: number) {
   renderer.syncGameplayState(syncState);
 
   applyGameCamera(interpolationAlpha);
+  updateNameplates(interpolationAlpha);
   const hudDelta = now - lastHudTime;
   lastHudTime = now;
   const hudDtFrames = game.paused ? 0 : (hudDelta / 1000) * 60;
@@ -4736,8 +5171,27 @@ mobileMenuButton?.addEventListener('click', () => {
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
+    if (ingameChatOpen) {
+      event.preventDefault();
+      setIngameChatOpen(false);
+      return;
+    }
     paused = true;
     game.pause();
+    return;
+  }
+  if (event.key === 'Enter') {
+    if (!netplayEnabled || !running) {
+      return;
+    }
+    if (!overlay.classList.contains('hidden')) {
+      return;
+    }
+    if (ingameChatOpen || isTextInputElement(document.activeElement)) {
+      return;
+    }
+    event.preventDefault();
+    setIngameChatOpen(true);
   }
 });
 
@@ -4868,6 +5322,27 @@ if (lobbyRoomNameInput) {
     }
   });
 }
+if (lobbyChatInput) {
+  lobbyChatInput.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') {
+      return;
+    }
+    event.preventDefault();
+    const value = lobbyChatInput.value;
+    lobbyChatInput.value = '';
+    sendChatMessage(value);
+  });
+}
+if (lobbyChatSendButton) {
+  lobbyChatSendButton.addEventListener('click', () => {
+    const value = lobbyChatInput?.value ?? '';
+    if (lobbyChatInput) {
+      lobbyChatInput.value = '';
+      lobbyChatInput.focus();
+    }
+    sendChatMessage(value);
+  });
+}
 if (lobbyStageButton) {
   lobbyStageButton.addEventListener('click', () => {
     if (netplayState?.role !== 'host') {
@@ -4880,6 +5355,18 @@ if (lobbyStageChooseButton) {
   lobbyStageChooseButton.addEventListener('click', () => {
     applyLobbyStageSelection();
     setActiveMenu('multiplayer');
+  });
+}
+if (ingameChatInput) {
+  ingameChatInput.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') {
+      return;
+    }
+    event.preventDefault();
+    const value = ingameChatInput.value;
+    ingameChatInput.value = '';
+    sendChatMessage(value);
+    setIngameChatOpen(false);
   });
 }
 if (lobbyStartButton) {
