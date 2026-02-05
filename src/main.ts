@@ -739,7 +739,6 @@ let netplayEnabled = false;
 let lobbyProfiles = new Map<number, PlayerProfile>();
 let pendingAvatarByPlayer = new Map<number, string>();
 let localProfile: PlayerProfile = { name: 'Player' };
-let allowHostMigration = true;
 let suppressHostDisconnectUntil = 0;
 let pendingSnapshot: {
   frame: number;
@@ -2325,57 +2324,19 @@ async function handleHostDisconnect() {
     suppressHostDisconnectUntil = 0;
     return;
   }
-  if (!allowHostMigration) {
-    resetNetplayConnections();
+  if (!netplayEnabled || !lobbyRoom) {
     return;
   }
-  if (!lobbyClient || !lobbyRoom || lobbySelfId === null || !lobbyPlayerToken) {
-    resetNetplayConnections();
-    return;
-  }
-  const roomId = lobbyRoom.roomId;
-  const previousHost = lobbyRoom.hostId;
   if (lobbyStatus) {
-    lobbyStatus.textContent = 'Lobby: host lost, reassigning...';
+    lobbyStatus.textContent = 'Lobby: host left';
   }
-  resetNetplayConnections({ preserveLobby: true });
-  try {
-    const join = await lobbyClient.joinRoom({ roomId, playerId: lobbySelfId, token: lobbyPlayerToken });
-    lobbyRoom = join.room;
-    lobbySelfId = join.playerId;
-    lobbyPlayerToken = join.playerToken;
-    lobbyHostToken = join.hostToken ?? lobbyHostToken;
-    if (lobbyRoom.hostId !== previousHost) {
-      startClient(lobbyRoom, lobbySelfId, lobbyPlayerToken);
-      return;
-    }
-    const promote = await lobbyClient.promoteHost(roomId, lobbySelfId, lobbyPlayerToken);
-    lobbyRoom = promote.room;
-    lobbySelfId = promote.playerId;
-    lobbyPlayerToken = promote.playerToken;
-    lobbyHostToken = promote.hostToken ?? null;
-    if (lobbyRoom.hostId === lobbySelfId && lobbyHostToken) {
-      startHost(lobbyRoom, lobbyPlayerToken);
-    } else {
-      startClient(lobbyRoom, lobbySelfId, lobbyPlayerToken);
-    }
-    return;
-  } catch (err) {
-    try {
-      const retry = await lobbyClient.joinRoom({ roomId, playerId: lobbySelfId, token: lobbyPlayerToken });
-      lobbyRoom = retry.room;
-      lobbySelfId = retry.playerId;
-      lobbyPlayerToken = retry.playerToken;
-      lobbyHostToken = retry.hostToken ?? lobbyHostToken;
-      if (lobbyRoom.hostId === lobbySelfId) {
-        startHost(lobbyRoom, lobbyPlayerToken);
-      } else {
-        startClient(lobbyRoom, lobbySelfId, lobbyPlayerToken);
-      }
-    } catch {
-      resetNetplayConnections();
-    }
+  if (running) {
+    resetMatchState();
+    endActiveMatch();
+    setOverlayVisible(true);
   }
+  resetNetplayConnections();
+  setActiveMenu('multiplayer');
 }
 
 function applyLocalProfileToSession() {
@@ -2541,11 +2502,17 @@ function leaveMatchToLobbyList() {
     endMatchToMenu();
     return;
   }
+  if (netplayState?.role === 'host' && lobbyRoom) {
+    const confirmed = window.confirm('Leaving will close this lobby for everyone. Leave anyway?');
+    if (!confirmed) {
+      return;
+    }
+  }
   resetMatchState();
   endActiveMatch();
   setOverlayVisible(true);
   setActiveMenu('multiplayer');
-  void leaveRoom();
+  void leaveRoom({ skipConfirm: true });
 }
 
 function handleCourseComplete() {
@@ -2626,6 +2593,18 @@ function stopLobbyHeartbeat() {
   lastLobbyHeartbeatMs = null;
 }
 
+function resetLocalPlayersAfterNetplay() {
+  const localId = game.localPlayerId;
+  for (const player of [...game.players]) {
+    if (player.id !== localId) {
+      game.removePlayer(player.id);
+    }
+  }
+  if (game.localPlayerId !== 0) {
+    game.setLocalPlayerId(0);
+  }
+}
+
 function clearLobbySignalRetry() {
   if (lobbySignalRetryTimer !== null) {
     window.clearTimeout(lobbySignalRetryTimer);
@@ -2688,8 +2667,8 @@ function resetNetplayConnections({ preserveLobby = false }: { preserveLobby?: bo
     nameplateEntries.clear();
     lastProfileBroadcastMs = null;
     lastLobbyNameUpdateMs = null;
-    allowHostMigration = false;
     lastRoomMetaKey = null;
+    resetLocalPlayersAfterNetplay();
   }
   updateLobbyUi();
   updateChatUi();
@@ -3423,7 +3402,6 @@ function getHostCourseConfig() {
 function handleHostMessage(msg: HostToClientMessage) {
   if (msg.type === 'kick') {
     suppressHostDisconnectUntil = performance.now() + 1500;
-    allowHostMigration = false;
     lobbySignalShouldReconnect = false;
     lobbySignalReconnectFn = null;
     clearLobbySignalRetry();
@@ -4322,7 +4300,7 @@ async function joinRoomByCode() {
   }
 }
 
-async function leaveRoom() {
+async function leaveRoom({ skipConfirm = false }: { skipConfirm?: boolean } = {}) {
   if (!lobbyClient) {
     resetNetplayConnections();
     return;
@@ -4330,7 +4308,12 @@ async function leaveRoom() {
   const roomId = lobbyRoom?.roomId;
   const wasHost = netplayState?.role === 'host';
   const hostToken = lobbyHostToken;
-  allowHostMigration = false;
+  if (!skipConfirm && wasHost && roomId) {
+    const confirmed = window.confirm('Leaving will close this lobby for everyone. Leave anyway?');
+    if (!confirmed) {
+      return;
+    }
+  }
   lobbySignalShouldReconnect = false;
   lobbySignalReconnectFn = null;
   clearLobbySignalRetry();
@@ -4378,7 +4361,6 @@ function startHost(room: LobbyRoom, playerToken: string) {
     return;
   }
   netplayEnabled = true;
-  allowHostMigration = true;
   ensureNetplayState('host');
   game.setLocalPlayerId(room.hostId);
   applyLocalProfileToSession();
@@ -4490,7 +4472,6 @@ async function startClient(room: LobbyRoom, playerId: number, playerToken: strin
     return;
   }
   netplayEnabled = true;
-  allowHostMigration = true;
   ensureNetplayState('client');
   game.setLocalPlayerId(playerId);
   applyLocalProfileToSession();
