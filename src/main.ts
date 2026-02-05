@@ -811,6 +811,7 @@ const NETPLAY_HOST_SNAPSHOT_COOLDOWN_MS = 1500;
 const NETPLAY_SNAPSHOT_MISMATCH_COOLDOWN_MS = 250;
 const NETPLAY_MAX_INPUT_AHEAD = 60;
 const NETPLAY_MAX_INPUT_BEHIND = 60;
+const NETPLAY_HOST_MAX_INPUT_ROLLBACK = 12;
 const LOBBY_MAX_PLAYERS = 8;
 const NAMEPLATE_OFFSET_SCALE = 1.6;
 const STAGE_TILT_SCALE = 0.6;
@@ -961,6 +962,8 @@ type NetplayState = {
   currentCourse: any | null;
   currentGameSource: GameSource | null;
   awaitingSnapshot: boolean;
+  pendingHostRollbackFrame: number | null;
+  pendingHostRollbackPlayers: Set<number>;
 };
 
 let netplayState: NetplayState | null = null;
@@ -1044,6 +1047,8 @@ function ensureNetplayState(role: NetplayRole) {
     currentCourse: null,
     currentGameSource: null,
     awaitingSnapshot: false,
+    pendingHostRollbackFrame: null,
+    pendingHostRollbackPlayers: new Set(),
   };
   return netplayState;
 }
@@ -1072,6 +1077,8 @@ function resetNetplayForStage() {
   netplayState.lagBehindSinceMs = null;
   netplayState.lastSnapshotRequestTimeMs = null;
   netplayState.awaitingSnapshot = false;
+  netplayState.pendingHostRollbackFrame = null;
+  netplayState.pendingHostRollbackPlayers.clear();
   netplayState.lastAckedLocalFrame = 0;
   netplayState.lastReceivedHostFrame = 0;
   netplayState.hostFrameBuffer.clear();
@@ -3363,8 +3370,11 @@ function requestSnapshot(reason: 'mismatch' | 'lag', frame?: number, force = fal
   }
   const nowMs = performance.now();
   const lastRequest = netplayState.lastSnapshotRequestTimeMs ?? 0;
+  const cooldownMs = reason === 'mismatch'
+    ? NETPLAY_SNAPSHOT_MISMATCH_COOLDOWN_MS
+    : NETPLAY_SNAPSHOT_COOLDOWN_MS;
   const cooldownOk = netplayState.lastSnapshotRequestTimeMs === null
-    || (nowMs - lastRequest) >= NETPLAY_SNAPSHOT_COOLDOWN_MS;
+    || (nowMs - lastRequest) >= cooldownMs;
   if (netplayState.awaitingSnapshot && !force && !cooldownOk) {
     return;
   }
@@ -3380,6 +3390,27 @@ function requestSnapshot(reason: 'mismatch' | 'lag', frame?: number, force = fal
     frame: targetFrame,
     reason,
   });
+}
+
+function hostApplyPendingRollback() {
+  if (!netplayState || netplayState.role !== 'host') {
+    return;
+  }
+  const state = netplayState;
+  const rollbackFrame = state.pendingHostRollbackFrame;
+  if (rollbackFrame === null) {
+    return;
+  }
+  const snapshotTargets = Array.from(state.pendingHostRollbackPlayers);
+  state.pendingHostRollbackFrame = null;
+  state.pendingHostRollbackPlayers.clear();
+  if (!rollbackAndResim(rollbackFrame)) {
+    for (const playerId of snapshotTargets) {
+      sendSnapshotToClient(playerId, rollbackFrame);
+    }
+    return;
+  }
+  state.pendingHostUpdates.add(rollbackFrame);
 }
 
 function applyIncomingProfile(
@@ -3704,13 +3735,21 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
     if (frame < minFrame || frame > maxFrame) {
       return;
     }
+    if (frame <= currentFrame && (currentFrame - frame) > NETPLAY_HOST_MAX_INPUT_ROLLBACK) {
+      const nowMs = performance.now();
+      const lastSnap = clientState.lastSnapshotMs;
+      if (lastSnap === null || (nowMs - lastSnap) >= NETPLAY_HOST_SNAPSHOT_COOLDOWN_MS) {
+        clientState.lastSnapshotMs = nowMs;
+        sendSnapshotToClient(playerId, currentFrame);
+      }
+      return;
+    }
     const changed = recordInputForFrame(frame, playerId, input);
     if (changed && frame <= currentFrame) {
-      if (!rollbackAndResim(frame)) {
-        sendSnapshotToClient(playerId, frame);
-      } else {
-        state.pendingHostUpdates.add(frame);
-      }
+      state.pendingHostRollbackFrame = state.pendingHostRollbackFrame === null
+        ? frame
+        : Math.min(state.pendingHostRollbackFrame, frame);
+      state.pendingHostRollbackPlayers.add(playerId);
     }
     return;
   }
@@ -3821,19 +3860,16 @@ function hostResendFrames(currentFrame: number) {
     : null;
   for (const [playerId, clientState] of netplayState.clientStates.entries()) {
     const start = Math.max(clientState.lastAckedHostFrame + 1, currentFrame - netplayState.maxResend + 1);
+    const framesToSend = new Set<number>();
     if (pendingFrames) {
       for (const frame of pendingFrames) {
-        const bundle = netplayState.hostFrameBuffer.get(frame);
-        if (!bundle) {
-          continue;
-        }
-        hostRelay.sendTo(playerId, {
-          ...bundle,
-          lastAck: clientState.lastAckedClientInput,
-        });
+        framesToSend.add(frame);
       }
     }
     for (let frame = start; frame <= currentFrame; frame += 1) {
+      framesToSend.add(frame);
+    }
+    for (const frame of Array.from(framesToSend).sort((a, b) => a - b)) {
       const bundle = netplayState.hostFrameBuffer.get(frame);
       if (!bundle) {
         continue;
@@ -4008,6 +4044,9 @@ function netplayTick(dtSeconds: number) {
       return;
     }
   }
+  if (state.role === 'host') {
+    hostApplyPendingRollback();
+  }
   if (netplayAccumulator < 0) {
     netplayAccumulator = 0;
   }
@@ -4029,7 +4068,6 @@ function netplayTick(dtSeconds: number) {
     const canRequest = state.lastSnapshotRequestTimeMs === null
       || (nowMs - lastRequest) >= NETPLAY_SNAPSHOT_COOLDOWN_MS;
     if (hostAge !== null && hostAge >= NETPLAY_HOST_STALL_MS && canRequest) {
-      state.lastSnapshotRequestTimeMs = nowMs;
       requestSnapshot('lag', state.lastReceivedHostFrame, true);
     }
     if (drift > NETPLAY_LAG_FUSE_FRAMES) {
@@ -4038,7 +4076,6 @@ function netplayTick(dtSeconds: number) {
       }
       const timeBehind = nowMs - state.lagBehindSinceMs;
       if (timeBehind >= NETPLAY_LAG_FUSE_MS && canRequest) {
-        state.lastSnapshotRequestTimeMs = nowMs;
         requestSnapshot('lag', state.lastReceivedHostFrame, true);
       }
     } else {

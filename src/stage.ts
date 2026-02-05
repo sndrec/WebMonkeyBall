@@ -1608,28 +1608,60 @@ export class StageRuntime {
       this.visualRng.state = state.visualRngState ?? this.visualRng.state;
     }
 
+    const decodeMtx12 = (value) => {
+      const next = new Float32Array(12);
+      if (!value) {
+        next[0] = 1;
+        next[5] = 1;
+        next[10] = 1;
+        return next;
+      }
+      const src = value as any;
+      const length = Number(src.length);
+      if (Number.isFinite(length) && length > 0) {
+        const safeLength = Math.min(12, length | 0);
+        for (let i = 0; i < safeLength; i += 1) {
+          const num = Number(src[i]);
+          next[i] = Number.isFinite(num) ? num : 0;
+        }
+      } else {
+        for (let i = 0; i < 12; i += 1) {
+          const num = Number(src[i]);
+          next[i] = Number.isFinite(num) ? num : 0;
+        }
+      }
+      if (
+        next[0] === 0 && next[1] === 0 && next[2] === 0
+        && next[4] === 0 && next[5] === 0 && next[6] === 0
+        && next[8] === 0 && next[9] === 0 && next[10] === 0
+      ) {
+        next[0] = 1;
+        next[5] = 1;
+        next[10] = 1;
+      }
+      return next;
+    };
+
     const ensureMtx = (target, key = 'transform') => {
-      if (!target || !target[key]) {
+      if (!target) {
         return;
       }
-      if (!(target[key] instanceof Float32Array)) {
-        const next = new Float32Array(12);
-        next.set(target[key] as ArrayLike<number>);
-        target[key] = next;
+      const mtx = target[key];
+      if (mtx instanceof Float32Array && mtx.length === 12) {
+        for (let i = 0; i < 12; i += 1) {
+          if (!Number.isFinite(mtx[i])) {
+            target[key] = decodeMtx12(mtx);
+            return;
+          }
+        }
+        return;
       }
+      target[key] = decodeMtx12(mtx);
     };
 
     for (const group of this.animGroups) {
-      if (group?.transform && !(group.transform instanceof Float32Array)) {
-        const next = new Float32Array(12);
-        next.set(group.transform as ArrayLike<number>);
-        group.transform = next;
-      }
-      if (group?.prevTransform && !(group.prevTransform instanceof Float32Array)) {
-        const nextPrev = new Float32Array(12);
-        nextPrev.set(group.prevTransform as ArrayLike<number>);
-        group.prevTransform = nextPrev;
-      }
+      ensureMtx(group);
+      ensureMtx(group, 'prevTransform');
       if (group?.seesawState) {
         ensureMtx(group.seesawState);
         ensureMtx(group.seesawState, 'invTransform');
@@ -1649,9 +1681,12 @@ export class StageRuntime {
         ensureMtx(jamabar);
       }
     }
-    for (const seesaw of this.seesaws) {
-      ensureMtx(seesaw);
-      ensureMtx(seesaw, 'invTransform');
+    this.seesaws = [];
+    for (const group of this.animGroups) {
+      if (!group?.seesawState) {
+        continue;
+      }
+      this.seesaws.push(group.seesawState);
     }
 
     const count = this.stage.animGroupCount ?? 0;
@@ -2469,6 +2504,22 @@ function createSeesawState(stageAg, stack) {
 }
 
 function tickSeesawState(seesaw) {
+  if (!seesaw) {
+    return;
+  }
+  if (!Number.isFinite(seesaw.angle)) {
+    seesaw.angle = 0;
+  }
+  if (!Number.isFinite(seesaw.prevAngle)) {
+    seesaw.prevAngle = seesaw.angle;
+  }
+  if (!Number.isFinite(seesaw.angleVel)) {
+    seesaw.angleVel = 0;
+  }
+  if (!Number.isFinite(seesaw.spring) || !Number.isFinite(seesaw.friction)) {
+    seesaw.prevAngle = seesaw.angle;
+    return;
+  }
   const sinAngle = sinS16(toS16(seesaw.angle));
   seesaw.angleVel += seesaw.spring * sinAngle;
   seesaw.angleVel *= seesaw.friction;

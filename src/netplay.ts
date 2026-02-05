@@ -22,6 +22,8 @@ export type RoomJoinResult = {
 
 const DEFAULT_STUN = [{ urls: 'stun:stun.l.google.com:19302' }];
 const FAST_MESSAGE_TYPES = new Set(['frame', 'input', 'ack', 'ping', 'pong']);
+const FAST_CHANNEL_MAX_BUFFERED = 256 * 1024;
+const CTRL_CHANNEL_MAX_BUFFERED = 1024 * 1024;
 
 function isFastMessage(msg: { type: string }) {
   return FAST_MESSAGE_TYPES.has(msg.type);
@@ -29,6 +31,17 @@ function isFastMessage(msg: { type: string }) {
 
 function getChannelRole(label: string) {
   return label === 'fast' ? 'fast' : 'ctrl';
+}
+
+function getChannelBufferedLimit(channel: RTCDataChannel) {
+  return getChannelRole(channel.label) === 'fast' ? FAST_CHANNEL_MAX_BUFFERED : CTRL_CHANNEL_MAX_BUFFERED;
+}
+
+function isChannelWritable(channel: RTCDataChannel | null | undefined) {
+  if (!channel || channel.readyState !== 'open') {
+    return false;
+  }
+  return channel.bufferedAmount <= getChannelBufferedLimit(channel);
 }
 
 export class LobbyClient {
@@ -238,23 +251,34 @@ export class HostRelay {
     }
     const primary = preferFast ? entry.fast : entry.ctrl;
     const fallback = preferFast ? entry.ctrl : entry.fast;
-    if (primary && primary.readyState === 'open') {
+    if (isChannelWritable(primary)) {
       return primary;
     }
-    if (fallback && fallback.readyState === 'open') {
+    if (isChannelWritable(fallback)) {
       return fallback;
     }
     return null;
   }
 
+  private sendPayload(playerId: number, payload: string, preferFast: boolean) {
+    const channel = this.pickChannel(playerId, preferFast);
+    if (!channel) {
+      return false;
+    }
+    try {
+      channel.send(payload);
+      return true;
+    } catch {
+      this.disconnect(playerId);
+      return false;
+    }
+  }
+
   broadcast(msg: HostToClientMessage) {
     const payload = JSON.stringify(msg);
     const preferFast = isFastMessage(msg);
-    for (const playerId of this.channels.keys()) {
-      const channel = this.pickChannel(playerId, preferFast);
-      if (channel) {
-        channel.send(payload);
-      }
+    for (const playerId of Array.from(this.channels.keys())) {
+      this.sendPayload(playerId, payload, preferFast);
     }
   }
 
@@ -269,11 +293,7 @@ export class HostRelay {
   }
 
   sendTo(playerId: number, msg: HostToClientMessage) {
-    const channel = this.pickChannel(playerId, isFastMessage(msg));
-    if (!channel) {
-      return;
-    }
-    channel.send(JSON.stringify(msg));
+    this.sendPayload(playerId, JSON.stringify(msg), isFastMessage(msg));
   }
 
   closeAll() {
@@ -386,15 +406,25 @@ export class ClientPeer {
   }
 
   send(msg: ClientToHostMessage) {
+    const payload = JSON.stringify(msg);
     const preferFast = isFastMessage(msg);
     const primary = preferFast ? this.fastChannel : this.ctrlChannel;
     const fallback = preferFast ? this.ctrlChannel : this.fastChannel;
-    if (primary?.readyState === 'open') {
-      primary.send(JSON.stringify(msg));
-      return;
+    if (isChannelWritable(primary)) {
+      try {
+        primary.send(payload);
+        return;
+      } catch {
+        // Try fallback below.
+      }
     }
-    if (fallback?.readyState === 'open') {
-      fallback.send(JSON.stringify(msg));
+    if (isChannelWritable(fallback)) {
+      try {
+        fallback.send(payload);
+      } catch {
+        // Ignore send failures from a stale/closing channel.
+      }
+      return;
     }
   }
 

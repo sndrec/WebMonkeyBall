@@ -1042,15 +1042,38 @@ export class Game {
   }
 
   private copyMat12(target, source) {
+    return this.copyNumericArray(target, source, 12);
+  }
+
+  private copyNumericArray(target, source, size) {
     if (!source) {
       return;
     }
-    if (target && typeof target.set === 'function') {
-      target.set(source as ArrayLike<number>);
+    const writeInto = (dest) => {
+      const src = source as any;
+      const length = Number(src.length);
+      if (Number.isFinite(length) && length > 0) {
+        const safeLength = Math.min(size, length | 0);
+        for (let i = 0; i < safeLength; i += 1) {
+          const num = Number(src[i]);
+          dest[i] = Number.isFinite(num) ? num : 0;
+        }
+        for (let i = safeLength; i < size; i += 1) {
+          dest[i] = 0;
+        }
+        return;
+      }
+      for (let i = 0; i < size; i += 1) {
+        const num = Number(src[i]);
+        dest[i] = Number.isFinite(num) ? num : 0;
+      }
+    };
+    if (target && typeof target.set === 'function' && typeof target.length === 'number' && target.length >= size) {
+      writeInto(target);
       return;
     }
-    const next = new Float32Array(12);
-    next.set(source as ArrayLike<number>);
+    const next = new Float32Array(size);
+    writeInto(next);
     return next;
   }
 
@@ -1109,11 +1132,8 @@ export class Game {
     }
     target.wormholeCooldown = source.wormholeCooldown ?? target.wormholeCooldown ?? 0;
     if (source.wormholeTransform) {
-      if (target.wormholeTransform && typeof target.wormholeTransform.set === 'function') {
-        target.wormholeTransform.set(source.wormholeTransform as ArrayLike<number>);
-      } else {
-        const mat = new Float32Array(16);
-        mat.set(source.wormholeTransform as ArrayLike<number>);
+      const mat = this.copyNumericArray(target.wormholeTransform, source.wormholeTransform, 16);
+      if (mat) {
         target.wormholeTransform = mat;
       }
     } else {

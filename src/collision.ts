@@ -1618,8 +1618,13 @@ function collideBallWithGoalTape(ball, tape) {
 }
 
 export function applySeesawCollision(ball, seesaw) {
-  if (!seesaw) {
+  if (!seesaw || !seesaw.invTransform) {
     return;
+  }
+  for (let i = 0; i < 12; i += 1) {
+    if (!Number.isFinite(seesaw.invTransform[i])) {
+      return;
+    }
   }
   seesawLocalPosScratch.x = ball.pos.x;
   seesawLocalPosScratch.y = ball.pos.y;
@@ -1630,9 +1635,15 @@ export function applySeesawCollision(ball, seesaw) {
   stack.fromMtx(seesaw.invTransform);
   stack.tfPoint(seesawLocalPosScratch, seesawLocalPosScratch);
   stack.tfVec(seesawLocalVelScratch, seesawLocalVelScratch);
+  if (!Number.isFinite(seesawLocalPosScratch.x)
+    || !Number.isFinite(seesawLocalPosScratch.y)
+    || !Number.isFinite(seesawLocalVelScratch.x)
+    || !Number.isFinite(seesawLocalVelScratch.y)) {
+    return;
+  }
 
   const dist = sqrt((seesawLocalPosScratch.x * seesawLocalPosScratch.x) + (seesawLocalPosScratch.y * seesawLocalPosScratch.y));
-  if (dist <= FLT_EPSILON) {
+  if (!Number.isFinite(dist) || dist <= FLT_EPSILON) {
     return;
   }
   const invDist = 1.0 / dist;
@@ -1644,6 +1655,12 @@ export function applySeesawCollision(ball, seesaw) {
   let velLen = sqrt((seesawLocalVelScratch.x * seesawLocalVelScratch.x) + (seesawLocalVelScratch.y * seesawLocalVelScratch.y));
   if ((-ny * seesawLocalVelScratch.x + nx * seesawLocalVelScratch.y) < 0) {
     velLen = -velLen;
+  }
+  if (!Number.isFinite(velLen) || !Number.isFinite(seesaw.sensitivity)) {
+    return;
+  }
+  if (!Number.isFinite(seesaw.angleVel)) {
+    seesaw.angleVel = 0;
   }
   seesaw.angleVel += seesaw.sensitivity * (dist * velLen);
 }
