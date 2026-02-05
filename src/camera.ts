@@ -30,7 +30,7 @@ const SMB2_PITCH_OFFSET = 0x200;
 const SMB2_PITCH_LIMIT = 0x3000;
 const SMB2_STANDSTILL_SPEED = 0.02;
 const FREE_FLY_LOOK_SPEED = 0x300;
-const FREE_FLY_MOVE_SPEED = 0.3;
+const FREE_FLY_MOVE_SPEED = 0.9;
 const FREE_FLY_PITCH_LIMIT = 0x3000;
 
 function applyMat4ToPoint(out, mtx) {

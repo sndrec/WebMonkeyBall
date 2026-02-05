@@ -982,8 +982,11 @@ export class Game {
     if (localPlayer) {
       this.cameraController = localPlayer.camera;
     }
-    if (localPlayer && localWasSpectator && localPlayer.isSpectator) {
-      localPlayer.freeFly = localFreeFly;
+    const preserveLocalCamera = localFreeFly || (localWasSpectator && localPlayer?.isSpectator);
+    if (localPlayer && preserveLocalCamera) {
+      if (localFreeFly) {
+        localPlayer.freeFly = true;
+      }
       localPlayer.cameraRotY = localCameraRotY;
       if (localCameraState && localPlayer.camera) {
         localPlayer.camera.setState(localCameraState);
@@ -3207,20 +3210,22 @@ export class Game {
         for (const player of simPlayers) {
           if (player.id === this.localPlayerId) {
             if (player.freeFly) {
-              const cameraPoses = this.ensureCameraPose();
-              if (cameraPoses) {
-                this.copyCameraPose(cameraPoses.curr, cameraPoses.prev);
-              }
-              const moveStick = this.input?.getStick?.() ?? { x: 0, y: 0 };
-              const lookStick = this.input?.getLookStick?.() ?? { x: 0, y: 0 };
-              const mouseLook = this.input?.consumeMouseLook?.() ?? { x: 0, y: 0 };
-              const lookInput = {
-                x: -lookStick.x - mouseLook.x * 0.025,
-                y: -lookStick.y - mouseLook.y * 0.025,
-              };
-              player.camera.updateSpectatorFreeFly(moveStick, lookInput, cameraPaused);
-              if (cameraPoses) {
-                this.captureCameraPose(cameraPoses.curr);
+              if (!this.rollbackSession?.suppressVisuals) {
+                const cameraPoses = this.ensureCameraPose();
+                if (cameraPoses) {
+                  this.copyCameraPose(cameraPoses.curr, cameraPoses.prev);
+                }
+                const moveStick = this.input?.getStick?.() ?? { x: 0, y: 0 };
+                const lookStick = this.input?.getLookStick?.() ?? { x: 0, y: 0 };
+                const mouseLook = this.input?.consumeMouseLook?.() ?? { x: 0, y: 0 };
+                const lookInput = {
+                  x: -lookStick.x - mouseLook.x * 0.025,
+                  y: -lookStick.y - mouseLook.y * 0.025,
+                };
+                player.camera.updateSpectatorFreeFly(moveStick, lookInput, cameraPaused);
+                if (cameraPoses) {
+                  this.captureCameraPose(cameraPoses.curr);
+                }
               }
               continue;
             }
