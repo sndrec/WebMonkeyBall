@@ -907,6 +907,7 @@ export class Game {
     }
     const localPlayerBefore = this.getLocalPlayer();
     const localWasSpectator = localPlayerBefore?.isSpectator ?? false;
+    const localWasPending = localPlayerBefore?.pendingSpawn ?? false;
     const localCameraState = localPlayerBefore?.camera?.getState?.() ?? null;
     const localCameraRotY = localPlayerBefore?.cameraRotY ?? 0;
     const localFreeFly = localPlayerBefore?.freeFly ?? false;
@@ -982,9 +983,12 @@ export class Game {
     if (localPlayer) {
       this.cameraController = localPlayer.camera;
     }
-    const preserveLocalCamera = localFreeFly || (localWasSpectator && localPlayer?.isSpectator);
+    const localIsSpectator = localPlayer?.isSpectator ?? false;
+    const localIsPending = localPlayer?.pendingSpawn ?? false;
+    const preserveFreeFly = localFreeFly && (localWasSpectator || localWasPending || localIsSpectator || localIsPending);
+    const preserveLocalCamera = preserveFreeFly || ((localWasSpectator || localWasPending) && (localIsSpectator || localIsPending));
     if (localPlayer && preserveLocalCamera) {
-      if (localFreeFly) {
+      if (preserveFreeFly) {
         localPlayer.freeFly = true;
       }
       localPlayer.cameraRotY = localCameraRotY;
@@ -995,6 +999,9 @@ export class Game {
         this.cameraController = localPlayer.camera;
       }
       this.syncCameraPose();
+    }
+    if (localPlayer && !localPlayer.isSpectator && !localPlayer.pendingSpawn) {
+      localPlayer.freeFly = false;
     }
     this.noCollidePairs = new Set(state.noCollidePairs ?? []);
     if (state.playerCollisionEnabled !== undefined) {
@@ -3217,6 +3224,11 @@ export class Game {
         const cameraPaused = this.paused || timeoverActive;
         for (const player of simPlayers) {
           if (player.id === this.localPlayerId) {
+            if ((player.isSpectator || player.pendingSpawn) && !player.freeFly) {
+              if (!this.rollbackSession?.suppressVisuals) {
+                this.enterFreeFlyCamera(player);
+              }
+            }
             if (player.freeFly) {
               if (!this.rollbackSession?.suppressVisuals) {
                 const cameraPoses = this.ensureCameraPose();

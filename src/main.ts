@@ -2688,6 +2688,10 @@ function resetNetplayConnections({ preserveLobby = false }: { preserveLobby?: bo
   setIngameChatOpen(false);
 }
 
+function shouldJoinAsSpectator() {
+  return running && !!game.stageRuntime && !game.loadingStage && game.stageTimerFrames > 0;
+}
+
 function markPlayerPendingSpawn(playerId: number, stageSeq: number) {
   const player = game.players.find((entry) => entry.id === playerId);
   if (!player) {
@@ -2713,6 +2717,7 @@ function promotePendingSpawns(stageSeq: number) {
     if (player) {
       player.pendingSpawn = false;
       player.isSpectator = false;
+      player.freeFly = false;
     }
     pendingSpawnStageSeq.delete(playerId);
   }
@@ -3574,7 +3579,7 @@ function handleHostMessage(msg: HostToClientMessage) {
     const player = game.players.find((p) => p.id === msg.playerId);
     if (player) {
       player.isSpectator = msg.spectator;
-      if (msg.pendingSpawn) {
+      if (msg.pendingSpawn || msg.spectator) {
         markPlayerPendingSpawn(msg.playerId, msg.stageSeq ?? netplayState?.stageSeq ?? 0);
       } else {
         player.pendingSpawn = false;
@@ -3656,7 +3661,7 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
     if (game.players.length >= game.maxPlayers) {
       return;
     }
-    const joinAsSpectator = running && !!game.stageRuntime;
+    const joinAsSpectator = shouldJoinAsSpectator();
     game.addPlayer(playerId, { spectator: joinAsSpectator });
     if (joinAsSpectator) {
       markPlayerPendingSpawn(playerId, state.stageSeq);
@@ -4453,7 +4458,7 @@ function startHost(room: LobbyRoom, playerToken: string) {
         lastSnapshotRequestMs: null,
       });
     }
-    const joinAsSpectator = running && !!game.stageRuntime;
+    const joinAsSpectator = shouldJoinAsSpectator();
     game.addPlayer(playerId, { spectator: joinAsSpectator });
     const player = game.players.find((p) => p.id === playerId);
     if (joinAsSpectator) {
