@@ -57,6 +57,9 @@ export class Input {
 
     this.handlers = {
       keydown: (event) => {
+        if (this.isTextInputFocused()) {
+          return;
+        }
         if (!this.down.has(event.code)) {
           this.pressed.add(event.code);
         }
@@ -320,6 +323,22 @@ export class Input {
       return raw;
     }
     return this.hasTouch ? 'touch' : 'gyro';
+  }
+
+  isTextInputFocused() {
+    const active = document.activeElement;
+    if (!active) {
+      return false;
+    }
+    if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement) {
+      return true;
+    }
+    return (active as HTMLElement).isContentEditable === true;
+  }
+
+  clearKeyboardState() {
+    this.down.clear();
+    this.pressed.clear();
   }
 
   isOverlayVisible() {

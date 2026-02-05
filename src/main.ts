@@ -1605,7 +1605,11 @@ function setIngameChatOpen(open: boolean) {
     ingameChatWrap.classList.toggle('open', open);
   }
   if (ingameChatInputRow) {
-    ingameChatInputRow.classList.toggle('hidden', !open);
+    ingameChatInputRow.classList.toggle('collapsed', !open);
+    ingameChatInputRow.classList.remove('hidden');
+  }
+  if (open) {
+    game.input?.clearKeyboardState?.();
   }
   if (open && ingameChatInput) {
     ingameChatInput.focus();
@@ -5461,6 +5465,7 @@ if (ingameChatInput) {
       return;
     }
     event.preventDefault();
+    event.stopPropagation();
     const value = ingameChatInput.value;
     ingameChatInput.value = '';
     sendChatMessage(value);
