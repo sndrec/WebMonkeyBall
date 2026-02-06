@@ -56,6 +56,7 @@ const BANANA_STATE_HOLDING = 7;
 const BANANA_HOLD_FRAMES = 30;
 const ITEM_FLAG_COLLIDABLE = 1 << 1;
 const GOAL_SEQUENCE_FRAMES = 330;
+const GOAL_REPLAY_RECORD_FRAMES = 60;
 const BONUS_CLEAR_SEQUENCE_FRAMES = 180;
 const GOAL_SKIP_TOTAL_FRAMES = 210;
 const GOAL_SPECTATE_DESTROY_FRAMES = 180;
@@ -112,6 +113,7 @@ type ResultReplayHistoryFrame = {
 
 type ActiveResultReplay = {
   kind: 'goal' | 'fallout';
+  totalFrames: number;
   stateFrames: any[];
   inputFrames: QuantizedInput[];
   cameraRotYFrames: number[];
@@ -1421,6 +1423,7 @@ export class Game {
       ? this.cloneVec3(goalHit?.replayEntryVel ?? localPlayerAtEvent?.ball?.vel)
       : null;
     let replayFrames = kind === 'goal' ? GOAL_RESULT_REPLAY_FRAMES : FALLOUT_RESULT_REPLAY_FRAMES;
+    let replayTotalFrames = kind === 'goal' ? 210 : replayFrames;
     if (kind === 'goal' && goalEntryVel) {
       const goalSpeed = sqrt(
         (goalEntryVel.x * goalEntryVel.x)
@@ -1428,6 +1431,7 @@ export class Game {
         + (goalEntryVel.z * goalEntryVel.z)
       );
       const goalReplayTimer = Math.min(300, 210 + (goalSpeed * 300));
+      replayTotalFrames = Math.max(1, Math.floor(goalReplayTimer));
       replayFrames = Math.max(
         RESULT_REPLAY_MIN_FRAMES,
         Math.min(GOAL_RESULT_REPLAY_MAX_FRAMES, Math.floor(goalReplayTimer - 60))
@@ -1466,7 +1470,29 @@ export class Game {
     }
     const resumeBallPos = this.getReplayLocalBallPosFromState(resumeState);
     const replayStartBallPos = this.getReplayLocalBallPosFromState(rewindState);
-    const replayEventBallPos = this.getReplayLocalBallPosFromState(replayStateFrames[replayStateFrames.length - 1]) ?? resumeBallPos;
+    let replayEventBallPos = this.getReplayLocalBallPosFromState(replayStateFrames[replayStateFrames.length - 1])
+      ?? resumeBallPos;
+    if (kind === 'goal') {
+      const targetGoalTimer = GOAL_SEQUENCE_FRAMES - GOAL_REPLAY_RECORD_FRAMES;
+      let bestState = null;
+      let bestDelta = Number.POSITIVE_INFINITY;
+      for (const state of replayStateFrames) {
+        const player = state?.players?.find?.((entry) => entry?.id === this.localPlayerId);
+        const timer = player?.goalTimerFrames;
+        if (!Number.isFinite(timer)) {
+          continue;
+        }
+        const delta = Math.abs(timer - targetGoalTimer);
+        if (delta < bestDelta) {
+          bestDelta = delta;
+          bestState = state;
+        }
+      }
+      const markerPos = this.getReplayLocalBallPosFromState(bestState);
+      if (markerPos) {
+        replayEventBallPos = markerPos;
+      }
+    }
     if (resumeBallPos) {
       ballPath.push(resumeBallPos);
     }
@@ -1476,6 +1502,7 @@ export class Game {
     this.loadRollbackState(rewindState, { resetResultReplay: false });
     this.activeResultReplay = {
       kind,
+      totalFrames: replayTotalFrames,
       stateFrames: replayStateFrames,
       inputFrames: replayInputFrames,
       cameraRotYFrames: replayCameraRotYFrames,
@@ -1559,14 +1586,34 @@ export class Game {
     if (!canSkip && !replayDone) {
       return false;
     }
+    if (replay.kind === 'goal' && replayDone && !canSkip) {
+      const handoffFrames = Math.max(0, replay.totalFrames - replay.elapsedFrames);
+      this.activeResultReplay = null;
+      this.resultReplayNeedsRestart = false;
+      this.goalReplayStartArmed = false;
+      this.resultReplayHistory.length = 0;
+      this.accumulator = 0;
+      if (handoffFrames > 0) {
+        const localPlayer = this.getLocalPlayer();
+        if (localPlayer) {
+          localPlayer.goalTimerFrames = handoffFrames;
+          localPlayer.goalSkipTimerFrames = Math.min(localPlayer.goalSkipTimerFrames, handoffFrames);
+        }
+        return false;
+      }
+      void this.finishGoalSequence();
+      return true;
+    }
     this.activeResultReplay = null;
     this.resultReplayNeedsRestart = false;
-    this.loadRollbackState(replay.resumeState, { resetResultReplay: false });
-    const localPlayer = this.getLocalPlayer();
-    if (localPlayer && replay.deferredGoalTapeBreak && replay.goalHit) {
-      this.breakGoalTapeForBall(localPlayer.ball, replay.goalHit);
+    if (replay.kind !== 'goal') {
+      this.loadRollbackState(replay.resumeState, { resetResultReplay: false });
+      const localPlayer = this.getLocalPlayer();
+      if (localPlayer && replay.deferredGoalTapeBreak && replay.goalHit) {
+        this.breakGoalTapeForBall(localPlayer.ball, replay.goalHit);
+      }
+      this.statusText = replay.resumeStatusText;
     }
-    this.statusText = replay.resumeStatusText;
     this.resultReplayHistory.length = 0;
     this.accumulator = 0;
     if (replay.kind === 'goal') {
