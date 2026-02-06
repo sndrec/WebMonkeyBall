@@ -1156,7 +1156,9 @@ export class World {
         vec3.rotateX(this.shadowLightUp, this.shadowLightUp, Vec3Zero, lightRotX);
         vec3.rotateY(this.shadowLightUp, this.shadowLightUp, Vec3Zero, lightRotY);
 
-        const shadowModel = stageData.commonGma.idMap.get(CommonModelID.circle_white);
+        const shadowModel = usesSmb2Models
+            ? stageData.commonGma.nameMap.get("circle_white")
+            : stageData.commonGma.idMap.get(CommonModelID.circle_white);
         const shadowTev = shadowModel?.tevLayers[0];
         if (shadowTev) {
             this.shadowTevLayer = new TevLayerInst(device, renderCache, shadowTev, this.shadowTextureCache);
