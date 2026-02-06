@@ -1587,6 +1587,20 @@ export class Game {
       }
     }
     const canSkip = replay.elapsedFrames >= RESULT_REPLAY_SKIP_DELAY_FRAMES && this.input?.isPrimaryActionDown?.();
+    if (replay.kind === 'fallout' && canSkip) {
+      this.activeResultReplay = null;
+      this.resultReplayNeedsRestart = false;
+      this.resultReplayHistory.length = 0;
+      const localPlayer = this.getLocalPlayer();
+      if (localPlayer) {
+        // Mirror SMB1 behavior: skip immediately resolves ringout and restarts/advances.
+        localPlayer.ringoutSkipTimerFrames = 0;
+        localPlayer.ringoutTimerFrames = Math.max(1, localPlayer.ringoutTimerFrames);
+      }
+      this.accumulator = 0;
+      this.updateRingout(this.isBonusStageActive());
+      return true;
+    }
     const replayDone = replay.playbackIndex >= replay.inputFrames.length;
     if (!canSkip && !replayDone) {
       return false;
@@ -1607,6 +1621,19 @@ export class Game {
         return false;
       }
       void this.finishGoalSequence();
+      return true;
+    }
+    const falloutNaturalHandoff = replay.kind === 'fallout'
+      && replay.falloutSecondaryCutDone
+      && replayDone
+      && !canSkip;
+    if (falloutNaturalHandoff) {
+      // Temporary debug path: leave replay state in-place and resume normal simulation.
+      this.activeResultReplay = null;
+      this.resultReplayNeedsRestart = false;
+      this.resultReplayHistory.length = 0;
+      this.statusText = replay.resumeStatusText;
+      this.accumulator = 0;
       return true;
     }
     this.activeResultReplay = null;

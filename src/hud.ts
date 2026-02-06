@@ -783,10 +783,29 @@ export class HudRenderer {
     }
   }
 
+  private getHudPlayer(game: any) {
+    if (!game) {
+      return null;
+    }
+    const localPlayer = game.getLocalPlayer?.();
+    if (localPlayer) {
+      return localPlayer;
+    }
+    const players = game.players;
+    if (!Array.isArray(players) || players.length === 0) {
+      return null;
+    }
+    return players.find((player) => !player?.isSpectator && !player?.pendingSpawn) ?? players[0];
+  }
+
   private syncState(game: any) {
     if (!game) {
       return;
     }
+    const hudPlayer = this.getHudPlayer(game);
+    const goalTimerFrames = hudPlayer?.goalTimerFrames ?? game.goalTimerFrames ?? 0;
+    const ringoutTimerFrames = hudPlayer?.ringoutTimerFrames ?? game.ringoutTimerFrames ?? 0;
+    const goalInfo = hudPlayer?.goalInfo ?? game.goalInfo ?? null;
     const stageId = game.stage?.stageId ?? null;
     if (stageId !== this.lastStageId) {
       this.lastStageId = stageId;
@@ -836,10 +855,10 @@ export class HudRenderer {
       }
     }
 
-    if (this.lastGoalFrames === 0 && game.goalTimerFrames > 0 && !game.bonusClearPending) {
+    if (this.lastGoalFrames === 0 && goalTimerFrames > 0 && !game.bonusClearPending) {
       this.beginBanner(this.goalBanner);
       const timeRemaining = Math.max(0, (game.stageTimeLimitFrames ?? 0) - (game.stageTimerFrames ?? 0));
-      const goalType = normalizeGoalType(game.goalInfo?.goalType ?? game.stage?.goals?.[0]?.type ?? 'B');
+      const goalType = normalizeGoalType(goalInfo?.goalType ?? game.stage?.goals?.[0]?.type ?? 'B');
       let clearScore = Math.floor((timeRemaining * 100) / 60);
       if (goalType === 'G') {
         clearScore += 10000;
@@ -893,7 +912,7 @@ export class HudRenderer {
       }
     }
 
-    if (this.lastRingoutFrames === 0 && game.ringoutTimerFrames > 0) {
+    if (this.lastRingoutFrames === 0 && ringoutTimerFrames > 0) {
       if (game.isBonusStageActive?.()) {
         this.beginBanner(this.bonusFinishBanner);
       } else {
@@ -902,12 +921,12 @@ export class HudRenderer {
     }
 
     this.lastIntroFrames = game.introTimerFrames;
-    this.lastGoalFrames = game.goalTimerFrames;
+    this.lastGoalFrames = goalTimerFrames;
     this.lastTimeOverFrames = game.timeoverTimerFrames;
-    this.lastRingoutFrames = game.ringoutTimerFrames;
+    this.lastRingoutFrames = ringoutTimerFrames;
     this.lastBonusClear = game.bonusClearPending;
 
-    if (game.goalTimerFrames <= 0) {
+    if (goalTimerFrames <= 0) {
       this.goalScoreInfo = null;
     }
   }
@@ -924,6 +943,10 @@ export class HudRenderer {
     this.advanceBanner(this.readyBanner, dtFrames);
     this.advanceBanner(this.fallOutBanner, dtFrames);
     this.frameCounter += dtFrames;
+    const hudPlayer = this.getHudPlayer(game);
+    const goalTimerFrames = hudPlayer?.goalTimerFrames ?? game?.goalTimerFrames ?? 0;
+    const ringoutTimerFrames = hudPlayer?.ringoutTimerFrames ?? game?.ringoutTimerFrames ?? 0;
+    const goalInfo = hudPlayer?.goalInfo ?? game?.goalInfo ?? null;
 
     const targetScore = Math.max(0, Math.trunc(game?.score ?? 0));
     if (this.scoreDisplay > targetScore) {
@@ -1014,7 +1037,7 @@ export class HudRenderer {
     if (
       this.goalBanner.timer > 0
       && !(game?.isBonusStageActive?.() ?? false)
-      && isWarpGoal(game?.goalInfo?.goalType ?? null)
+      && isWarpGoal(goalInfo?.goalType ?? null)
     ) {
       const t = this.goalBanner.duration - this.goalBanner.timer;
       if (t % 2 === 1) {
@@ -1049,8 +1072,8 @@ export class HudRenderer {
     const isBonusStage = game?.isBonusStageActive?.() ?? false;
     if (isBonusStage) {
       const inPlayMain = (game?.introTimerFrames ?? 0) <= 0
-        && (game?.goalTimerFrames ?? 0) <= 0
-        && (game?.ringoutTimerFrames ?? 0) <= 0
+        && goalTimerFrames <= 0
+        && ringoutTimerFrames <= 0
         && (game?.timeoverTimerFrames ?? 0) <= 0;
       const bananasLeft = game?.bananasLeft ?? 0;
       if (!inPlayMain || bananasLeft <= 0) {
@@ -1080,7 +1103,7 @@ export class HudRenderer {
     const timeLeftRaw = (game?.stageTimeLimitFrames ?? 0) - (game?.stageTimerFrames ?? 0);
     const timeLeft = Math.max(0, timeLeftRaw);
     const { seconds, centis } = formatTimerSeconds(timeLeft);
-    const localPlayer = game?.getLocalPlayer?.() ?? null;
+    const localPlayer = this.getHudPlayer(game);
     const bananasCollected = localPlayer?.ball?.bananas ?? 0;
     const bananasLeft = game?.bananasLeft ?? 0;
     const bananaTotal = bananasCollected + bananasLeft;
@@ -1243,6 +1266,9 @@ export class HudRenderer {
   private renderBanners(ctx: CanvasRenderingContext2D, assets: HudAssets) {
     const fonts = assets.fonts;
     const game = this.currentGame;
+    const hudPlayer = this.getHudPlayer(game);
+    const goalTimerFrames = hudPlayer?.goalTimerFrames ?? game?.goalTimerFrames ?? 0;
+    const goalInfo = hudPlayer?.goalInfo ?? game?.goalInfo ?? null;
 
     if (this.goBanner.timer > 0) {
       const t = this.goBanner.duration - this.goBanner.timer;
@@ -1340,7 +1366,7 @@ export class HudRenderer {
         }
       }
 
-      if (game && !(game.isBonusStageActive?.() ?? false) && isWarpGoal(game.goalInfo?.goalType ?? null)) {
+      if (game && !(game.isBonusStageActive?.() ?? false) && isWarpGoal(goalInfo?.goalType ?? null)) {
         const floorInfo = game.course?.getFloorInfo?.();
         const floorNum = floorInfo?.current ?? 1;
         const warpText = `JUMP TO FLOOR ${floorNum}`;
@@ -1373,10 +1399,10 @@ export class HudRenderer {
       }
     }
 
-    if (this.goalScoreInfo && game?.goalTimerFrames > 0 && !(game.isBonusStageActive?.() ?? false)) {
+    if (this.goalScoreInfo && goalTimerFrames > 0 && !(game.isBonusStageActive?.() ?? false)) {
       const scoreInfo = this.goalScoreInfo;
-      const baseT = GOAL_SEQUENCE_FRAMES - game.goalTimerFrames;
-      const counter = game.goalTimerFrames;
+      const baseT = GOAL_SEQUENCE_FRAMES - goalTimerFrames;
+      const counter = goalTimerFrames;
       const baseX = 24;
       let lineY = 128;
       const font = fonts.asc16x16;
