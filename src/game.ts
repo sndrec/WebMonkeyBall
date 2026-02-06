@@ -2777,6 +2777,8 @@ export class Game {
       this.bananasLeft = this.stageRuntime.bananas.length;
       this.stageTimerFrames = 0;
       this.stageTimeLimitFrames = this.course?.getTimeLimitFrames() ?? DEFAULT_STAGE_TIME;
+      this.hudGoalEventTick = -1;
+      this.hudRingoutEventTick = -1;
       this.timeoverTimerFrames = 0;
       this.multiplayerGoalTimerFrames = 0;
       this.multiplayerTimeoverHadGoal = false;
@@ -2839,6 +2841,8 @@ export class Game {
     this.resultReplayNeedsRestart = false;
     this.goalReplayStartArmed = false;
     this.resultReplayHistory.length = 0;
+    this.hudGoalEventTick = -1;
+    this.hudRingoutEventTick = -1;
     const localPlayer = this.getLocalPlayer();
     if (localPlayer) {
       localPlayer.finished = false;
@@ -3550,6 +3554,12 @@ export class Game {
   }
 
   private readDeterministicStickForPlayer(player: PlayerState, inputEnabled: boolean) {
+    if (!inputEnabled) {
+      if (player.id === this.localPlayerId) {
+        return this.readDeterministicStick(false);
+      }
+      return { x: 0, y: 0 };
+    }
     const feed = this.playerInputFeeds.get(player.id);
     if (feed && (this.replayInputStartTick === null || this.simTick >= this.replayInputStartTick)) {
       const idx = this.playerInputFeedIndices.get(player.id) ?? 0;
@@ -3559,10 +3569,7 @@ export class Game {
       return dequantizeStick(frame);
     }
     if (player.id === this.localPlayerId) {
-      return this.readDeterministicStick(inputEnabled);
-    }
-    if (!inputEnabled) {
-      return { x: 0, y: 0 };
+      return this.readDeterministicStick(true);
     }
     return { x: 0, y: 0 };
   }
