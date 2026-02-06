@@ -55,6 +55,20 @@ function cameraFaceDirection(camera, lookDir) {
   camera.rotZ = 0;
 }
 
+function setVecLen(vec, len) {
+  const curLen = sqrt(sumSq3(vec.x, vec.y, vec.z));
+  if (curLen > 1e-7) {
+    const inv = len / curLen;
+    vec.x *= inv;
+    vec.y *= inv;
+    vec.z *= inv;
+  } else if (len !== 0) {
+    vec.x = 0;
+    vec.y = 0;
+    vec.z = len;
+  }
+}
+
 function smb2ApeIsStandstill(ball) {
   const apeMotionLen = sqrt(sumSq3(ball.unkB8?.x ?? 0, ball.unkB8?.y ?? 0, ball.unkB8?.z ?? 0));
   return apeMotionLen < SMB2_APE_STANDSTILL_THRESHOLD && (ball.vel?.y ?? 0) >= -0.16203703;
@@ -91,6 +105,16 @@ export class GameplayCamera {
     this.smb2PivotXRot = 0;
     this.smb2YawVel = 0;
     this.smb2FrameCounter = 0;
+    this.goalReplayMode = 0;
+    this.goalReplayGoalId = -1;
+    this.goalReplayAnimGroupId = 0;
+    this.goalReplayLocalPos = { x: 0, y: 0, z: 0 };
+    this.goalReplayRot = { x: 0, y: 0, z: 0 };
+    this.goalReplayGoal = { x: 0, y: 0, z: 0 };
+    this.goalReplayDir = { x: 0, y: 0, z: -1 };
+    this.goalReplayEventPos = { x: 0, y: 0, z: 0 };
+    this.goalReplayAnchor = { x: 0, y: 0, z: 0 };
+    this.goalReplayRadius = 2;
   }
 
   reset() {
@@ -136,6 +160,28 @@ export class GameplayCamera {
     this.smb2Standstill = 0;
     this.smb2PivotXRot = 0;
     this.smb2YawVel = 0;
+    this.goalReplayMode = 0;
+    this.goalReplayGoalId = -1;
+    this.goalReplayAnimGroupId = 0;
+    this.goalReplayLocalPos.x = 0;
+    this.goalReplayLocalPos.y = 0;
+    this.goalReplayLocalPos.z = 0;
+    this.goalReplayRot.x = 0;
+    this.goalReplayRot.y = 0;
+    this.goalReplayRot.z = 0;
+    this.goalReplayGoal.x = 0;
+    this.goalReplayGoal.y = 0;
+    this.goalReplayGoal.z = 0;
+    this.goalReplayDir.x = 0;
+    this.goalReplayDir.y = 0;
+    this.goalReplayDir.z = -1;
+    this.goalReplayEventPos.x = 0;
+    this.goalReplayEventPos.y = 0;
+    this.goalReplayEventPos.z = 0;
+    this.goalReplayAnchor.x = 0;
+    this.goalReplayAnchor.y = 0;
+    this.goalReplayAnchor.z = 0;
+    this.goalReplayRadius = 2;
   }
 
   getState() {
@@ -169,6 +215,16 @@ export class GameplayCamera {
       smb2PivotXRot: this.smb2PivotXRot,
       smb2YawVel: this.smb2YawVel,
       smb2FrameCounter: this.smb2FrameCounter,
+      goalReplayMode: this.goalReplayMode,
+      goalReplayGoalId: this.goalReplayGoalId,
+      goalReplayAnimGroupId: this.goalReplayAnimGroupId,
+      goalReplayLocalPos: { x: this.goalReplayLocalPos.x, y: this.goalReplayLocalPos.y, z: this.goalReplayLocalPos.z },
+      goalReplayRot: { x: this.goalReplayRot.x, y: this.goalReplayRot.y, z: this.goalReplayRot.z },
+      goalReplayGoal: { x: this.goalReplayGoal.x, y: this.goalReplayGoal.y, z: this.goalReplayGoal.z },
+      goalReplayDir: { x: this.goalReplayDir.x, y: this.goalReplayDir.y, z: this.goalReplayDir.z },
+      goalReplayEventPos: { x: this.goalReplayEventPos.x, y: this.goalReplayEventPos.y, z: this.goalReplayEventPos.z },
+      goalReplayAnchor: { x: this.goalReplayAnchor.x, y: this.goalReplayAnchor.y, z: this.goalReplayAnchor.z },
+      goalReplayRadius: this.goalReplayRadius,
     };
   }
 
@@ -219,6 +275,28 @@ export class GameplayCamera {
     this.smb2PivotXRot = state.smb2PivotXRot ?? this.smb2PivotXRot;
     this.smb2YawVel = state.smb2YawVel ?? this.smb2YawVel;
     this.smb2FrameCounter = state.smb2FrameCounter ?? this.smb2FrameCounter;
+    this.goalReplayMode = state.goalReplayMode ?? this.goalReplayMode;
+    this.goalReplayGoalId = state.goalReplayGoalId ?? this.goalReplayGoalId;
+    this.goalReplayAnimGroupId = state.goalReplayAnimGroupId ?? this.goalReplayAnimGroupId;
+    this.goalReplayLocalPos.x = state.goalReplayLocalPos?.x ?? this.goalReplayLocalPos.x;
+    this.goalReplayLocalPos.y = state.goalReplayLocalPos?.y ?? this.goalReplayLocalPos.y;
+    this.goalReplayLocalPos.z = state.goalReplayLocalPos?.z ?? this.goalReplayLocalPos.z;
+    this.goalReplayRot.x = state.goalReplayRot?.x ?? this.goalReplayRot.x;
+    this.goalReplayRot.y = state.goalReplayRot?.y ?? this.goalReplayRot.y;
+    this.goalReplayRot.z = state.goalReplayRot?.z ?? this.goalReplayRot.z;
+    this.goalReplayGoal.x = state.goalReplayGoal?.x ?? this.goalReplayGoal.x;
+    this.goalReplayGoal.y = state.goalReplayGoal?.y ?? this.goalReplayGoal.y;
+    this.goalReplayGoal.z = state.goalReplayGoal?.z ?? this.goalReplayGoal.z;
+    this.goalReplayDir.x = state.goalReplayDir?.x ?? this.goalReplayDir.x;
+    this.goalReplayDir.y = state.goalReplayDir?.y ?? this.goalReplayDir.y;
+    this.goalReplayDir.z = state.goalReplayDir?.z ?? this.goalReplayDir.z;
+    this.goalReplayEventPos.x = state.goalReplayEventPos?.x ?? this.goalReplayEventPos.x;
+    this.goalReplayEventPos.y = state.goalReplayEventPos?.y ?? this.goalReplayEventPos.y;
+    this.goalReplayEventPos.z = state.goalReplayEventPos?.z ?? this.goalReplayEventPos.z;
+    this.goalReplayAnchor.x = state.goalReplayAnchor?.x ?? this.goalReplayAnchor.x;
+    this.goalReplayAnchor.y = state.goalReplayAnchor?.y ?? this.goalReplayAnchor.y;
+    this.goalReplayAnchor.z = state.goalReplayAnchor?.z ?? this.goalReplayAnchor.z;
+    this.goalReplayRadius = state.goalReplayRadius ?? this.goalReplayRadius;
   }
 
   applyWormholeTransform(wormholeTf) {
@@ -662,8 +740,223 @@ export class GameplayCamera {
     this.lookAtVel.z = this.lookAt.z - prevLookAt.z;
   }
 
+  refreshGoalReplayGoalData(stageRuntime) {
+    if (!stageRuntime || this.goalReplayGoalId < 0) {
+      return;
+    }
+    const stageGoal = stageRuntime.stage?.goals?.[this.goalReplayGoalId];
+    if (!stageGoal?.pos) {
+      return;
+    }
+    this.goalReplayLocalPos.x = stageGoal.pos.x;
+    this.goalReplayLocalPos.y = stageGoal.pos.y;
+    this.goalReplayLocalPos.z = stageGoal.pos.z;
+    this.goalReplayRot.x = stageGoal.rot?.x ?? this.goalReplayRot.x;
+    this.goalReplayRot.y = stageGoal.rot?.y ?? this.goalReplayRot.y;
+    this.goalReplayRot.z = stageGoal.rot?.z ?? this.goalReplayRot.z;
+  }
+
+  buildGoalReplayTransform(stageRuntime) {
+    this.refreshGoalReplayGoalData(stageRuntime);
+    const animTf = stageRuntime?.animGroups?.[this.goalReplayAnimGroupId]?.transform;
+    if (animTf) {
+      stack.fromMtx(animTf);
+    } else {
+      stack.fromIdentity();
+    }
+    stack.translate(this.goalReplayLocalPos);
+    stack.rotateZ(this.goalReplayRot.z);
+    stack.rotateY(this.goalReplayRot.y);
+    stack.rotateX(this.goalReplayRot.x);
+  }
+
+  buildGoalReplayBasisTransform(stageRuntime) {
+    this.updateGoalReplayWorldGoal(stageRuntime);
+    stack.fromTranslate(this.goalReplayGoal);
+    stack.rotateZ(this.goalReplayRot.z);
+    stack.rotateY(this.goalReplayRot.y);
+    stack.rotateX(this.goalReplayRot.x);
+  }
+
+  updateGoalReplayWorldGoal(stageRuntime) {
+    this.refreshGoalReplayGoalData(stageRuntime);
+    this.goalReplayGoal.x = this.goalReplayLocalPos.x;
+    this.goalReplayGoal.y = this.goalReplayLocalPos.y;
+    this.goalReplayGoal.z = this.goalReplayLocalPos.z;
+    const animTf = this.goalReplayAnimGroupId > 0
+      ? stageRuntime?.animGroups?.[this.goalReplayAnimGroupId]?.transform
+      : null;
+    if (animTf) {
+      stack.fromMtx(animTf);
+      stack.tfPoint(this.goalReplayGoal, this.goalReplayGoal);
+    }
+  }
+
+  setFalloutMain(ball) {
+    this.state = CAMERA_STATE.FALLOUT_MAIN;
+    this.flags |= 1;
+    this.lookAt.x = ball.pos.x;
+    this.lookAt.y = ball.pos.y;
+    this.lookAt.z = ball.pos.z;
+    tmpVec.x = this.lookAt.x - this.eye.x;
+    tmpVec.y = this.lookAt.y - this.eye.y;
+    tmpVec.z = this.lookAt.z - this.eye.z;
+    cameraFaceDirection(this, tmpVec);
+  }
+
   setGoalMain() {
     this.state = CAMERA_STATE.GOAL_MAIN;
+  }
+
+  setEyeLookAt(eye, lookAt) {
+    this.eye.x = eye?.x ?? this.eye.x;
+    this.eye.y = eye?.y ?? this.eye.y;
+    this.eye.z = eye?.z ?? this.eye.z;
+    this.lookAt.x = lookAt?.x ?? this.lookAt.x;
+    this.lookAt.y = lookAt?.y ?? this.lookAt.y;
+    this.lookAt.z = lookAt?.z ?? this.lookAt.z;
+    tmpVec.x = this.lookAt.x - this.eye.x;
+    tmpVec.y = this.lookAt.y - this.eye.y;
+    tmpVec.z = this.lookAt.z - this.eye.z;
+    cameraFaceDirection(this, tmpVec);
+  }
+
+  initGoalReplay(ball, options = null) {
+    this.state = CAMERA_STATE.GOAL_REPLAY;
+    this.flags |= 1;
+    this.goalReplayMode = 0;
+    this.eyeVel.x = 0;
+    this.eyeVel.y = 0;
+    this.eyeVel.z = 0;
+    this.lookAtVel.x = 0;
+    this.lookAtVel.y = 0;
+    this.lookAtVel.z = 0;
+    this.goalReplayGoalId = Number.isInteger(options?.goalId) ? options.goalId : -1;
+    this.goalReplayAnimGroupId = Number.isInteger(options?.goalAnimGroupId) ? options.goalAnimGroupId : 0;
+    this.goalReplayLocalPos.x = options?.goalLocalPos?.x ?? options?.goalPos?.x ?? ball.pos.x;
+    this.goalReplayLocalPos.y = options?.goalLocalPos?.y ?? options?.goalPos?.y ?? ball.pos.y;
+    this.goalReplayLocalPos.z = options?.goalLocalPos?.z ?? options?.goalPos?.z ?? ball.pos.z;
+    this.goalReplayRot.x = options?.goalRot?.x ?? 0;
+    this.goalReplayRot.y = options?.goalRot?.y ?? 0;
+    this.goalReplayRot.z = options?.goalRot?.z ?? 0;
+    const replayStartPos = options?.replayStartPos ?? ball.pos;
+    const replayEventPos = options?.replayEventPos ?? replayStartPos;
+    const stageRuntime = options?.stageRuntime ?? null;
+    this.goalReplayEventPos.x = replayEventPos.x;
+    this.goalReplayEventPos.y = replayEventPos.y;
+    this.goalReplayEventPos.z = replayEventPos.z;
+    this.updateGoalReplayWorldGoal(stageRuntime);
+    this.goalReplayDir.x = options?.goalDir?.x ?? ball.vel.x;
+    this.goalReplayDir.y = options?.goalDir?.y ?? ball.vel.y;
+    this.goalReplayDir.z = options?.goalDir?.z ?? ball.vel.z;
+    const goalDirLen = sqrt(sumSq3(this.goalReplayDir.x, this.goalReplayDir.y, this.goalReplayDir.z));
+    if (goalDirLen <= 1e-7) {
+      this.goalReplayDir.x = 0;
+      this.goalReplayDir.y = 0;
+      this.goalReplayDir.z = -1;
+    }
+    this.goalReplayAnchor.x = this.goalReplayGoal.x;
+    this.goalReplayAnchor.y = this.goalReplayGoal.y + 2.5;
+    this.goalReplayAnchor.z = this.goalReplayGoal.z;
+    this.goalReplayRadius = 2.5;
+    this.lookAt.x = replayStartPos.x;
+    this.lookAt.y = replayStartPos.y;
+    this.lookAt.z = replayStartPos.z;
+
+    tmpVec.x = replayStartPos.x - this.goalReplayGoal.x;
+    tmpVec.y = replayStartPos.y - this.goalReplayGoal.y;
+    tmpVec.z = replayStartPos.z - this.goalReplayGoal.z;
+    const goalDist = sqrt(sumSq3(tmpVec.x, tmpVec.y, tmpVec.z));
+    if (goalDist >= 16) {
+      this.goalReplayMode = 1;
+      if (goalDist <= 1e-7) {
+        tmpVec.x = 0;
+        tmpVec.y = 0;
+        tmpVec.z = 1;
+      }
+      setVecLen(tmpVec, 1);
+      this.eye.x = replayStartPos.x + tmpVec.x;
+      this.eye.y = replayStartPos.y + tmpVec.y;
+      this.eye.z = replayStartPos.z + tmpVec.z;
+    } else {
+      const speed = sqrt(sumSq3(this.goalReplayDir.x, this.goalReplayDir.y, this.goalReplayDir.z));
+      const eventGoalDx = replayEventPos.x - this.goalReplayGoal.x;
+      const eventGoalDy = replayEventPos.y - this.goalReplayGoal.y;
+      const eventGoalDz = replayEventPos.z - this.goalReplayGoal.z;
+      const eventGoalDist = sqrt(sumSq3(eventGoalDx, eventGoalDy, eventGoalDz));
+      const rand3A = (Math.random() * 4) >= 1;
+      this.buildGoalReplayBasisTransform(stageRuntime);
+      if (eventGoalDist > 2.5 && rand3A && replayEventPos.y > this.goalReplayGoal.y) {
+        this.goalReplayMode = 0;
+        this.eyeVel.x = 0;
+        this.eyeVel.y = 0;
+        this.eyeVel.z = 0;
+        tmpVec.x = 0;
+        tmpVec.y = 2;
+        tmpVec.z = 0;
+        stack.tfPoint(tmpVec, tmpVec);
+        tmpVec2.x = replayEventPos.x - tmpVec.x;
+        tmpVec2.y = replayEventPos.y - tmpVec.y;
+        tmpVec2.z = replayEventPos.z - tmpVec.z;
+        const absY = Math.abs(tmpVec2.y);
+        if (absY > 1e-7) {
+          const scale = 0.35 / absY;
+          tmpVec2.x *= scale;
+          tmpVec2.y *= scale;
+          tmpVec2.z *= scale;
+          const lenSq = sumSq3(tmpVec2.x, tmpVec2.y, tmpVec2.z);
+          if (lenSq < 1) {
+            setVecLen(tmpVec2, 1);
+          } else if (lenSq > 4) {
+            setVecLen(tmpVec2, 2);
+          }
+        } else {
+          setVecLen(tmpVec2, 1 + Math.random());
+        }
+        this.eye.x = replayEventPos.x + tmpVec2.x;
+        this.eye.y = replayEventPos.y + tmpVec2.y;
+        this.eye.z = replayEventPos.z + tmpVec2.z;
+      } else if (speed > 0.25 && (Math.random() * 4) >= 1) {
+        this.goalReplayMode = 3;
+        this.unk54.x = 2 + Math.random();
+        this.unk54.y = 1 + 5 * Math.random();
+        this.unk54.z = 4 * (Math.random() - 0.5);
+        if (Math.random() < 0.5) {
+          this.unk54.x = -this.unk54.x;
+        }
+        this.unk60 = this.unk54.y + 0.5 * (0.5 + Math.random());
+        this.buildGoalReplayTransform(stageRuntime);
+        stack.tfPoint(this.unk54, tmpVec);
+        tmpVec2.x = tmpVec.x - replayStartPos.x;
+        tmpVec2.y = tmpVec.y - replayStartPos.y;
+        tmpVec2.z = tmpVec.z - replayStartPos.z;
+        setVecLen(tmpVec2, this.unk60);
+        this.eye.x = tmpVec.x + tmpVec2.x;
+        this.eye.y = tmpVec.y + tmpVec2.y;
+        this.eye.z = tmpVec.z + tmpVec2.z;
+      } else {
+        this.eyeVel.x = 0;
+        this.eyeVel.y = 0;
+        this.eyeVel.z = 0;
+        tmpVec2.x = 9 * (speed * (Math.random() - 0.5));
+        tmpVec2.y = 2.5;
+        tmpVec2.z = 5;
+        this.buildGoalReplayBasisTransform(stageRuntime);
+        tmpVec.x = this.goalReplayDir.x;
+        tmpVec.y = this.goalReplayDir.y;
+        tmpVec.z = this.goalReplayDir.z;
+        stack.rigidInvTfVec(tmpVec, tmpVec);
+        if (tmpVec.z > 0) {
+          tmpVec2.z = -tmpVec2.z;
+        }
+        stack.tfPoint(tmpVec2, this.eye);
+        if (this.goalReplayAnimGroupId > 0) {
+          this.goalReplayMode = 2;
+        }
+      }
+    }
+
+    this.setEyeLookAt(this.eye, this.lookAt);
   }
 
   initFalloutReplay(ball) {
@@ -744,6 +1037,29 @@ export class GameplayCamera {
     this.lookAt.x = this.eye.x + forwardX;
     this.lookAt.y = this.eye.y + forwardY;
     this.lookAt.z = this.eye.z + forwardZ;
+  }
+
+  updateFalloutMain(ball, paused) {
+    if (paused) {
+      return;
+    }
+
+    this.eyeVel.x *= 0.97;
+    this.eyeVel.y *= 0.955;
+    this.eyeVel.z *= 0.97;
+
+    this.eye.x += this.eyeVel.x;
+    this.eye.y += this.eyeVel.y;
+    this.eye.z += this.eyeVel.z;
+
+    this.lookAt.x = ball.pos.x;
+    this.lookAt.y = ball.pos.y;
+    this.lookAt.z = ball.pos.z;
+
+    tmpVec.x = this.lookAt.x - this.eye.x;
+    tmpVec.y = this.lookAt.y - this.eye.y;
+    tmpVec.z = this.lookAt.z - this.eye.z;
+    cameraFaceDirection(this, tmpVec);
   }
 
   updateFalloutReplay(ball, paused) {
@@ -831,11 +1147,113 @@ export class GameplayCamera {
     cameraFaceDirection(this, tmpVec);
   }
 
+  updateGoalReplay(ball, stageRuntime, paused) {
+    if (paused) {
+      return;
+    }
+    if (this.goalReplayMode === 4) {
+      this.initGoalReplay(ball, {
+        goalId: this.goalReplayGoalId,
+        goalAnimGroupId: this.goalReplayAnimGroupId,
+        goalLocalPos: this.goalReplayLocalPos,
+        goalRot: this.goalReplayRot,
+        goalDir: this.goalReplayDir,
+        replayStartPos: ball.pos,
+        replayEventPos: this.goalReplayEventPos,
+        stageRuntime,
+      });
+      return;
+    }
+    this.updateGoalReplayWorldGoal(stageRuntime);
+    switch (this.goalReplayMode) {
+      case 1:
+        tmpVec.x = ball.pos.x - this.goalReplayGoal.x;
+        tmpVec.y = ball.pos.y - this.goalReplayGoal.y;
+        tmpVec.z = ball.pos.z - this.goalReplayGoal.z;
+        {
+          const len = sqrt(sumSq3(tmpVec.x, tmpVec.y, tmpVec.z));
+          if (len < 12) {
+            this.goalReplayMode = 4;
+          }
+          if (len <= 1e-7) {
+            tmpVec.x = 0;
+            tmpVec.y = 0;
+            tmpVec.z = 1;
+          } else {
+            const inv = 1 / len;
+            tmpVec.x *= inv;
+            tmpVec.y *= inv;
+            tmpVec.z *= inv;
+          }
+        }
+        tmpVec2.x = (ball.vel.x * 4) + (ball.pos.x + tmpVec.x * 2);
+        tmpVec2.y = (ball.vel.y * 4) + (ball.pos.y + tmpVec.y * 2) + 2;
+        tmpVec2.z = (ball.vel.z * 4) + (ball.pos.z + tmpVec.z * 2);
+        this.eyeVel.x = 0.04 * (tmpVec2.x - this.eye.x);
+        this.eyeVel.y = 0.04 * (tmpVec2.y - this.eye.y);
+        this.eyeVel.z = 0.04 * (tmpVec2.z - this.eye.z);
+        break;
+      case 2:
+        tmpVec.x = this.goalReplayDir.x;
+        tmpVec.y = this.goalReplayDir.y * 0.05;
+        tmpVec.z = this.goalReplayDir.z;
+        setVecLen(tmpVec, -4);
+        tmpVec.y += 2.5;
+        tmpVec2.x = this.goalReplayGoal.x + tmpVec.x;
+        tmpVec2.y = this.goalReplayGoal.y + tmpVec.y;
+        tmpVec2.z = this.goalReplayGoal.z + tmpVec.z;
+        this.eyeVel.x = 0.04 * (tmpVec2.x - this.eye.x);
+        this.eyeVel.y = 0.04 * (tmpVec2.y - this.eye.y);
+        this.eyeVel.z = 0.04 * (tmpVec2.z - this.eye.z);
+        break;
+      case 3:
+        this.buildGoalReplayTransform(stageRuntime);
+        stack.tfPoint(this.unk54, tmpVec2);
+        tmpVec.x = tmpVec2.x - ball.pos.x;
+        tmpVec.y = 0;
+        tmpVec.z = tmpVec2.z - ball.pos.z;
+        setVecLen(tmpVec, this.unk60);
+        tmpVec2.x += tmpVec.x;
+        tmpVec2.y += tmpVec.y;
+        tmpVec2.z += tmpVec.z;
+        this.eyeVel.x = 0.02 * (tmpVec2.x - this.eye.x);
+        this.eyeVel.y = 0.02 * (tmpVec2.y - this.eye.y);
+        this.eyeVel.z = 0.02 * (tmpVec2.z - this.eye.z);
+        break;
+      case 0:
+      default:
+        this.eyeVel.x *= 0.98;
+        this.eyeVel.y *= 0.98;
+        this.eyeVel.z *= 0.98;
+        break;
+    }
+
+    this.eye.x += this.eyeVel.x;
+    this.eye.y += this.eyeVel.y;
+    this.eye.z += this.eyeVel.z;
+
+    this.lookAtVel.x = 0.15 * (ball.pos.x - this.lookAt.x);
+    this.lookAtVel.y = 0.15 * (ball.pos.y - this.lookAt.y);
+    this.lookAtVel.z = 0.15 * (ball.pos.z - this.lookAt.z);
+
+    this.lookAt.x += this.lookAtVel.x;
+    this.lookAt.y += this.lookAtVel.y;
+    this.lookAt.z += this.lookAtVel.z;
+
+    tmpVec.x = this.lookAt.x - this.eye.x;
+    tmpVec.y = this.lookAt.y - this.eye.y;
+    tmpVec.z = this.lookAt.z - this.eye.z;
+    cameraFaceDirection(this, tmpVec);
+  }
+
   update(ball, stageRuntime, paused, fastForwardIntro = false) {
     if (!paused) {
       this.smb2FrameCounter = (this.smb2FrameCounter + 1) >>> 0;
     }
     switch (this.state) {
+      case CAMERA_STATE.FALLOUT_MAIN:
+        this.updateFalloutMain(ball, paused);
+        break;
       case CAMERA_STATE.FALLOUT_REPLAY:
         this.updateFalloutReplay(ball, paused);
         break;
@@ -844,6 +1262,9 @@ export class GameplayCamera {
         break;
       case CAMERA_STATE.GOAL_MAIN:
         this.updateGoalMain(ball, paused);
+        break;
+      case CAMERA_STATE.GOAL_REPLAY:
+        this.updateGoalReplay(ball, stageRuntime, paused);
         break;
       case CAMERA_STATE.SPECTATOR_FREE:
         break;

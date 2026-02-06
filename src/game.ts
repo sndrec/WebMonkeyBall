@@ -55,12 +55,21 @@ const BANANA_BUNCH_POINTS = 1000;
 const BANANA_STATE_HOLDING = 7;
 const BANANA_HOLD_FRAMES = 30;
 const ITEM_FLAG_COLLIDABLE = 1 << 1;
-const GOAL_SEQUENCE_FRAMES = 360;
+const GOAL_SEQUENCE_FRAMES = 330;
 const BONUS_CLEAR_SEQUENCE_FRAMES = 180;
 const GOAL_SKIP_TOTAL_FRAMES = 210;
 const GOAL_SPECTATE_DESTROY_FRAMES = 180;
-const RINGOUT_TOTAL_FRAMES = 210;
+const RINGOUT_TOTAL_FRAMES = 270;
 const BONUS_FALLOUT_SPECTATE_FRAMES = 120;
+const RESULT_REPLAY_STATUS_TEXT = 'Replay';
+const RESULT_REPLAY_HISTORY_FRAMES = 720;
+const GOAL_RESULT_REPLAY_FRAMES = 180;
+const GOAL_RESULT_REPLAY_MAX_FRAMES = 240;
+const FALLOUT_RESULT_REPLAY_FRAMES = 120;
+const FALLOUT_RESULT_REPLAY_START_DELAY_FRAMES = 30;
+const FALLOUT_RESULT_REPLAY_SECONDARY_CUT_FRAME = 90;
+const RESULT_REPLAY_SKIP_DELAY_FRAMES = 30;
+const RESULT_REPLAY_MIN_FRAMES = 30;
 const PLAYER_NO_COLLIDE_CLEAR_EPS = 0.02;
 const RINGOUT_SKIP_DELAY_FRAMES = 60;
 const RINGOUT_STATUS_TEXT = 'Fall out!';
@@ -93,6 +102,36 @@ type PlayerState = {
   respawnTimerFrames: number;
   ringoutTimerFrames: number;
   ringoutSkipTimerFrames: number;
+};
+
+type ResultReplayHistoryFrame = {
+  state: any;
+  input: QuantizedInput;
+  cameraRotY: number;
+};
+
+type ActiveResultReplay = {
+  kind: 'goal' | 'fallout';
+  stateFrames: any[];
+  inputFrames: QuantizedInput[];
+  cameraRotYFrames: number[];
+  ballPath: Vec3[];
+  replayStartBallPos: Vec3 | null;
+  replayEventBallPos: Vec3 | null;
+  goalId: number;
+  goalAnimGroupId: number;
+  goalLocalPos: Vec3 | null;
+  goalRot: { x: number; y: number; z: number } | null;
+  goalWorldPos: Vec3 | null;
+  goalEntryVel: Vec3 | null;
+  falloutSecondaryCutDone: boolean;
+  playbackIndex: number;
+  elapsedFrames: number;
+  resumeState: any;
+  resumeStatusText: string;
+  replayStatusText: string;
+  goalHit: any;
+  deferredGoalTapeBreak: boolean;
 };
 
 function lerp(a: number, b: number, t: number): number {
@@ -400,6 +439,10 @@ export class Game {
   public inputStartTick: number;
   public replayInputStartTick: number | null;
   public replayAutoFastForward: boolean;
+  public resultReplayHistory: ResultReplayHistoryFrame[];
+  public activeResultReplay: ActiveResultReplay | null;
+  public resultReplayNeedsRestart: boolean;
+  public goalReplayStartArmed: boolean;
 
   constructor({
     hud,
@@ -532,6 +575,10 @@ export class Game {
     this.inputStartTick = 0;
     this.replayInputStartTick = null;
     this.replayAutoFastForward = false;
+    this.resultReplayHistory = [];
+    this.activeResultReplay = null;
+    this.resultReplayNeedsRestart = false;
+    this.goalReplayStartArmed = false;
   }
 
   setGameSource(source: GameSource) {
@@ -672,6 +719,10 @@ export class Game {
   setReplayMode(enabled: boolean, useFixedTicks = true) {
     this.autoRecordInputs = !enabled;
     this.setFixedTickMode(enabled && useFixedTicks, 1);
+    this.activeResultReplay = null;
+    this.resultReplayNeedsRestart = false;
+    this.goalReplayStartArmed = false;
+    this.resultReplayHistory.length = 0;
     if (enabled) {
       this.inputRecord = null;
       this.replayInputStartTick = 0;
@@ -868,6 +919,7 @@ export class Game {
       hurryUpAnnouncerPlayed: this.hurryUpAnnouncerPlayed,
       timeOverAnnouncerPlayed: this.timeOverAnnouncerPlayed,
       pendingAdvance: this.pendingAdvance,
+      goalReplayStartArmed: this.goalReplayStartArmed,
       world: this.world ? cloneWorldState(this.world) : null,
       players: this.players.map((player) => ({
         id: player.id,
@@ -1006,9 +1058,15 @@ export class Game {
     };
   }
 
-  loadRollbackState(state) {
+  loadRollbackState(state, { resetResultReplay = true }: { resetResultReplay?: boolean } = {}) {
     if (!state || !this.stageRuntime) {
       return;
+    }
+    if (resetResultReplay) {
+      this.activeResultReplay = null;
+      this.resultReplayNeedsRestart = false;
+      this.goalReplayStartArmed = false;
+      this.resultReplayHistory.length = 0;
     }
     const localPlayerBefore = this.getLocalPlayer();
     const localWasSpectator = localPlayerBefore?.isSpectator ?? false;
@@ -1031,6 +1089,7 @@ export class Game {
     this.hurryUpAnnouncerPlayed = !!state.hurryUpAnnouncerPlayed;
     this.timeOverAnnouncerPlayed = !!state.timeOverAnnouncerPlayed;
     this.pendingAdvance = !!state.pendingAdvance;
+    this.goalReplayStartArmed = !!state.goalReplayStartArmed;
     if (state.world && this.world) {
       this.world.xrot = state.world.xrot ?? this.world.xrot;
       this.world.zrot = state.world.zrot ?? this.world.zrot;
@@ -1125,6 +1184,395 @@ export class Game {
     if (state.stageRuntime) {
       this.stageRuntime.setState(state.stageRuntime);
     }
+  }
+
+  private shouldCaptureResultReplayHistory() {
+    const localPlayer = this.getLocalPlayer();
+    if (!localPlayer || !this.stageRuntime) {
+      return false;
+    }
+    if (this.gameSource !== GAME_SOURCES.SMB1) {
+      return false;
+    }
+    if (this.players.length > 1) {
+      return false;
+    }
+    if (this.paused || this.loadingStage || this.pendingAdvance) {
+      return false;
+    }
+    if (this.activeResultReplay) {
+      return false;
+    }
+    if (this.replayInputStartTick !== null || !this.autoRecordInputs) {
+      return false;
+    }
+    if (this.introTimerFrames > 0 || this.timeoverTimerFrames > 0) {
+      return false;
+    }
+    if (localPlayer.ringoutTimerFrames > 0) {
+      return false;
+    }
+    const captureGoalTail = localPlayer.goalTimerFrames > 0
+      && this.goalReplayStartArmed
+      && this.players.length <= 1
+      && this.gameSource === GAME_SOURCES.SMB1;
+    if (localPlayer.goalTimerFrames > 0 && !captureGoalTail) {
+      return false;
+    }
+    return true;
+  }
+
+  private getReplayLocalBallPosFromState(state): Vec3 | null {
+    if (!state || !Array.isArray(state.players)) {
+      return null;
+    }
+    const player = state.players.find((entry) => entry?.id === this.localPlayerId);
+    const pos = player?.ball?.pos;
+    if (!pos) {
+      return null;
+    }
+    return this.cloneVec3(pos);
+  }
+
+  private sampleResultReplayBallPosFromEnd(replay: ActiveResultReplay, offsetFrames: number): Vec3 | null {
+    const path = replay?.ballPath;
+    if (!path || path.length === 0) {
+      return null;
+    }
+    const clampedOffset = Math.max(0, Number.isFinite(offsetFrames) ? offsetFrames : 0);
+    const rawIndex = (path.length - 1) - Math.round(clampedOffset);
+    const index = Math.max(0, Math.min(path.length - 1, rawIndex));
+    const sample = path[index];
+    if (!sample) {
+      return null;
+    }
+    return { x: sample.x, y: sample.y, z: sample.z };
+  }
+
+  private getGoalWorldPos(goalHit: any): Vec3 | null {
+    if (!goalHit || !this.stage || !this.stageRuntime) {
+      return null;
+    }
+    const goalId = goalHit.goalId ?? -1;
+    const stageGoal = this.stage.goals?.[goalId];
+    if (!stageGoal?.pos) {
+      return null;
+    }
+    const worldPos = this.cloneVec3(stageGoal.pos);
+    const animGroupId = goalHit.animGroupId ?? 0;
+    if (animGroupId > 0) {
+      const animGroup = this.stageRuntime.animGroups?.[animGroupId];
+      if (animGroup?.transform) {
+        fallOutStack.fromMtx(animGroup.transform);
+        fallOutStack.tfPoint(worldPos, worldPos);
+      }
+    }
+    return worldPos;
+  }
+
+  private initResultReplayCamera(replay: ActiveResultReplay, { secondaryFalloutCut = false }: { secondaryFalloutCut?: boolean } = {}) {
+    const localPlayer = this.getLocalPlayer();
+    if (!localPlayer || localPlayer.freeFly) {
+      return;
+    }
+    const camera = localPlayer.camera;
+    const ball = localPlayer.ball;
+    const sample = (offset) => this.sampleResultReplayBallPosFromEnd(replay, offset) ?? this.cloneVec3(ball.pos);
+    if (replay.kind === 'fallout') {
+      camera.initFalloutReplay(ball);
+      const replayFrames = Math.max(1, Math.min(
+        replay.inputFrames.length,
+        secondaryFalloutCut ? FALLOUT_RESULT_REPLAY_SECONDARY_CUT_FRAME : FALLOUT_RESULT_REPLAY_FRAMES,
+      ));
+      let sampleLead = sample(0);
+      if (secondaryFalloutCut) {
+        const lookback = replayFrames * 0.25 * Math.random();
+        sampleLead = sample(lookback);
+      } else {
+        const lookback = (0.75 + 0.25 * Math.random()) * replayFrames;
+        sampleLead = sample(lookback);
+      }
+      const sampleNow = sample(0);
+      const randYaw = Math.random() * 0x8000;
+      fallOutStack.fromIdentity();
+      fallOutStack.rotateY(randYaw);
+      const eyeOffset = secondaryFalloutCut
+        ? { x: 1, y: 1, z: 1 }
+        : { x: 3, y: 3, z: 3 };
+      fallOutStack.tfVec(eyeOffset, eyeOffset);
+      const eye = {
+        x: sampleLead.x + eyeOffset.x,
+        y: sampleLead.y + eyeOffset.y,
+        z: sampleLead.z + eyeOffset.z,
+      };
+      const rel = {
+        x: eye.x - sampleNow.x,
+        y: eye.y - sampleNow.y,
+        z: eye.z - sampleNow.z,
+      };
+      const relLen = sqrt((rel.x * rel.x) + (rel.y * rel.y) + (rel.z * rel.z));
+      if (relLen > 1e-7 && (rel.y / relLen) > 0.9659258263) {
+        rel.y = 0;
+        const xzLen = sqrt((rel.x * rel.x) + (rel.z * rel.z));
+        if (xzLen > 1e-7) {
+          const scale = (0.2588190451 * (eye.y - sampleNow.y)) / xzLen;
+          rel.x *= scale;
+          rel.z *= scale;
+          eye.x = sampleNow.x + rel.x;
+          eye.z = sampleNow.z + rel.z;
+        }
+      }
+      if (secondaryFalloutCut) {
+        camera.eyeVel.x *= 0.1;
+        camera.eyeVel.y *= 0.1;
+        camera.eyeVel.z *= 0.1;
+        const sampleNext = sample((replayFrames * 0.25 * Math.random()) + 1);
+        camera.eyeVel.x += sampleLead.x - sampleNext.x;
+        camera.eyeVel.y += sampleLead.y - sampleNext.y;
+        camera.eyeVel.z += sampleLead.z - sampleNext.z;
+      } else {
+        camera.eyeVel.x *= 0.25;
+        camera.eyeVel.y *= 0.25;
+        camera.eyeVel.z *= 0.25;
+        const travelFrames = Math.max(1, Math.min(replayFrames, 60));
+        const sampleOld = sample(replayFrames - travelFrames);
+        const inv = 1 / travelFrames;
+        camera.eyeVel.x += (sampleOld.x - ball.pos.x) * inv;
+        camera.eyeVel.y += (sampleOld.y - ball.pos.y) * inv;
+        camera.eyeVel.z += (sampleOld.z - ball.pos.z) * inv;
+      }
+      camera.lookAtVel.x = 0;
+      camera.lookAtVel.y = 0;
+      camera.lookAtVel.z = 0;
+      camera.setEyeLookAt(eye, ball.pos);
+    } else {
+      camera.initGoalReplay(ball, {
+        goalId: replay.goalId,
+        goalAnimGroupId: replay.goalAnimGroupId,
+        goalLocalPos: replay.goalLocalPos,
+        goalRot: replay.goalRot,
+        goalPos: replay.goalWorldPos,
+        goalDir: replay.goalEntryVel,
+        replayStartPos: replay.replayStartBallPos,
+        replayEventPos: replay.replayEventBallPos,
+        stageRuntime: this.stageRuntime,
+      });
+    }
+    this.cameraController = camera;
+    this.syncCameraPose();
+  }
+
+  private pushResultReplayHistoryFrame() {
+    if (!this.shouldCaptureResultReplayHistory()) {
+      return;
+    }
+    const state = this.saveRollbackState();
+    const localPlayer = this.getLocalPlayer();
+    if (!state || !localPlayer) {
+      return;
+    }
+    this.resultReplayHistory.push({
+      state,
+      input: {
+        x: this.lastLocalInput?.x ?? 0,
+        y: this.lastLocalInput?.y ?? 0,
+        buttons: this.lastLocalInput?.buttons ?? 0,
+      },
+      cameraRotY: localPlayer.cameraRotY ?? 0,
+    });
+    const over = this.resultReplayHistory.length - RESULT_REPLAY_HISTORY_FRAMES;
+    if (over > 0) {
+      this.resultReplayHistory.splice(0, over);
+    }
+  }
+
+  private startResultReplay(
+    kind: 'goal' | 'fallout',
+    {
+      goalHit = null,
+      deferGoalTapeBreak = false,
+    }: { goalHit?: any; deferGoalTapeBreak?: boolean } = {},
+  ) {
+    if (this.activeResultReplay) {
+      return false;
+    }
+    if (this.gameSource !== GAME_SOURCES.SMB1 || this.players.length > 1) {
+      return false;
+    }
+    if (this.replayInputStartTick !== null || !this.autoRecordInputs) {
+      return false;
+    }
+    const localPlayerAtEvent = this.getLocalPlayer();
+    const goalWorldPos = kind === 'goal' ? this.getGoalWorldPos(goalHit) : null;
+    const goalId = kind === 'goal' ? (goalHit?.goalId ?? -1) : -1;
+    const goalAnimGroupId = kind === 'goal' ? (goalHit?.animGroupId ?? 0) : 0;
+    const stageGoal = kind === 'goal' && goalId >= 0 ? this.stage?.goals?.[goalId] : null;
+    const goalLocalPos = kind === 'goal'
+      ? (stageGoal?.pos ? this.cloneVec3(stageGoal.pos) : (goalWorldPos ? this.cloneVec3(goalWorldPos) : null))
+      : null;
+    const goalRot = kind === 'goal'
+      ? {
+        x: stageGoal?.rot?.x ?? 0,
+        y: stageGoal?.rot?.y ?? 0,
+        z: stageGoal?.rot?.z ?? 0,
+      }
+      : null;
+    const goalEntryVel = kind === 'goal'
+      ? this.cloneVec3(goalHit?.replayEntryVel ?? localPlayerAtEvent?.ball?.vel)
+      : null;
+    let replayFrames = kind === 'goal' ? GOAL_RESULT_REPLAY_FRAMES : FALLOUT_RESULT_REPLAY_FRAMES;
+    if (kind === 'goal' && goalEntryVel) {
+      const goalSpeed = sqrt(
+        (goalEntryVel.x * goalEntryVel.x)
+        + (goalEntryVel.y * goalEntryVel.y)
+        + (goalEntryVel.z * goalEntryVel.z)
+      );
+      const goalReplayTimer = Math.min(300, 210 + (goalSpeed * 300));
+      replayFrames = Math.max(
+        RESULT_REPLAY_MIN_FRAMES,
+        Math.min(GOAL_RESULT_REPLAY_MAX_FRAMES, Math.floor(goalReplayTimer - 60))
+      );
+    }
+    const historyCount = Math.min(this.resultReplayHistory.length, replayFrames + 1);
+    if (historyCount < RESULT_REPLAY_MIN_FRAMES + 1) {
+      return false;
+    }
+    const replayHistory = this.resultReplayHistory.slice(this.resultReplayHistory.length - historyCount);
+    const replayStateFrames = replayHistory.map((frame) => frame.state);
+    const replayInputFrames = replayHistory.slice(1).map((frame) => ({
+      x: frame.input?.x ?? 0,
+      y: frame.input?.y ?? 0,
+      buttons: frame.input?.buttons ?? 0,
+    }));
+    if (replayInputFrames.length < RESULT_REPLAY_MIN_FRAMES) {
+      return false;
+    }
+    const replayCameraRotYFrames = replayHistory.slice(1).map((frame) => frame.cameraRotY ?? 0);
+    const ballPath: Vec3[] = [];
+    for (const frame of replayHistory.slice(1)) {
+      const pos = this.getReplayLocalBallPosFromState(frame.state);
+      if (pos) {
+        ballPath.push(pos);
+      }
+    }
+    const rewindState = replayStateFrames[0];
+    const resumeState = this.saveRollbackState();
+    if (!rewindState || !resumeState) {
+      return false;
+    }
+    if (kind === 'goal') {
+      this.goalReplayStartArmed = false;
+      resumeState.goalReplayStartArmed = false;
+    }
+    const resumeBallPos = this.getReplayLocalBallPosFromState(resumeState);
+    const replayStartBallPos = this.getReplayLocalBallPosFromState(rewindState);
+    const replayEventBallPos = this.getReplayLocalBallPosFromState(replayStateFrames[replayStateFrames.length - 1]) ?? resumeBallPos;
+    if (resumeBallPos) {
+      ballPath.push(resumeBallPos);
+    }
+    if (ballPath.length === 0) {
+      return false;
+    }
+    this.loadRollbackState(rewindState, { resetResultReplay: false });
+    this.activeResultReplay = {
+      kind,
+      stateFrames: replayStateFrames,
+      inputFrames: replayInputFrames,
+      cameraRotYFrames: replayCameraRotYFrames,
+      ballPath,
+      replayStartBallPos,
+      replayEventBallPos,
+      goalId,
+      goalAnimGroupId,
+      goalLocalPos,
+      goalRot,
+      goalWorldPos,
+      goalEntryVel,
+      falloutSecondaryCutDone: false,
+      playbackIndex: 0,
+      elapsedFrames: 0,
+      resumeState,
+      resumeStatusText: this.statusText,
+      replayStatusText: RESULT_REPLAY_STATUS_TEXT,
+      goalHit: goalHit ? structuredClone(goalHit) : null,
+      deferredGoalTapeBreak: !!deferGoalTapeBreak,
+    };
+    this.resultReplayNeedsRestart = true;
+    this.initResultReplayCamera(this.activeResultReplay, { secondaryFalloutCut: false });
+    this.statusText = RESULT_REPLAY_STATUS_TEXT;
+    return true;
+  }
+
+  private consumeResultReplayInputFrame() {
+    const replay = this.activeResultReplay;
+    if (!replay) {
+      return null;
+    }
+    const index = replay.playbackIndex;
+    const frame = replay.inputFrames[index] ?? { x: 0, y: 0, buttons: 0 };
+    if (replay.playbackIndex < replay.inputFrames.length) {
+      replay.playbackIndex += 1;
+    }
+    replay.elapsedFrames += 1;
+    return frame;
+  }
+
+  private getResultReplayCameraRotY() {
+    const replay = this.activeResultReplay;
+    if (!replay || replay.cameraRotYFrames.length === 0) {
+      return null;
+    }
+    const index = replay.playbackIndex;
+    if (index >= replay.cameraRotYFrames.length) {
+      return replay.cameraRotYFrames[replay.cameraRotYFrames.length - 1];
+    }
+    return replay.cameraRotYFrames[index] ?? null;
+  }
+
+  private stepResultReplay() {
+    const replay = this.activeResultReplay;
+    if (!replay) {
+      return false;
+    }
+    this.statusText = replay.replayStatusText;
+    if (replay.kind === 'fallout' && !replay.falloutSecondaryCutDone) {
+      if (replay.elapsedFrames >= FALLOUT_RESULT_REPLAY_SECONDARY_CUT_FRAME) {
+        replay.falloutSecondaryCutDone = true;
+        const secondSegmentFrames = Math.min(FALLOUT_RESULT_REPLAY_SECONDARY_CUT_FRAME, replay.inputFrames.length);
+        const secondStartIndex = Math.max(0, replay.inputFrames.length - secondSegmentFrames);
+        const secondStateIndex = Math.min(
+          Math.max(0, secondStartIndex),
+          Math.max(0, replay.stateFrames.length - 1),
+        );
+        const secondStartState = replay.stateFrames[secondStateIndex];
+        if (secondStartState) {
+          this.loadRollbackState(secondStartState, { resetResultReplay: false });
+        }
+        replay.playbackIndex = secondStartIndex;
+        replay.elapsedFrames = 0;
+        this.initResultReplayCamera(replay, { secondaryFalloutCut: true });
+        return false;
+      }
+    }
+    const canSkip = replay.elapsedFrames >= RESULT_REPLAY_SKIP_DELAY_FRAMES && this.input?.isPrimaryActionDown?.();
+    const replayDone = replay.playbackIndex >= replay.inputFrames.length;
+    if (!canSkip && !replayDone) {
+      return false;
+    }
+    this.activeResultReplay = null;
+    this.resultReplayNeedsRestart = false;
+    this.loadRollbackState(replay.resumeState, { resetResultReplay: false });
+    const localPlayer = this.getLocalPlayer();
+    if (localPlayer && replay.deferredGoalTapeBreak && replay.goalHit) {
+      this.breakGoalTapeForBall(localPlayer.ball, replay.goalHit);
+    }
+    this.statusText = replay.resumeStatusText;
+    this.resultReplayHistory.length = 0;
+    this.accumulator = 0;
+    if (replay.kind === 'goal') {
+      void this.finishGoalSequence();
+    }
+    return true;
   }
 
   private copyVec3(target, source) {
@@ -2165,6 +2613,10 @@ export class Game {
   async loadStage(stageId: number) {
     const loadToken = ++this.loadToken;
     const isRestart = this.stage?.stageId === stageId;
+    this.activeResultReplay = null;
+    this.resultReplayNeedsRestart = false;
+    this.goalReplayStartArmed = false;
+    this.resultReplayHistory.length = 0;
     this.loadingStage = true;
     this.accumulator = 0;
     this.input?.clearPressed();
@@ -2286,6 +2738,10 @@ export class Game {
     if (!this.stage) {
       return;
     }
+    this.activeResultReplay = null;
+    this.resultReplayNeedsRestart = false;
+    this.goalReplayStartArmed = false;
+    this.resultReplayHistory.length = 0;
     const localPlayer = this.getLocalPlayer();
     if (localPlayer) {
       localPlayer.finished = false;
@@ -2416,6 +2872,7 @@ export class Game {
     if (!localBall || !localPlayer || localPlayer.ringoutTimerFrames > 0) {
       return;
     }
+    this.goalReplayStartArmed = false;
     localPlayer.ringoutTimerFrames = isBonusStage ? BONUS_FALLOUT_SPECTATE_FRAMES : RINGOUT_TOTAL_FRAMES;
     localPlayer.ringoutSkipTimerFrames = isBonusStage ? 0 : RINGOUT_SKIP_DELAY_FRAMES;
     if (isBonusStage && this.players.length > 1) {
@@ -2431,7 +2888,7 @@ export class Game {
         void this.audio?.playAnnouncerBonusFinish();
       }
     }
-    localPlayer.camera.initFalloutReplay(localBall);
+    localPlayer.camera.setFalloutMain(localBall);
     this.updateHud();
   }
 
@@ -2441,6 +2898,7 @@ export class Game {
     if (!localBall || this.timeoverTimerFrames > 0) {
       return;
     }
+    this.goalReplayStartArmed = false;
     this.timeoverTimerFrames = TIMEOVER_TOTAL_FRAMES;
     this.multiplayerGoalTimerFrames = 0;
     if (this.players.length > 1 && !isBonusStage) {
@@ -2499,6 +2957,12 @@ export class Game {
       && this.input?.isPrimaryActionDown?.();
     if (canSkip) {
       localPlayer.ringoutTimerFrames = 0;
+    }
+    if (!isBonusStage && this.players.length <= 1 && !this.activeResultReplay) {
+      const replayStartTimer = Math.max(1, RINGOUT_TOTAL_FRAMES - FALLOUT_RESULT_REPLAY_START_DELAY_FRAMES);
+      if (localPlayer.ringoutTimerFrames === replayStartTimer) {
+        this.startResultReplay('fallout');
+      }
     }
     if (localPlayer.ringoutTimerFrames > 0) {
       return false;
@@ -2753,6 +3217,9 @@ export class Game {
     if (!this.input) {
       return;
     }
+    if (this.activeResultReplay) {
+      return;
+    }
     if (!this.allowCourseAdvance) {
       return;
     }
@@ -2801,7 +3268,10 @@ export class Game {
     if (!localPlayer || localPlayer.goalTimerFrames > 0 || !this.stage || !localBall) {
       return;
     }
-    localPlayer.goalInfo = goalHit;
+    localPlayer.goalInfo = {
+      ...goalHit,
+      replayEntryVel: this.cloneVec3(localBall.vel),
+    };
     localPlayer.finished = true;
     localPlayer.goalType = goalHit?.goalType ?? null;
     const timeRemaining = Math.max(0, this.stageTimeLimitFrames - this.stageTimerFrames);
@@ -2813,9 +3283,7 @@ export class Game {
     localPlayer.goalSkipTimerFrames = GOAL_SKIP_TOTAL_FRAMES;
     startGoal(localBall);
     if (this.players.length > 1) {
-    if (this.players.length > 1) {
       localPlayer.spectateTimerFrames = GOAL_SPECTATE_DESTROY_FRAMES;
-    }
     }
     if (!this.suppressAudioEffects) {
       void this.audio?.playGoal(this.gameSource);
@@ -2826,10 +3294,11 @@ export class Game {
         void this.audio.playAnnouncerTimeBonus(this.gameSource, isHigh);
       }
     }
-    this.breakGoalTapeForBall(localBall, goalHit);
     if (!localPlayer.freeFly) {
       localPlayer.camera.setGoalMain();
     }
+    this.breakGoalTapeForBall(localBall, goalHit);
+    this.goalReplayStartArmed = this.gameSource === GAME_SOURCES.SMB1 && this.players.length <= 1;
   }
 
   private breakGoalTapeForBall(ball: ReturnType<typeof createBallState>, goalHit: any) {
@@ -2855,6 +3324,7 @@ export class Game {
     if (!this.course || !this.stage) {
       return;
     }
+    this.goalReplayStartArmed = false;
     const localPlayer = this.getLocalPlayer();
     if (this.bonusClearPending) {
       this.bonusClearPending = false;
@@ -2923,9 +3393,10 @@ export class Game {
   }
 
   private readDeterministicStick(inputEnabled: boolean) {
-    let frame = null;
+    let frame = this.consumeResultReplayInputFrame();
+    const usingResultReplayFrame = !!(this.activeResultReplay && frame);
     const canConsumeReplay = this.replayInputStartTick === null || this.simTick >= this.replayInputStartTick;
-    if (this.inputFeed && canConsumeReplay) {
+    if (!frame && this.inputFeed && canConsumeReplay) {
       frame = this.inputFeed[this.inputFeedIndex] ?? { x: 0, y: 0 };
       this.inputFeedIndex += 1;
     }
@@ -2934,10 +3405,16 @@ export class Game {
     }
 
     if (!inputEnabled) {
+      if (usingResultReplayFrame && frame) {
+        return dequantizeStick(frame);
+      }
+      if (!frame) {
+        this.lastLocalInput = { x: 0, y: 0, buttons: 0 };
+      }
       return { x: 0, y: 0 };
     }
 
-    if (this.inputRecord && this.autoRecordInputs) {
+    if (this.inputRecord && this.autoRecordInputs && !this.activeResultReplay) {
       if (this.inputRecord.length === 0) {
         this.inputStartTick = this.simTick;
       }
@@ -2971,9 +3448,6 @@ export class Game {
   }
 
   private readDeterministicStickForPlayer(player: PlayerState, inputEnabled: boolean) {
-    if (!inputEnabled) {
-      return { x: 0, y: 0 };
-    }
     const feed = this.playerInputFeeds.get(player.id);
     if (feed && (this.replayInputStartTick === null || this.simTick >= this.replayInputStartTick)) {
       const idx = this.playerInputFeedIndices.get(player.id) ?? 0;
@@ -2984,6 +3458,9 @@ export class Game {
     }
     if (player.id === this.localPlayerId) {
       return this.readDeterministicStick(inputEnabled);
+    }
+    if (!inputEnabled) {
+      return { x: 0, y: 0 };
     }
     return { x: 0, y: 0 };
   }
@@ -3019,7 +3496,9 @@ export class Game {
         const tickStart = this.simPerf.enabled ? nowMs() : 0;
         try {
         const simPlayers = this.getPlayersSorted();
-        const ringoutActive = localPlayer.ringoutTimerFrames > 0;
+        const resultReplayActive = this.activeResultReplay !== null;
+        const replayFalloutActive = this.activeResultReplay?.kind === 'fallout';
+        const ringoutActive = localPlayer.ringoutTimerFrames > 0 || replayFalloutActive;
         const timeoverActive = this.timeoverTimerFrames > 0;
         const stageInputEnabled = this.introTimerFrames <= 0 && !timeoverActive;
         const localInputEnabled = stageInputEnabled
@@ -3047,8 +3526,14 @@ export class Game {
         this.stageRuntime.goalHoldOpen = this.players.length <= 1
           ? localPlayer.goalTimerFrames > 0
           : simPlayers.some((player) => player.goalTimerFrames > 0);
+        const replayCameraRotY = this.getResultReplayCameraRotY();
         for (const player of simPlayers) {
-          player.cameraRotY = player.camera.rotY;
+          if (player.id === this.localPlayerId && replayCameraRotY !== null) {
+            // Keep the tilt/input camera basis deterministic while replay camera runs bespoke shots.
+            player.cameraRotY = replayCameraRotY;
+          } else {
+            player.cameraRotY = player.camera.rotY;
+          }
         }
         let tiltCount = 0;
         let avgGravX = 0;
@@ -3111,9 +3596,22 @@ export class Game {
             }
             this.goalWooshPlayed = true;
           }
+          if (
+            this.goalReplayStartArmed
+            && this.players.length <= 1
+            && this.gameSource === GAME_SOURCES.SMB1
+            && (localBall.flags & BALL_FLAGS.FLAG_09)
+            && localPlayer.goalTimerFrames > 60
+            && localPlayer.goalTimerFrames < 240
+          ) {
+            // Match SMB1 goal-main behavior: once the launch event has happened, clamp to the
+            // final 60-frame window before entering goal replay.
+            localPlayer.goalTimerFrames = 60;
+          }
           const canSkipGoal = this.players.length <= 1
             && localPlayer.goalSkipTimerFrames <= 0
             && (localBall.flags & BALL_FLAGS.FLAG_09)
+            && !resultReplayActive
             && this.input?.isPrimaryActionDown?.();
           if (canSkipGoal) {
             localPlayer.goalTimerFrames = 0;
@@ -3121,10 +3619,29 @@ export class Game {
             void this.finishGoalSequence();
             break;
           }
-          if (localPlayer.goalTimerFrames === 0) {
-            this.accumulator = 0;
-            void this.finishGoalSequence();
-            break;
+          if (localPlayer.goalTimerFrames <= 0) {
+            localPlayer.goalTimerFrames = 0;
+            const shouldStartGoalReplay = this.goalReplayStartArmed
+              && !resultReplayActive
+              && this.players.length <= 1
+              && this.gameSource === GAME_SOURCES.SMB1
+              && (localBall.flags & BALL_FLAGS.FLAG_09);
+            if (shouldStartGoalReplay) {
+              const startedReplay = this.startResultReplay('goal', {
+                goalHit: localPlayer.goalInfo,
+                deferGoalTapeBreak: false,
+              });
+              if (startedReplay) {
+                this.goalReplayStartArmed = false;
+                this.accumulator = 0;
+                break;
+              }
+            }
+            if (!resultReplayActive) {
+              this.accumulator = 0;
+              void this.finishGoalSequence();
+              break;
+            }
           }
         }
         for (const player of simPlayers) {
@@ -3204,10 +3721,10 @@ export class Game {
               ball.wormholeTransform = null;
             }
             if (player.id === this.localPlayerId) {
-              if (!localPlayer.finished && !ringoutActive && localPlayer.goalTimerFrames <= 0 && this.isBallFalloutForBall(ball)) {
+              if (!resultReplayActive && !localPlayer.finished && !ringoutActive && localPlayer.goalTimerFrames <= 0 && this.isBallFalloutForBall(ball)) {
                 this.beginFalloutSequence(isBonusStage);
               }
-            } else if (!player.finished && player.ringoutTimerFrames <= 0 && this.isBallFalloutForBall(ball)) {
+            } else if (!resultReplayActive && !player.finished && player.ringoutTimerFrames <= 0 && this.isBallFalloutForBall(ball)) {
               player.ringoutTimerFrames = isBonusStage ? BONUS_FALLOUT_SPECTATE_FRAMES : RINGOUT_TOTAL_FRAMES;
               player.ringoutSkipTimerFrames = 0;
               if (isBonusStage) {
@@ -3215,6 +3732,11 @@ export class Game {
               }
               player.camera.initFalloutReplay(ball);
             }
+          }
+          if (this.activeResultReplay && this.resultReplayNeedsRestart) {
+            this.resultReplayNeedsRestart = false;
+            this.accumulator = 0;
+            break;
           }
           this.resolvePlayerCollisions(simPlayers);
           const switchPresses = this.stageRuntime.switchPressCount ?? 0;
@@ -3234,7 +3756,7 @@ export class Game {
           void this.audio.consumeBallEvents(localBall, this.gameSource);
         }
         const timerShouldRun = this.players.length <= 1
-          ? (localInputEnabled && !this.paused && localPlayer.ringoutTimerFrames <= 0 && !timeoverActive)
+          ? (!resultReplayActive && localInputEnabled && !this.paused && localPlayer.ringoutTimerFrames <= 0 && !timeoverActive)
           : (!this.paused && stageInputEnabled);
         if (timerShouldRun) {
           this.stageTimerFrames += 1;
@@ -3269,7 +3791,7 @@ export class Game {
             break;
           }
         }
-        const canCollectBananas = !ringoutActive && !timeoverActive && hasPlayableBall;
+        const canCollectBananas = !resultReplayActive && !ringoutActive && !timeoverActive && hasPlayableBall;
         if (canCollectBananas) {
           this.collectBananas();
         }
@@ -3311,7 +3833,17 @@ export class Game {
             player.finished = true;
             player.goalType = goalHit?.goalType ?? null;
             if (player.id === this.localPlayerId) {
-              this.beginGoalSequence(goalHit);
+              if (resultReplayActive) {
+                if (!player.goalInfo) {
+                  player.goalInfo = goalHit;
+                }
+                if (!(ball.flags & BALL_FLAGS.GOAL)) {
+                  startGoal(ball);
+                }
+                this.breakGoalTapeForBall(ball, goalHit);
+              } else {
+                this.beginGoalSequence(goalHit);
+              }
             } else {
               player.goalInfo = goalHit;
               player.goalTimerFrames = GOAL_SEQUENCE_FRAMES;
@@ -3325,12 +3857,17 @@ export class Game {
             }
           }
         }
-        if (ringoutActive) {
+        if (this.activeResultReplay && this.resultReplayNeedsRestart) {
+          this.resultReplayNeedsRestart = false;
+          this.accumulator = 0;
+          break;
+        }
+        if (!resultReplayActive && ringoutActive) {
           if (this.updateRingout(isBonusStage)) {
             break;
           }
         }
-        if (timeoverActive) {
+        if (!resultReplayActive && timeoverActive) {
           if (this.updateTimeover(isBonusStage)) {
             break;
           }
@@ -3413,6 +3950,13 @@ export class Game {
             }
             player.camera.update(player.ball, this.stageRuntime, cameraPaused, fastForwardIntro);
           }
+        }
+        if (this.activeResultReplay) {
+          if (this.stepResultReplay()) {
+            break;
+          }
+        } else {
+          this.pushResultReplayHistoryFrame();
         }
         this.accumulator -= this.fixedStep;
         } finally {

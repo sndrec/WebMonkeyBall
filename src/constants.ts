@@ -60,10 +60,12 @@ export const INFO_FLAGS = {
 
 export const CAMERA_STATE = {
   LEVEL_MAIN: 1,
+  FALLOUT_MAIN: 4,
   FALLOUT_REPLAY: 8,
   READY_INIT: 10,
   READY_MAIN: 11,
   GOAL_MAIN: 15,
+  GOAL_REPLAY: 17,
   SPECTATOR_FREE: 20,
 };
 
