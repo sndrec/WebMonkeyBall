@@ -7,6 +7,7 @@ import { AudioManager } from './audio.js';
 import {
   BALL_FLAGS,
   BALL_STATES,
+  CAMERA_STATE,
   DEFAULT_STAGE_TIME,
   GAME_SOURCES,
   INFO_FLAGS,
@@ -1281,15 +1282,19 @@ export class Game {
     const ball = localPlayer.ball;
     const sample = (offset) => this.sampleResultReplayBallPosFromEnd(replay, offset) ?? this.cloneVec3(ball.pos);
     if (replay.kind === 'fallout') {
-      camera.initFalloutReplay(ball);
+      // Match SMB1 fallout replay setup: clear camera state before seeding each cut.
+      camera.reset();
+      camera.state = CAMERA_STATE.FALLOUT_REPLAY;
+      camera.flags |= 1 | 4;
       const replayFrames = Math.max(1, Math.min(
         replay.inputFrames.length,
         secondaryFalloutCut ? FALLOUT_RESULT_REPLAY_SECONDARY_CUT_FRAME : FALLOUT_RESULT_REPLAY_FRAMES,
       ));
       let sampleLead = sample(0);
+      let secondaryLookback = 0;
       if (secondaryFalloutCut) {
-        const lookback = replayFrames * 0.25 * Math.random();
-        sampleLead = sample(lookback);
+        secondaryLookback = replayFrames * 0.25 * Math.random();
+        sampleLead = sample(secondaryLookback);
       } else {
         const lookback = (0.75 + 0.25 * Math.random()) * replayFrames;
         sampleLead = sample(lookback);
@@ -1328,10 +1333,10 @@ export class Game {
         camera.eyeVel.x *= 0.1;
         camera.eyeVel.y *= 0.1;
         camera.eyeVel.z *= 0.1;
-        const sampleNext = sample((replayFrames * 0.25 * Math.random()) + 1);
-        camera.eyeVel.x += sampleLead.x - sampleNext.x;
-        camera.eyeVel.y += sampleLead.y - sampleNext.y;
-        camera.eyeVel.z += sampleLead.z - sampleNext.z;
+        const sampleNext = sample(secondaryLookback + 1);
+        camera.eyeVel.x += (sampleNext.x - sampleLead.x) * 0.6;
+        camera.eyeVel.y += (sampleNext.y - sampleLead.y) * 0.6;
+        camera.eyeVel.z += (sampleNext.z - sampleLead.z) * 0.6;
       } else {
         camera.eyeVel.x *= 0.25;
         camera.eyeVel.y *= 0.25;
