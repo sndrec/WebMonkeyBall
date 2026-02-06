@@ -148,7 +148,7 @@ function encodeFrameBatchPacket(lastAck: number, frames: FrameBundleMessage[]) {
     if (hasHash) {
       byteLength += 4 + 4;
     }
-    byteLength += inputs.length * (2 + 1 + 1 + 4);
+    byteLength += inputs.length * (4 + 1 + 1 + 4);
   }
   const buffer = new ArrayBuffer(byteLength);
   const view = new DataView(buffer);
@@ -179,8 +179,8 @@ function encodeFrameBatchPacket(lastAck: number, frames: FrameBundleMessage[]) {
     }
     for (let j = 0; j < inputCount; j += 1) {
       const input = frame.inputs[j];
-      view.setUint16(offs, input.playerId >>> 0, true);
-      offs += 2;
+      view.setUint32(offs, input.playerId >>> 0, true);
+      offs += 4;
       view.setInt8(offs, clampI8(input.input.x));
       offs += 1;
       view.setInt8(offs, clampI8(input.input.y));
@@ -229,11 +229,11 @@ function decodeFrameBatchPacket(data: ArrayBuffer): FrameBundleMessage[] | null 
     }
     const inputs: Record<number, QuantizedInput> = {};
     for (let j = 0; j < inputCount; j += 1) {
-      if ((offs + 8) > view.byteLength) {
+      if ((offs + 10) > view.byteLength) {
         return null;
       }
-      const playerId = view.getUint16(offs, true);
-      offs += 2;
+      const playerId = view.getUint32(offs, true);
+      offs += 4;
       const x = view.getInt8(offs);
       offs += 1;
       const y = view.getInt8(offs);
