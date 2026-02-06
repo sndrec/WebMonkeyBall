@@ -446,6 +446,8 @@ export class Game {
   public activeResultReplay: ActiveResultReplay | null;
   public resultReplayNeedsRestart: boolean;
   public goalReplayStartArmed: boolean;
+  public hudGoalEventTick: number;
+  public hudRingoutEventTick: number;
 
   constructor({
     hud,
@@ -582,6 +584,8 @@ export class Game {
     this.activeResultReplay = null;
     this.resultReplayNeedsRestart = false;
     this.goalReplayStartArmed = false;
+    this.hudGoalEventTick = -1;
+    this.hudRingoutEventTick = -1;
   }
 
   setGameSource(source: GameSource) {
@@ -910,6 +914,8 @@ export class Game {
     });
     return {
       simTick: this.simTick,
+      hudGoalEventTick: this.hudGoalEventTick,
+      hudRingoutEventTick: this.hudRingoutEventTick,
       stageTimerFrames: this.stageTimerFrames,
       stageTimeLimitFrames: this.stageTimeLimitFrames,
       bananasLeft: this.bananasLeft,
@@ -1093,6 +1099,8 @@ export class Game {
     this.timeOverAnnouncerPlayed = !!state.timeOverAnnouncerPlayed;
     this.pendingAdvance = !!state.pendingAdvance;
     this.goalReplayStartArmed = !!state.goalReplayStartArmed;
+    this.hudGoalEventTick = Number.isFinite(state.hudGoalEventTick) ? state.hudGoalEventTick : -1;
+    this.hudRingoutEventTick = Number.isFinite(state.hudRingoutEventTick) ? state.hudRingoutEventTick : -1;
     if (state.world && this.world) {
       this.world.xrot = state.world.xrot ?? this.world.xrot;
       this.world.zrot = state.world.zrot ?? this.world.zrot;
@@ -2962,6 +2970,7 @@ export class Game {
       return;
     }
     this.goalReplayStartArmed = false;
+    this.hudRingoutEventTick = this.simTick;
     localPlayer.ringoutTimerFrames = isBonusStage ? BONUS_FALLOUT_SPECTATE_FRAMES : RINGOUT_TOTAL_FRAMES;
     localPlayer.ringoutSkipTimerFrames = isBonusStage ? 0 : RINGOUT_SKIP_DELAY_FRAMES;
     if (isBonusStage && this.players.length > 1) {
@@ -3364,6 +3373,7 @@ export class Game {
       ...goalHit,
       replayEntryVel: this.cloneVec3(localBall.vel),
     };
+    this.hudGoalEventTick = this.simTick;
     localPlayer.finished = true;
     localPlayer.goalType = goalHit?.goalType ?? null;
     const timeRemaining = Math.max(0, this.stageTimeLimitFrames - this.stageTimerFrames);

@@ -689,6 +689,9 @@ export class HudRenderer {
   private lastGoalFrames = 0;
   private lastTimeOverFrames = 0;
   private lastRingoutFrames = 0;
+  private lastResultReplayActive = false;
+  private lastGoalEventTick = -1;
+  private lastRingoutEventTick = -1;
   private lastStageId: number | null = null;
   private lastBonusClear = false;
 
@@ -806,6 +809,38 @@ export class HudRenderer {
     const goalTimerFrames = hudPlayer?.goalTimerFrames ?? game.goalTimerFrames ?? 0;
     const ringoutTimerFrames = hudPlayer?.ringoutTimerFrames ?? game.ringoutTimerFrames ?? 0;
     const goalInfo = hudPlayer?.goalInfo ?? game.goalInfo ?? null;
+    const replayActive = Boolean(game.activeResultReplay);
+    const replayJustEnded = this.lastResultReplayActive && !replayActive;
+    const suppressResultReplayEventStart = replayActive || replayJustEnded;
+    const goalEventTick = Number.isFinite(game.hudGoalEventTick) ? game.hudGoalEventTick : null;
+    const ringoutEventTick = Number.isFinite(game.hudRingoutEventTick) ? game.hudRingoutEventTick : null;
+    const goalEventTriggered = goalEventTick !== null && goalEventTick >= 0 && goalEventTick !== this.lastGoalEventTick;
+    const ringoutEventTriggered = ringoutEventTick !== null
+      && ringoutEventTick >= 0
+      && ringoutEventTick !== this.lastRingoutEventTick;
+    const goalEventRewound = goalEventTick !== null
+      && goalEventTick >= -1
+      && goalEventTick < this.lastGoalEventTick;
+    const ringoutEventRewound = ringoutEventTick !== null
+      && ringoutEventTick >= -1
+      && ringoutEventTick < this.lastRingoutEventTick;
+    const goalTimerEdgeTriggered = this.lastGoalFrames === 0 && goalTimerFrames > 0;
+    const ringoutTimerEdgeTriggered = this.lastRingoutFrames === 0 && ringoutTimerFrames > 0;
+    const shouldStartGoalBanner = !suppressResultReplayEventStart
+      && this.goalBanner.timer <= 0
+      && !game.bonusClearPending
+      && (goalEventTriggered || (goalEventTick === null && goalTimerEdgeTriggered));
+    const shouldStartRingoutBanner = !suppressResultReplayEventStart
+      && this.fallOutBanner.timer <= 0
+      && (ringoutEventTriggered || (ringoutEventTick === null && ringoutTimerEdgeTriggered));
+    if (!replayActive && goalEventRewound && goalTimerFrames <= 0) {
+      this.goalBanner.timer = 0;
+      this.warpTrails = [];
+      this.goalScoreInfo = null;
+    }
+    if (!replayActive && ringoutEventRewound && ringoutTimerFrames <= 0) {
+      this.fallOutBanner.timer = 0;
+    }
     const stageId = game.stage?.stageId ?? null;
     if (stageId !== this.lastStageId) {
       this.lastStageId = stageId;
@@ -855,7 +890,7 @@ export class HudRenderer {
       }
     }
 
-    if (this.lastGoalFrames === 0 && goalTimerFrames > 0 && !game.bonusClearPending) {
+    if (shouldStartGoalBanner) {
       this.beginBanner(this.goalBanner);
       const timeRemaining = Math.max(0, (game.stageTimeLimitFrames ?? 0) - (game.stageTimerFrames ?? 0));
       const goalType = normalizeGoalType(goalInfo?.goalType ?? game.stage?.goals?.[0]?.type ?? 'B');
@@ -912,7 +947,7 @@ export class HudRenderer {
       }
     }
 
-    if (this.lastRingoutFrames === 0 && ringoutTimerFrames > 0) {
+    if (shouldStartRingoutBanner) {
       if (game.isBonusStageActive?.()) {
         this.beginBanner(this.bonusFinishBanner);
       } else {
@@ -925,6 +960,13 @@ export class HudRenderer {
     this.lastTimeOverFrames = game.timeoverTimerFrames;
     this.lastRingoutFrames = ringoutTimerFrames;
     this.lastBonusClear = game.bonusClearPending;
+    this.lastResultReplayActive = replayActive;
+    if (goalEventTick !== null) {
+      this.lastGoalEventTick = goalEventTick;
+    }
+    if (ringoutEventTick !== null) {
+      this.lastRingoutEventTick = ringoutEventTick;
+    }
 
     if (goalTimerFrames <= 0) {
       this.goalScoreInfo = null;
