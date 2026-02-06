@@ -201,18 +201,32 @@ layout(std140) uniform ub_ShadowParams {
 };
 
 layout(location = 0) in vec4 a_Position;
+layout(location = 3) in vec3 a_Normal;
 
 out vec3 v_ShadowPos;
 out vec2 v_ShadowUV;
+out vec3 v_ShadowNormal;
+out float v_HasShadowNormal;
 
 void main() {
     mat4 proj = UnpackMatrix(u_Projection);
     mat4 viewFromModel = UnpackMatrix(u_ViewFromModel);
     mat4 shadowFromView = UnpackMatrix(u_ShadowFromView);
+    mat4 shadowFromModel = shadowFromView * viewFromModel;
+    mat3 shadowNormalFromModel = mat3(transpose(inverse(shadowFromModel)));
     vec4 posView = viewFromModel * vec4(a_Position.xyz, 1.0);
-    vec4 posShadow = shadowFromView * posView;
+    vec4 posShadow = shadowFromModel * vec4(a_Position.xyz, 1.0);
     v_ShadowPos = posShadow.xyz;
     v_ShadowUV = posShadow.xy / (u_ShadowInfo.x * 2.0) + vec2(0.5);
+    vec3 normalShadow = shadowNormalFromModel * a_Normal;
+    float normalLen = length(normalShadow);
+    if (normalLen > 1e-5) {
+        v_ShadowNormal = normalShadow / normalLen;
+        v_HasShadowNormal = 1.0;
+    } else {
+        v_ShadowNormal = vec3(0.0);
+        v_HasShadowNormal = 0.0;
+    }
     gl_Position = proj * posView;
 }
 `;
@@ -233,6 +247,8 @@ uniform sampler2D u_Texture;
 
 in vec3 v_ShadowPos;
 in vec2 v_ShadowUV;
+in vec3 v_ShadowNormal;
+in float v_HasShadowNormal;
 
 out vec4 o_Color;
 
@@ -240,9 +256,20 @@ void main() {
     if (v_ShadowUV.x < 0.0 || v_ShadowUV.x > 1.0 || v_ShadowUV.y < 0.0 || v_ShadowUV.y > 1.0) {
         discard;
     }
+    if (v_HasShadowNormal > 0.5) {
+        // Directional light comparison in shadow space.
+        float facing = dot(normalize(v_ShadowNormal), vec3(0.0, 0.0, 1.0));
+        if (facing <= 0.0) {
+            discard;
+        }
+    }
     vec4 tex = texture(u_Texture, v_ShadowUV);
     float dist = u_ShadowInfo.y - v_ShadowPos.z;
-    float fade = clamp(1.0 - dist * u_ShadowInfo.z, 0.0, 1.0);
+    // if (dist <= -0.03) {
+    //     discard;
+    // }
+    float distForFade = max(dist, 0.0);
+    float fade = clamp(1.0 - distForFade * u_ShadowInfo.z, 0.0, 1.0);
     float mask = max(max(tex.r, tex.g), tex.b);
     float alpha = mask * u_ShadowColor.a * fade;
     if (alpha <= 0.0) {
