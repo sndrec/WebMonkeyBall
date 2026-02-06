@@ -811,7 +811,7 @@ const NETPLAY_HOST_SNAPSHOT_COOLDOWN_MS = 1500;
 const NETPLAY_SNAPSHOT_MISMATCH_COOLDOWN_MS = 250;
 const NETPLAY_MAX_INPUT_AHEAD = 60;
 const NETPLAY_MAX_INPUT_BEHIND = 60;
-const NETPLAY_HOST_MAX_INPUT_ROLLBACK = 12;
+const NETPLAY_HOST_MAX_INPUT_ROLLBACK = 16;
 const LOBBY_MAX_PLAYERS = 8;
 const NAMEPLATE_OFFSET_SCALE = 1.6;
 const STAGE_TILT_SCALE = 0.6;
@@ -3869,15 +3869,16 @@ function hostResendFrames(currentFrame: number) {
     for (let frame = start; frame <= currentFrame; frame += 1) {
       framesToSend.add(frame);
     }
+    const bundles: FrameBundleMessage[] = [];
     for (const frame of Array.from(framesToSend).sort((a, b) => a - b)) {
       const bundle = netplayState.hostFrameBuffer.get(frame);
       if (!bundle) {
         continue;
       }
-      hostRelay.sendTo(playerId, {
-        ...bundle,
-        lastAck: clientState.lastAckedClientInput,
-      });
+      bundles.push(bundle);
+    }
+    if (bundles.length > 0) {
+      hostRelay.sendFrameBatch(playerId, clientState.lastAckedClientInput, bundles);
     }
   }
   if (pendingFrames) {
@@ -3915,19 +3916,16 @@ function clientSendInputBuffer(currentFrame: number) {
   const start = netplayState.lastAckedLocalFrame + 1;
   const end = currentFrame;
   const minFrame = Math.max(start, end - netplayState.maxResend + 1);
+  const batchEntries: Array<{ frame: number; input: QuantizedInput }> = [];
   for (let frame = minFrame; frame <= end; frame += 1) {
     const input = netplayState.pendingLocalInputs.get(frame);
     if (!input) {
       continue;
     }
-    clientPeer.send({
-      type: 'input',
-      stageSeq: netplayState.stageSeq,
-      frame,
-      playerId: game.localPlayerId,
-      input,
-      lastAck: netplayState.lastReceivedHostFrame,
-    });
+    batchEntries.push({ frame, input });
+  }
+  if (batchEntries.length > 0) {
+    clientPeer.sendInputBatch(netplayState.stageSeq, netplayState.lastReceivedHostFrame, batchEntries);
   }
   if (start > end) {
     clientPeer.send({
