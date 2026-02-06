@@ -1612,8 +1612,18 @@ export class Game {
     this.activeResultReplay = null;
     this.resultReplayNeedsRestart = false;
     if (replay.kind !== 'goal') {
+      const localPlayerBeforeResume = this.getLocalPlayer();
+      const replayCameraState = replay.kind === 'fallout'
+        ? localPlayerBeforeResume?.camera?.getState?.() ?? null
+        : null;
       this.loadRollbackState(replay.resumeState, { resetResultReplay: false });
       const localPlayer = this.getLocalPlayer();
+      if (replay.kind === 'fallout' && replayCameraState && localPlayer?.camera) {
+        // Keep the final replay shot active instead of snapping back to fallout-main.
+        localPlayer.camera.setState(replayCameraState);
+        this.cameraController = localPlayer.camera;
+        this.syncCameraPose();
+      }
       if (localPlayer && replay.deferredGoalTapeBreak && replay.goalHit) {
         this.breakGoalTapeForBall(localPlayer.ball, replay.goalHit);
       }
