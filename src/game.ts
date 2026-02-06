@@ -3893,7 +3893,11 @@ export class Game {
             break;
           }
         }
-        const canCollectBananas = !resultReplayActive && !ringoutActive && !timeoverActive && hasPlayableBall;
+        const canCollectInReplay = this.activeResultReplay?.kind === 'goal';
+        const canCollectBananas = (!resultReplayActive || canCollectInReplay)
+          && !ringoutActive
+          && !timeoverActive
+          && hasPlayableBall;
         if (canCollectBananas) {
           this.collectBananas();
         }
