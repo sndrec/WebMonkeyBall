@@ -127,6 +127,13 @@ export function createBallState() {
   };
 }
 
+function getInitApeYaw(startRotY, stageFormat = 'smb1') {
+  if (stageFormat === 'smb2') {
+    return toS16(startRotY);
+  }
+  return toS16(startRotY - 0x4000);
+}
+
 function createPhysicsBall() {
   return {
     flags: 0,
@@ -148,7 +155,7 @@ function createPhysicsBall() {
   };
 }
 
-export function resetBall(ball, startPos, startRotY = ball.startRotY) {
+export function resetBall(ball, startPos, startRotY = ball.startRotY, stageFormat = 'smb1') {
   ball.pos.x = startPos.x;
   ball.pos.y = startPos.y;
   ball.pos.z = startPos.z;
@@ -165,9 +172,10 @@ export function resetBall(ball, startPos, startRotY = ball.startRotY) {
   ball.state = BALL_STATES.PLAY;
   ball.goalTimer = 0;
   ball.startRotY = startRotY;
+  const initApeYaw = getInitApeYaw(startRotY, stageFormat);
   ball.unk80 = 0;
   ball.unk92 = 0;
-  ball.apeYaw = toS16(startRotY - 0x4000);
+  ball.apeYaw = initApeYaw;
   ball.unkA8.x = 0;
   ball.unkA8.y = 0;
   ball.unkA8.z = 0;
@@ -177,7 +185,7 @@ export function resetBall(ball, startPos, startRotY = ball.startRotY) {
   ball.unkB8.z = 0;
   ball.unkC4 = 0;
   ball.unkF8 = 0;
-  setApeQuatFromYaw(ball, startRotY - 0x4000);
+  setApeQuatFromYaw(ball, initApeYaw);
   ball.apeFlags = 0;
   ball.unk114.x = 0;
   ball.unk114.y = 1;
@@ -200,7 +208,7 @@ export function resetBall(ball, startPos, startRotY = ball.startRotY) {
   ball.prevTransform.set(ball.transform);
 }
 
-export function initBallForStage(ball, startPos, startRotY) {
+export function initBallForStage(ball, startPos, startRotY, stageFormat = 'smb1') {
   ball.startPos.x = startPos.x;
   ball.startPos.y = startPos.y;
   ball.startPos.z = startPos.z;
@@ -222,9 +230,10 @@ export function initBallForStage(ball, startPos, startRotY) {
   ball.prevPos.x = ball.pos.x;
   ball.prevPos.y = ball.pos.y;
   ball.prevPos.z = ball.pos.z;
+  const initApeYaw = getInitApeYaw(startRotY, stageFormat);
   ball.unk80 = 0;
   ball.unk92 = 0;
-  ball.apeYaw = toS16(startRotY - 0x4000);
+  ball.apeYaw = initApeYaw;
   ball.unkA8.x = 0;
   ball.unkA8.y = 0;
   ball.unkA8.z = 0;
@@ -234,7 +243,7 @@ export function initBallForStage(ball, startPos, startRotY) {
   ball.unkB8.z = 0;
   ball.unkC4 = 0;
   ball.unkF8 = 0;
-  setApeQuatFromYaw(ball, startRotY - 0x4000);
+  setApeQuatFromYaw(ball, initApeYaw);
   ball.apeFlags = 0;
   ball.unk114.x = 0;
   ball.unk114.y = 1;
@@ -257,7 +266,7 @@ export function initBallForStage(ball, startPos, startRotY) {
   ball.prevTransform.set(ball.transform);
 }
 
-export function startBallDrop(ball, frames = 24) {
+export function startBallDrop(ball, frames = 24, stageFormat = 'smb1') {
   const f4 = frames;
   if (f4 <= 0) {
     return;
@@ -284,10 +293,11 @@ export function startBallDrop(ball, frames = 24) {
   ball.flags &= ~BALL_FLAGS.INVISIBLE;
   ball.flags |= BALL_FLAGS.FLAG_14;
   ball.state = BALL_STATES.PLAY;
+  const initApeYaw = getInitApeYaw(ball.startRotY, stageFormat);
   ball.unk80 = 0;
   ball.unk92 = 0;
-  ball.apeYaw = toS16(ball.startRotY - 0x4000);
-  setApeQuatFromYaw(ball, ball.startRotY - 0x4000);
+  ball.apeYaw = initApeYaw;
+  setApeQuatFromYaw(ball, initApeYaw);
   ball.apeFlags = 0;
   ball.wormholeCooldown = 0;
   ball.wormholeTransform = null;
@@ -334,11 +344,30 @@ export function resolveBallBallCollision(ballA, ballB) {
   ballB.vel.z += impulse * nz;
 }
 
-function updateBallCameraSteerYaw(ball) {
+function updateBallCameraSteerYaw(ball, stageFormat) {
   const speed = sqrt(sumSq2(ball.vel.x, ball.vel.z));
-  let velYaw = ball.apeYaw;
+  let velYaw = 0;
   if (speed > FLT_EPSILON) {
     velYaw = atan2S16(ball.vel.x, ball.vel.z) - 0x8000;
+  }
+
+  if (stageFormat === 'smb2') {
+    // SMB2 g_ball_ape_rotation uses ape->chara_rotation transformed -Z as the orientation source.
+    stack.fromQuat(ball.apeQuat);
+    const apeForward = { x: 0, y: 0, z: -1 };
+    stack.tfVec(apeForward, apeForward);
+    const apeYaw = toS16(atan2S16(apeForward.x, apeForward.z) - 0x8000);
+
+    let blend = 0;
+    if (speed >= 0.37037037037037035) {
+      blend = 1;
+    } else if (speed >= 0.23148148148148145) {
+      blend = (speed - 0.23148148148148145) / 0.1388888888888889;
+    }
+
+    const delta = toS16(velYaw - apeYaw);
+    ball.unk92 = toS16(apeYaw + delta * blend);
+    return;
   }
 
   let blend = 0;
@@ -480,7 +509,7 @@ function updateApeBaseOrientation(ball) {
   return true;
 }
 
-function updateApeFromVelocity(ball) {
+function updateApeFromVelocity(ball, stageFormat = 'smb1') {
   const sp4C = { x: ball.vel.x, y: 0, z: ball.vel.z };
   if (vecLen(sp4C) < 0.00027777777) {
     return 0;
@@ -489,14 +518,15 @@ function updateApeFromVelocity(ball) {
   vecNormalizeLen(sp4C);
   stack.rigidInvTfVec(sp4C, sp4C);
 
+  const isSmb2 = stageFormat === 'smb2';
+  const forwardBasis = isSmb2 ? { x: 0, y: 0, z: -1 } : { x: -1, y: 0, z: 0 };
   const sp40 = { x: 0, y: 0, z: 0 };
-  let var1 = sp4C.x;
+  let var1 = isSmb2 ? sp4C.z : sp4C.x;
   const quat = { x: 0, y: 0, z: 0, w: 1 };
   if (var1 > -0.992) {
-    const sp24 = { x: -1, y: 0, z: 0 };
     var1 = 1.0 - var1;
     if (var1 > 9.99999993922529e-09) {
-      vecCross(sp24, sp4C, sp40);
+      vecCross(forwardBasis, sp4C, sp40);
     } else {
       sp40.x = 0;
       sp40.y = 1;
@@ -504,7 +534,7 @@ function updateApeFromVelocity(ball) {
     }
     quatFromAxisAngle(sp40, 0x2d8, quat);
   } else {
-    quatFromDirs(quat, { x: -1, y: 0, z: 0 }, sp4C);
+    quatFromDirs(quat, forwardBasis, sp4C);
   }
 
   stack.push();
@@ -516,11 +546,15 @@ function updateApeFromVelocity(ball) {
   return vecLen(ball.unkB8) * 1.5;
 }
 
-function updateApeSpinCompensation() {
+function updateApeSpinCompensation(stageFormat = 'smb1') {
   const tmp = new Float32Array(12);
   stack.toMtx(tmp);
   const sp24 = { x: 0, y: 0, z: 0 };
-  stack.tfVec({ x: -1, y: 0, z: 0 }, sp24);
+  if (stageFormat === 'smb2') {
+    stack.tfVec({ x: 0, y: 0, z: -1 }, sp24);
+  } else {
+    stack.tfVec({ x: -1, y: 0, z: 0 }, sp24);
+  }
   const quat = { x: 0, y: 0, z: 0, w: 1 };
   if (sp24.y < 0.99) {
     const sp18 = { x: 0, y: 1, z: 0 };
@@ -537,6 +571,7 @@ function updateApeSpinCompensation() {
 function updateApeOrientation(ball, physBall, stageRuntime) {
   const APE_FLAG_ON_GROUND = 1 << 0;
   const APE_FLAG_IN_AIR = 1 << 1;
+  const stageFormat = stageRuntime?.stage?.format ?? 'smb1';
   ball.apeFlags &= ~0x3;
 
   const rayHit = raycastStageDown(ball.pos, stageRuntime);
@@ -551,18 +586,20 @@ function updateApeOrientation(ball, physBall, stageRuntime) {
 
   updateApeBaseOrientation(ball);
   if (r27) {
-    updateApeFromVelocity(ball);
+    updateApeFromVelocity(ball, stageFormat);
   } else {
     stack.fromQuat(ball.apeQuat);
     stack.normalizeBasis();
     if (ball.apeFlags & APE_FLAG_IN_AIR) {
-      updateApeSpinCompensation();
+      updateApeSpinCompensation(stageFormat);
     }
   }
 
   stack.toQuat(ball.apeQuat);
 
-  const tmpDir = { x: -1, y: 0, z: 0 };
+  const tmpDir = stageFormat === 'smb2'
+    ? { x: 0, y: 0, z: -1 }
+    : { x: -1, y: 0, z: 0 };
   stack.fromQuat(ball.apeQuat);
   stack.tfVec(tmpDir, tmpDir);
   ball.apeYaw = toS16(atan2S16(tmpDir.x, tmpDir.z) - 0x8000);
@@ -733,6 +770,7 @@ function handleBallRotationalKinematics(ball, physBall, animGroups, stageRuntime
 export function stepBall(ball, stageRuntime, world, allowEffects = true) {
   const stage = stageRuntime.stage;
   const animGroups = stageRuntime.animGroups;
+  ball.flags &= ~BALL_FLAGS.FLAG_00;
   if (ball.state === BALL_STATES.GOAL_MAIN) {
     ball.goalTimer += 1;
     if (ball.goalTimer >= GOAL_FLOAT_FRAMES && !(ball.flags & BALL_FLAGS.FLAG_09)) {
@@ -841,7 +879,7 @@ export function stepBall(ball, stageRuntime, world, allowEffects = true) {
   updateBallTransform(ball);
   updateBallApeBasis(ball);
   updateApeOrientation(ball, physBall, stageRuntime);
-  updateBallCameraSteerYaw(ball);
+  updateBallCameraSteerYaw(ball, stage.format);
 
   initPhysBallFromBall(ball, physBall, stage.format);
   collideBallWithStageObjects(physBall, stageRuntime);

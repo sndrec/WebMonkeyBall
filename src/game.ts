@@ -1277,7 +1277,8 @@ export class Game {
       const start = this.stage?.startPositions?.[0];
       const startPos = start?.pos ?? { x: 0, y: 0, z: 0 };
       const startRotY = start?.rot?.y ?? 0;
-      initBallForStage(ball, startPos, startRotY);
+      const stageFormat = this.stageRuntime?.stage?.format ?? this.stage?.format ?? 'smb1';
+      initBallForStage(ball, startPos, startRotY, stageFormat);
       camera.initForStage(ball, startRotY, this.stageRuntime);
     }
     this.players.push({
@@ -2302,6 +2303,7 @@ export class Game {
     const start = this.stage.startPositions?.[0];
     const startPos = start?.pos ?? { x: 0, y: 0, z: 0 };
     const startRotY = start?.rot?.y ?? 0;
+    const stageFormat = this.stageRuntime?.stage?.format ?? this.stage?.format ?? 'smb1';
     for (const player of this.players) {
       if (player.isSpectator) {
         continue;
@@ -2325,9 +2327,9 @@ export class Game {
       player.ringoutTimerFrames = 0;
       player.ringoutSkipTimerFrames = 0;
       if (withIntro) {
-        initBallForStage(player.ball, startPos, startRotY);
+        initBallForStage(player.ball, startPos, startRotY, stageFormat);
       } else {
-        resetBall(player.ball, startPos, startRotY);
+        resetBall(player.ball, startPos, startRotY, stageFormat);
       }
       player.ball.bananas = 0;
     }
@@ -2389,7 +2391,8 @@ export class Game {
     const start = this.stage.startPositions?.[0];
     const startPos = start?.pos ?? { x: 0, y: 0, z: 0 };
     const startRotY = start?.rot?.y ?? 0;
-    resetBall(player.ball, startPos, startRotY);
+    const stageFormat = this.stageRuntime?.stage?.format ?? this.stage?.format ?? 'smb1';
+    resetBall(player.ball, startPos, startRotY, stageFormat);
     player.finished = false;
     player.freeFly = false;
     player.goalType = null;
@@ -3160,11 +3163,12 @@ export class Game {
             this.readyAnnouncerPlayed = true;
           }
           if (this.introTimerFrames === this.dropFrames) {
+            const stageFormat = this.stageRuntime?.stage?.format ?? this.stage?.format ?? 'smb1';
             for (const player of simPlayers) {
               if (player.isSpectator || player.pendingSpawn) {
                 continue;
               }
-              startBallDrop(player.ball, this.dropFrames);
+              startBallDrop(player.ball, this.dropFrames, stageFormat);
             }
           }
           if (this.introTimerFrames === 0) {

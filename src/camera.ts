@@ -28,7 +28,7 @@ const SMB2_YAW_STEP_CLAMP = 0x300;
 const SMB2_PITCH_BASE = -0x900;
 const SMB2_PITCH_OFFSET = 0x200;
 const SMB2_PITCH_LIMIT = 0x3000;
-const SMB2_STANDSTILL_SPEED = 0.02;
+const SMB2_APE_STANDSTILL_THRESHOLD = 0.00027777778;
 const FREE_FLY_LOOK_SPEED = 0x300;
 const FREE_FLY_MOVE_SPEED = 0.9;
 const FREE_FLY_PITCH_LIMIT = 0x3000;
@@ -53,6 +53,11 @@ function cameraFaceDirection(camera, lookDir) {
   camera.rotY = atan2S16(lookDir.x, lookDir.z) - 0x8000;
   camera.rotX = atan2S16Safe(lookDir.y, sqrt(sumSq2(lookDir.x, lookDir.z)));
   camera.rotZ = 0;
+}
+
+function smb2ApeIsStandstill(ball) {
+  const apeMotionLen = sqrt(sumSq3(ball.unkB8?.x ?? 0, ball.unkB8?.y ?? 0, ball.unkB8?.z ?? 0));
+  return apeMotionLen < SMB2_APE_STANDSTILL_THRESHOLD && (ball.vel?.y ?? 0) >= -0.16203703;
 }
 
 export class GameplayCamera {
@@ -545,8 +550,8 @@ export class GameplayCamera {
     const pivotOffset = stageId === SMB2_PIVOT_Y_OFFSET_STAGE ? 0 : SMB2_PIVOT_Y_OFFSET;
     const pitchOffset = stageId === SMB2_PIVOT_Y_OFFSET_STAGE ? 0 : SMB2_PITCH_OFFSET;
 
-    const speed = ball.speed ?? sqrt(sumSq3(ball.vel.x, ball.vel.y, ball.vel.z));
-    if (speed <= SMB2_STANDSTILL_SPEED) {
+    const speed = sqrt(sumSq3(ball.vel.x, ball.vel.y, ball.vel.z));
+    if (smb2ApeIsStandstill(ball)) {
       this.smb2Standstill = Math.min(60, this.smb2Standstill + 1);
     } else {
       this.smb2Standstill = Math.max(0, this.smb2Standstill - 1);
@@ -585,11 +590,9 @@ export class GameplayCamera {
     let yawAdjust = clamp(Math.trunc(yawDelta * 0.6), -SMB2_YAW_LERP_CLAMP, SMB2_YAW_LERP_CLAMP);
     yaw = toS16(this.rotY + yawAdjust);
 
-    const groundNormalY = ball.physBall?.hardestColiPlane?.normal?.y ?? 0;
-    const onGround = (ball.physBall?.flags & COLI_FLAGS.OCCURRED) !== 0 && groundNormalY > 0.5;
+    const onGround = (ball.flags & BALL_FLAGS.FLAG_00) !== 0;
     if (onGround) {
-      const standstillFactor = 1 - this.smb2Standstill / 60;
-      const yawLimit = standstillFactor * 4096;
+      const yawLimit = Math.trunc((1 - this.smb2Standstill / 60) * 4096);
       let steer = toS16(ball.unk92 - yaw);
       let yawDiff = 0;
       if (yawLimit < steer) {
@@ -604,7 +607,7 @@ export class GameplayCamera {
       } else if (speed > 0.18518518) {
         steerBlend = (speed - 0.18518518) / 0.09259259;
       }
-      yaw = toS16(yaw + Math.trunc((yawDiff * steerBlend) / 128));
+      yaw = toS16(yaw + (Math.trunc(yawDiff * steerBlend) >> 7));
     }
 
     let yawStep = toS16(yaw - this.rotY);
