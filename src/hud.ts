@@ -4,7 +4,7 @@ const HUD_WIDTH = 640;
 const HUD_HEIGHT = 480;
 const HURRY_UP_FRAMES = 11 * 60;
 const GO_BANNER_FRAMES = 60;
-const GOAL_BANNER_FRAMES = 240;
+const GOAL_BANNER_FRAMES = 360;
 const GOAL_SEQUENCE_FRAMES = 360;
 const HURRY_UP_BANNER_FRAMES = 30;
 const TIME_OVER_BANNER_FRAMES = 120;
@@ -968,7 +968,7 @@ export class HudRenderer {
       this.lastRingoutEventTick = ringoutEventTick;
     }
 
-    if (goalTimerFrames <= 0) {
+    if (this.goalBanner.timer <= 0) {
       this.goalScoreInfo = null;
     }
   }
@@ -1441,10 +1441,10 @@ export class HudRenderer {
       }
     }
 
-    if (this.goalScoreInfo && goalTimerFrames > 0 && !(game.isBonusStageActive?.() ?? false)) {
+    if (this.goalScoreInfo && this.goalBanner.timer > 0 && !(game.isBonusStageActive?.() ?? false)) {
       const scoreInfo = this.goalScoreInfo;
-      const baseT = GOAL_SEQUENCE_FRAMES - goalTimerFrames;
-      const counter = goalTimerFrames;
+      const baseT = GOAL_SEQUENCE_FRAMES - this.goalBanner.timer;
+      const counter = this.goalBanner.timer;
       const baseX = 24;
       let lineY = 128;
       const font = fonts.asc16x16;
