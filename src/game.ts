@@ -3273,8 +3273,16 @@ export class Game {
         if (canCollectBananas) {
           this.collectBananas();
         }
+        const anyGoalSequenceActive = simPlayers.some((player) => {
+          if (player.isSpectator || player.pendingSpawn) {
+            return false;
+          }
+          return player.goalTimerFrames > 0;
+        });
+        const blockBonusClearForGoalSequence = this.players.length <= 1 && anyGoalSequenceActive;
         const bonusFinishReady = isBonusStage
           && stageInputEnabled
+          && !blockBonusClearForGoalSequence
           && (this.bananasLeft <= 0 || this.allActivePlayersFinished());
         if (bonusFinishReady && !this.bonusClearPending) {
           this.accumulator = 0;
