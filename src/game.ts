@@ -3008,7 +3008,10 @@ export class Game {
     if (!isBonusStage && this.players.length <= 1 && !this.activeResultReplay) {
       const replayStartTimer = Math.max(1, RINGOUT_TOTAL_FRAMES - FALLOUT_RESULT_REPLAY_START_DELAY_FRAMES);
       if (localPlayer.ringoutTimerFrames === replayStartTimer) {
-        this.startResultReplay('fallout');
+        if (this.startResultReplay('fallout')) {
+          this.accumulator = 0;
+          return true;
+        }
       }
     }
     if (localPlayer.ringoutTimerFrames > 0) {
