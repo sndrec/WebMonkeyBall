@@ -200,7 +200,8 @@ export class Lobby implements DurableObject {
       }
       let roomDirty = false;
       for (const [playerKey, player] of Object.entries(room.players ?? {})) {
-        const staleJoin = !player.connected && (now - player.joinedAt > PLAYER_JOIN_GRACE_MS);
+        const neverConnected = !player.connected && player.lastActiveAt <= player.joinedAt;
+        const staleJoin = neverConnected && (now - player.joinedAt > PLAYER_JOIN_GRACE_MS);
         const staleActive = now - player.lastActiveAt > PLAYER_TTL_MS;
         if (staleJoin || staleActive) {
           delete room.players[playerKey];
@@ -532,6 +533,30 @@ export class Lobby implements DurableObject {
       return jsonResponse({ ok: true }, 200, origin);
     }
 
+    if (request.method === "POST" && url.pathname === "/rooms/disconnect") {
+      const body = await parseJson<{ roomId?: string; playerId?: number; token?: string }>(request);
+      const roomId = body.roomId ?? null;
+      if (!roomId || !this.data.rooms[roomId]) {
+        return jsonResponse({ ok: false, error: "room_not_found" }, 404, origin);
+      }
+      const room = this.data.rooms[roomId];
+      room.players = room.players ?? {};
+      const playerId = Number(body.playerId ?? 0);
+      const token = body.token ?? "";
+      const player = room.players?.[playerKey(playerId)];
+      if (!player || player.token !== token) {
+        return jsonResponse({ ok: false, error: "unauthorized" }, 401, origin);
+      }
+      const now = nowMs();
+      player.connected = false;
+      player.lastActiveAt = now;
+      room.lastActiveAt = now;
+      room.players[playerKey(playerId)] = player;
+      this.data.rooms[roomId] = room;
+      await this.save();
+      return jsonResponse({ ok: true }, 200, origin);
+    }
+
     if (request.method === "POST" && url.pathname === "/rooms/promote") {
       const body = await parseJson<{ roomId?: string; playerId?: number; token?: string }>(request);
       const roomId = body.roomId ?? null;
@@ -609,10 +634,10 @@ export class Room implements DurableObject {
     }
   }
 
-  private async leavePlayer(roomId: string, playerId: number, token: string): Promise<void> {
+  private async disconnectPlayer(roomId: string, playerId: number, token: string): Promise<void> {
     const id = this.env.LOBBY.idFromName("lobby");
     const stub = this.env.LOBBY.get(id);
-    await stub.fetch("https://lobby.internal/rooms/leave", {
+    await stub.fetch("https://lobby.internal/rooms/disconnect", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ roomId, playerId, token }),
@@ -705,7 +730,7 @@ export class Room implements DurableObject {
       const conn = this.connections.get(connId);
       this.connections.delete(connId);
       if (conn) {
-        void this.leavePlayer(roomId, conn.playerId, conn.token);
+        void this.disconnectPlayer(roomId, conn.playerId, conn.token);
       }
       if (this.connections.size === 0) {
         this.state.storage.deleteAll();

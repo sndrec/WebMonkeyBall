@@ -4423,6 +4423,8 @@ async function leaveRoom({ skipConfirm = false }: { skipConfirm?: boolean } = {}
   const roomId = lobbyRoom?.roomId;
   const wasHost = netplayState?.role === 'host';
   const hostToken = lobbyHostToken;
+  const playerId = lobbySelfId;
+  const playerToken = lobbyPlayerToken;
   if (!skipConfirm && wasHost && roomId) {
     const confirmed = window.confirm('Leaving will close this lobby for everyone. Leave anyway?');
     if (!confirmed) {
@@ -4436,6 +4438,12 @@ async function leaveRoom({ skipConfirm = false }: { skipConfirm?: boolean } = {}
   if (roomId && wasHost && hostToken) {
     try {
       await lobbyClient.closeRoom(roomId, hostToken);
+    } catch {
+      // Ignore.
+    }
+  } else if (roomId && playerId !== null && playerToken) {
+    try {
+      await lobbyClient.leaveRoom(roomId, playerId, playerToken);
     } catch {
       // Ignore.
     }

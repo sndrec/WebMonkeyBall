@@ -352,6 +352,14 @@ export class LobbyClient {
     });
   }
 
+  async leaveRoom(roomId: string, playerId: number, token: string): Promise<void> {
+    await fetch(`${this.baseUrl}/rooms/leave`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ roomId, playerId, token }),
+    });
+  }
+
   async kickPlayer(roomId: string, hostToken: string, playerId: number): Promise<void> {
     await fetch(`${this.baseUrl}/rooms/kick`, {
       method: 'POST',
