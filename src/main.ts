@@ -762,6 +762,7 @@ let lastProfileBroadcastMs: number | null = null;
 let lobbyNameUpdateTimer: number | null = null;
 let lastLobbyNameUpdateMs: number | null = null;
 let lastRoomMetaKey: string | null = null;
+let lastRoomPlayerCount: number | null = null;
 let privacySettings = { hidePlayerNames: false, hideLobbyNames: false };
 const avatarValidationCache = new Map<string, Promise<boolean>>();
 const profileUpdateThrottle = new Map<number, number>();
@@ -2154,7 +2155,7 @@ function updateLobbyUi() {
   lobbyLeaveButton.classList.remove('hidden');
   const roomLabel = formatRoomInfoLabel(lobbyRoom);
   const statusLabel = lobbyRoom.meta?.status === 'in_game' ? 'In Game' : 'Waiting';
-  const playerCount = Math.max(lobbyRoom.playerCount ?? 0, game.players.length);
+  const playerCount = game.players.length;
   const maxPlayers = lobbyRoom.settings?.maxPlayers ?? game.maxPlayers;
   const isHost = netplayState?.role === 'host';
   if (lobbyRoomInfo) {
@@ -2300,6 +2301,7 @@ function broadcastRoomUpdate() {
   }
   lobbyRoom.playerCount = game.players.length;
   hostRelay?.broadcast({ type: 'room_update', room: lobbyRoom });
+  lastRoomPlayerCount = lobbyRoom.playerCount;
 }
 
 function applyLobbySettingsFromInputs() {
@@ -2687,6 +2689,7 @@ function resetNetplayConnections({ preserveLobby = false }: { preserveLobby?: bo
     lastProfileBroadcastMs = null;
     lastLobbyNameUpdateMs = null;
     lastRoomMetaKey = null;
+    lastRoomPlayerCount = null;
     resetLocalPlayersAfterNetplay();
   }
   pendingSpawnStageSeq.clear();
@@ -2749,7 +2752,12 @@ function sendLobbyHeartbeat(
   if (netplayState?.role === 'host' && lobbyRoom) {
     meta = buildRoomMeta() ?? lobbyRoom.meta;
     settings = lobbyRoom.settings;
-    lobbyRoom.playerCount = game.players.length;
+    const playerCount = game.players.length;
+    lobbyRoom.playerCount = playerCount;
+    if (playerCount !== lastRoomPlayerCount) {
+      lastRoomPlayerCount = playerCount;
+      broadcastRoomUpdate();
+    }
     if (meta) {
       lobbyRoom.meta = meta;
       const metaKey = JSON.stringify(meta);
@@ -3699,6 +3707,8 @@ function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
   }
   if (!game.players.some((player) => player.id === playerId)) {
     if (game.players.length >= game.maxPlayers) {
+      state.clientStates.delete(playerId);
+      rejectHostConnection(playerId, 'Room is full');
       return;
     }
     const joinAsSpectator = shouldJoinAsSpectator();
@@ -4473,6 +4483,18 @@ async function kickPlayerFromRoom(playerId: number) {
   }, 80);
 }
 
+function rejectHostConnection(playerId: number, reason = 'Room is full') {
+  hostRelay?.sendTo(playerId, { type: 'kick', reason });
+  window.setTimeout(() => {
+    hostRelay?.disconnect(playerId);
+  }, 80);
+  if (lobbyClient && lobbyRoom && lobbyHostToken) {
+    void lobbyClient.kickPlayer(lobbyRoom.roomId, lobbyHostToken, playerId).catch(() => {
+      // Ignore backend kick failures.
+    });
+  }
+}
+
 function startHost(room: LobbyRoom, playerToken: string) {
   if (!lobbyClient) {
     return;
@@ -4497,9 +4519,11 @@ function startHost(room: LobbyRoom, playerToken: string) {
   hostRelay.onConnect = (playerId) => {
     const state = netplayState;
     if (!state) {
+      rejectHostConnection(playerId, 'Host unavailable');
       return;
     }
     if (game.players.length >= game.maxPlayers) {
+      rejectHostConnection(playerId, 'Room is full');
       return;
     }
     if (!state.clientStates.has(playerId)) {
@@ -4555,6 +4579,8 @@ function startHost(room: LobbyRoom, playerToken: string) {
       });
     }
     sendSnapshotToClient(playerId);
+    broadcastRoomUpdate();
+    sendLobbyHeartbeat(performance.now(), true);
     updateLobbyUi();
   };
   hostRelay.onDisconnect = (playerId) => {
@@ -4564,6 +4590,8 @@ function startHost(room: LobbyRoom, playerToken: string) {
     pendingAvatarByPlayer.delete(playerId);
     pendingSpawnStageSeq.delete(playerId);
     hostRelay?.broadcast({ type: 'player_leave', playerId });
+    broadcastRoomUpdate();
+    sendLobbyHeartbeat(performance.now(), true);
     updateLobbyUi();
     maybeSendStageSync();
   };

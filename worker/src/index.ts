@@ -47,8 +47,8 @@ type LobbyState = {
 };
 
 const ROOM_TTL_MS = 1000 * 60 * 5;
-const PLAYER_TTL_MS = 1000 * 120;
 const PLAYER_JOIN_GRACE_MS = 1000 * 20;
+const PLAYER_CONNECTED_STALE_MS = 1000 * 35;
 const MAX_PLAYERS = 8;
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const CREATE_RATE_LIMIT = { windowMs: 60_000, max: 10 };
@@ -99,6 +99,12 @@ function nowMs() {
   return Date.now();
 }
 
+function delayMs(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function clampInt(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, Math.trunc(value)));
 }
@@ -126,6 +132,17 @@ function randomPlayerId(existing: Set<number>): number {
 
 function playerKey(playerId: number): string {
   return String(playerId);
+}
+
+function playerOccupiesSlot(player: PlayerRecord, now = nowMs()): boolean {
+  if (player.connected) {
+    return (now - player.lastActiveAt) <= PLAYER_CONNECTED_STALE_MS;
+  }
+  return (now - player.lastActiveAt) <= PLAYER_JOIN_GRACE_MS;
+}
+
+function roomPlayerCount(room: RoomRecord, now = nowMs()): number {
+  return Object.values(room.players ?? {}).filter((player) => playerOccupiesSlot(player, now)).length;
 }
 
 function sanitizeSettings(input?: Partial<RoomSettings>): RoomSettings {
@@ -163,7 +180,7 @@ function publicRoomInfo(room: RoomRecord) {
   return {
     ...rest,
     settings: room.settings ?? sanitizeSettings(),
-    playerCount: Object.keys(room.players ?? {}).length,
+    playerCount: roomPlayerCount(room),
     meta: room.meta ?? sanitizeMeta({}),
   };
 }
@@ -202,7 +219,8 @@ export class Lobby implements DurableObject {
       for (const [playerKey, player] of Object.entries(room.players ?? {})) {
         const neverConnected = !player.connected && player.lastActiveAt <= player.joinedAt;
         const staleJoin = neverConnected && (now - player.joinedAt > PLAYER_JOIN_GRACE_MS);
-        const staleActive = now - player.lastActiveAt > PLAYER_TTL_MS;
+        const staleWindow = player.connected ? PLAYER_CONNECTED_STALE_MS : PLAYER_JOIN_GRACE_MS;
+        const staleActive = now - player.lastActiveAt > staleWindow;
         if (staleJoin || staleActive) {
           delete room.players[playerKey];
           roomDirty = true;
@@ -211,6 +229,19 @@ export class Lobby implements DurableObject {
       if (roomDirty) {
         this.data.rooms[roomId] = room;
         dirty = true;
+      }
+      const hostPlayer = room.players?.[playerKey(room.hostId)];
+      const hostMissing = !hostPlayer;
+      const hostInactive = !!hostPlayer
+        && !hostPlayer.connected
+        && (now - hostPlayer.lastActiveAt > PLAYER_JOIN_GRACE_MS);
+      if (hostMissing || hostInactive) {
+        delete this.data.rooms[roomId];
+        if (room.roomCode) {
+          delete this.data.codes[room.roomCode];
+        }
+        dirty = true;
+        continue;
       }
       if (Object.keys(room.players ?? {}).length === 0) {
         delete this.data.rooms[roomId];
@@ -375,7 +406,7 @@ export class Lobby implements DurableObject {
       if (room.settings.locked) {
         return jsonResponse({ error: "room_locked" }, 403, origin);
       }
-      const playerCount = Object.keys(room.players ?? {}).length;
+      const playerCount = roomPlayerCount(room);
       if (playerCount >= room.settings.maxPlayers) {
         return jsonResponse({ error: "room_full" }, 409, origin);
       }
@@ -520,8 +551,9 @@ export class Lobby implements DurableObject {
       if (!player || player.token !== token) {
         return jsonResponse({ ok: false, error: "unauthorized" }, 401, origin);
       }
+      const leavingHost = playerId === room.hostId;
       delete room.players[playerKey(playerId)];
-      if (Object.keys(room.players ?? {}).length === 0) {
+      if (leavingHost || Object.keys(room.players ?? {}).length === 0) {
         delete this.data.rooms[roomId];
         if (room.roomCode) {
           delete this.data.codes[room.roomCode];
@@ -547,6 +579,14 @@ export class Lobby implements DurableObject {
       if (!player || player.token !== token) {
         return jsonResponse({ ok: false, error: "unauthorized" }, 401, origin);
       }
+      if (playerId === room.hostId) {
+        delete this.data.rooms[roomId];
+        if (room.roomCode) {
+          delete this.data.codes[room.roomCode];
+        }
+        await this.save();
+        return jsonResponse({ ok: true }, 200, origin);
+      }
       const now = nowMs();
       player.connected = false;
       player.lastActiveAt = now;
@@ -555,41 +595,6 @@ export class Lobby implements DurableObject {
       this.data.rooms[roomId] = room;
       await this.save();
       return jsonResponse({ ok: true }, 200, origin);
-    }
-
-    if (request.method === "POST" && url.pathname === "/rooms/promote") {
-      const body = await parseJson<{ roomId?: string; playerId?: number; token?: string }>(request);
-      const roomId = body.roomId ?? null;
-      if (!roomId || !this.data.rooms[roomId]) {
-        return jsonResponse({ ok: false, error: "room_not_found" }, 404, origin);
-      }
-      const room = this.data.rooms[roomId];
-      room.players = room.players ?? {};
-      const playerId = Number(body.playerId ?? 0);
-      const token = body.token ?? "";
-      const caller = room.players?.[playerKey(playerId)];
-      if (!caller || caller.token !== token) {
-        return jsonResponse({ ok: false, error: "unauthorized" }, 401, origin);
-      }
-      if (room.players?.[playerKey(room.hostId)]) {
-        return jsonResponse({ ok: false, error: "host_present" }, 409, origin);
-      }
-      const connected = Object.values(room.players ?? {}).filter((entry) => entry.connected);
-      const pool = connected.length > 0 ? connected : Object.values(room.players ?? {});
-      if (pool.length === 0) {
-        return jsonResponse({ ok: false, error: "no_candidates" }, 409, origin);
-      }
-      const chosen = pool[Math.floor(Math.random() * pool.length)];
-      room.hostId = chosen.playerId;
-      room.hostToken = randomToken();
-      room.lastActiveAt = nowMs();
-      this.data.rooms[roomId] = room;
-      await this.save();
-      return jsonResponse({
-        ok: true,
-        room: publicRoomInfo(room),
-        hostToken: room.hostId === playerId ? room.hostToken : undefined,
-      }, 200, origin);
     }
 
     return jsonResponse({ error: "not_found" }, 404, origin);
@@ -637,11 +642,33 @@ export class Room implements DurableObject {
   private async disconnectPlayer(roomId: string, playerId: number, token: string): Promise<void> {
     const id = this.env.LOBBY.idFromName("lobby");
     const stub = this.env.LOBBY.get(id);
-    await stub.fetch("https://lobby.internal/rooms/disconnect", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ roomId, playerId, token }),
-    });
+    const body = JSON.stringify({ roomId, playerId, token });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const res = await stub.fetch("https://lobby.internal/rooms/disconnect", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+        });
+        if (res.ok || res.status === 401 || res.status === 404) {
+          return;
+        }
+      } catch {
+        // Retry below.
+      }
+      if (attempt < 2) {
+        await delayMs(100 * (attempt + 1));
+      }
+    }
+    try {
+      await stub.fetch("https://lobby.internal/rooms/leave", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+    } catch {
+      // Ignore.
+    }
   }
 
   private shouldAcceptMessage(conn: Connection, size: number): boolean {

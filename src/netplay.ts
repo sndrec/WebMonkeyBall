@@ -410,29 +410,13 @@ export class LobbyClient {
     };
   }
 
-  async promoteHost(roomId: string, playerId: number, token: string): Promise<RoomJoinResult> {
-    const res = await fetch(`${this.baseUrl}/rooms/promote`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ roomId, playerId, token }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data?.error ?? `promote_host_${res.status}`);
-    }
-    return {
-      room: data.room,
-      playerId,
-      playerToken: token,
-      hostToken: data.hostToken,
-    };
-  }
 }
 
 export class HostRelay {
   private peers = new Map<number, RTCPeerConnection>();
   private channels = new Map<number, { ctrl?: RTCDataChannel; fast?: RTCDataChannel }>();
   private connected = new Set<number>();
+  private pendingIce = new Map<number, RTCIceCandidateInit[]>();
 
   constructor(private onMessage: (playerId: number, msg: ClientToHostMessage) => void) {}
 
@@ -500,6 +484,10 @@ export class HostRelay {
     });
     channel.addEventListener('close', () => {
       const current = this.channels.get(playerId);
+      const active = role === 'ctrl' ? current?.ctrl : current?.fast;
+      if (active !== channel) {
+        return;
+      }
       const ctrl = current?.ctrl;
       if (role === 'ctrl' || !ctrl || ctrl.readyState === 'closed' || ctrl.readyState === 'closing') {
         if (this.connected.has(playerId)) {
@@ -618,10 +606,23 @@ export class HostRelay {
     }
     this.channels.delete(playerId);
     this.peers.delete(playerId);
+    this.pendingIce.delete(playerId);
     if (this.connected.has(playerId)) {
       this.connected.delete(playerId);
       this.onDisconnect?.(playerId);
     }
+  }
+
+  queueIceCandidate(playerId: number, candidate: RTCIceCandidateInit) {
+    const pending = this.pendingIce.get(playerId) ?? [];
+    pending.push(candidate);
+    this.pendingIce.set(playerId, pending);
+  }
+
+  drainIceCandidates(playerId: number) {
+    const pending = this.pendingIce.get(playerId) ?? [];
+    this.pendingIce.delete(playerId);
+    return pending;
   }
 
   hostId = 0;
@@ -634,6 +635,7 @@ export class ClientPeer {
   private pc: RTCPeerConnection | null = null;
   private ctrlChannel: RTCDataChannel | null = null;
   private fastChannel: RTCDataChannel | null = null;
+  private pendingIce: RTCIceCandidateInit[] = [];
 
   constructor(private onMessage: (msg: HostToClientMessage) => void) {}
 
@@ -673,6 +675,10 @@ export class ClientPeer {
       }
     });
     channel.addEventListener('close', () => {
+      const active = role === 'ctrl' ? this.ctrlChannel : this.fastChannel;
+      if (active !== channel) {
+        return;
+      }
       if (role === 'ctrl') {
         this.onDisconnect?.();
       }
@@ -749,6 +755,7 @@ export class ClientPeer {
     this.ctrlChannel = null;
     this.fastChannel = null;
     this.pc = null;
+    this.pendingIce = [];
   }
 
   async handleSignal(payload: any) {
@@ -756,14 +763,37 @@ export class ClientPeer {
       return;
     }
     if (payload?.sdp) {
-      await this.pc.setRemoteDescription(payload.sdp);
+      try {
+        await this.pc.setRemoteDescription(payload.sdp);
+      } catch {
+        return;
+      }
+      if (this.pendingIce.length > 0) {
+        const pending = this.pendingIce.splice(0, this.pendingIce.length);
+        for (const candidate of pending) {
+          try {
+            await this.pc.addIceCandidate(candidate);
+          } catch {
+            // Ignore stale/invalid candidates.
+          }
+        }
+      }
       if (payload.sdp.type === 'offer') {
         const answer = await this.pc.createAnswer();
         await this.pc.setLocalDescription(answer);
         this.onSignal?.({ type: 'signal', from: this.playerId, to: this.hostId, payload: { sdp: this.pc.localDescription } });
       }
     } else if (payload?.ice) {
-      await this.pc.addIceCandidate(payload.ice);
+      const candidate = payload.ice as RTCIceCandidateInit;
+      if (!this.pc.remoteDescription) {
+        this.pendingIce.push(candidate);
+        return;
+      }
+      try {
+        await this.pc.addIceCandidate(candidate);
+      } catch {
+        // Ignore stale/invalid candidates.
+      }
     }
   }
 
@@ -788,11 +818,32 @@ export async function createHostOffer(host: HostRelay, playerId: number) {
 export async function applyHostSignal(host: HostRelay, playerId: number, payload: any) {
   const pc = host.getPeer(playerId);
   if (payload?.sdp) {
-    await pc.setRemoteDescription(payload.sdp);
+    try {
+      await pc.setRemoteDescription(payload.sdp);
+    } catch {
+      return;
+    }
+    const pending = host.drainIceCandidates(playerId);
+    for (const candidate of pending) {
+      try {
+        await pc.addIceCandidate(candidate);
+      } catch {
+        // Ignore stale/invalid candidates.
+      }
+    }
     if (payload.sdp.type === 'answer') {
       return;
     }
   } else if (payload?.ice) {
-    await pc.addIceCandidate(payload.ice);
+    const candidate = payload.ice as RTCIceCandidateInit;
+    if (!pc.remoteDescription) {
+      host.queueIceCandidate(playerId, candidate);
+      return;
+    }
+    try {
+      await pc.addIceCandidate(candidate);
+    } catch {
+      // Ignore stale/invalid candidates.
+    }
   }
 }
