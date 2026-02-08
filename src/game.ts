@@ -14,8 +14,13 @@ import {
   STAGE_BASE_PATHS,
   type GameSource,
 } from './constants.js';
-import { intersectsMovingSpheres, tfPhysballToAnimGroupSpace } from './collision.js';
-import { MatrixStack, sqrt, toS16 } from './math.js';
+import {
+  collideBallWithBonusWave,
+  collideBallWithStage,
+  intersectsMovingSpheres,
+  tfPhysballToAnimGroupSpace,
+} from './collision.js';
+import { MatrixStack, cosS16, sinS16, sqrt, toS16 } from './math.js';
 import { GameplayCamera } from './camera.js';
 import { dequantizeStick, quantizeInput, quantizeStick, type QuantizedInput, type QuantizedStick } from './determinism.js';
 import { createReplayData, type ReplayData } from './replay.js';
@@ -82,9 +87,38 @@ const COUNTDOWN_START_FRAMES = 10 * 60;
 const DEFAULT_LIVES = 3;
 const SPEED_MPH_SCALE = 134.21985;
 const SPEED_BAR_MAX_MPH = 70;
+const CHAIN_MAX_PLAYERS = 4;
+const CHAIN_LINK_LENGTH = 2.0;
+const CHAIN_SEGMENTS = 12;
+const CHAIN_SPAWN_SPACING = 1.5;
+const CHAIN_NODE_RADIUS = 0.25;
+const CHAIN_NODE_DAMPING = 0.992;
+const CHAIN_NODE_GRAVITY = 0.0035;
+const CHAIN_SUBSTEPS = 3;
+const CHAIN_CONSTRAINT_ITERS = 7;
+const CHAIN_LEASH_CORRECTION = 0.0;
+const CHAIN_LEASH_MAX_STEP = 0.15;
+const CHAIN_LEASH_VEL_BLEND = 0.2;
+const CHAIN_ENDPOINT_SNAP = 0.65;
+const CHAIN_EFFECT_ID_MASK = 0x80000000;
 const fallOutStack = new MatrixStack();
 const fallOutLocal = { x: 0, y: 0, z: 0 };
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+export type MultiplayerGameMode = 'standard' | 'chained_together';
+
+type ChainNodeState = {
+  pos: Vec3;
+  prevPos: Vec3;
+  animGroupId: number;
+};
+
+type ChainLinkState = {
+  id: number;
+  playerAId: number;
+  playerBId: number;
+  nodes: ChainNodeState[];
+};
 
 type PlayerState = {
   id: number;
@@ -343,12 +377,33 @@ export class Game {
   public playerCollisionEnabled: boolean;
   public noCollidePairs: Set<string>;
   public cameraController: GameplayCamera | null;
+  public multiplayerGameMode: MultiplayerGameMode;
+  public chainLinks: ChainLinkState[];
+  public chainTopologyKey: string;
 
   public tmpPhysBall: {
     pos: Vec3;
     prevPos: Vec3;
     vel: Vec3;
     radius: number;
+    animGroupId: number;
+  };
+  public tmpChainPhysBall: {
+    flags: number;
+    pos: Vec3;
+    prevPos: Vec3;
+    vel: Vec3;
+    radius: number;
+    gravityAccel: number;
+    restitution: number;
+    hardestColiSpeed: number;
+    hardestColiPlane: {
+      point: Vec3;
+      normal: Vec3;
+    };
+    hardestColiAnimGroupId: number;
+    friction: number;
+    frictionMode: 'smb1' | 'smb2';
     animGroupId: number;
   };
 
@@ -481,11 +536,32 @@ export class Game {
     this.playerCollisionEnabled = true;
     this.noCollidePairs = new Set();
     this.cameraController = null;
+    this.multiplayerGameMode = 'standard';
+    this.chainLinks = [];
+    this.chainTopologyKey = '';
     this.tmpPhysBall = {
       pos: { x: 0, y: 0, z: 0 },
       prevPos: { x: 0, y: 0, z: 0 },
       vel: { x: 0, y: 0, z: 0 },
       radius: 0.5,
+      animGroupId: 0,
+    };
+    this.tmpChainPhysBall = {
+      flags: 0,
+      pos: { x: 0, y: 0, z: 0 },
+      prevPos: { x: 0, y: 0, z: 0 },
+      vel: { x: 0, y: 0, z: 0 },
+      radius: CHAIN_NODE_RADIUS,
+      gravityAccel: 0,
+      restitution: 0.25,
+      hardestColiSpeed: 0,
+      hardestColiPlane: {
+        point: { x: 0, y: 0, z: 0 },
+        normal: { x: 0, y: 1, z: 0 },
+      },
+      hardestColiAnimGroupId: 0,
+      friction: 0.01,
+      frictionMode: 'smb1',
       animGroupId: 0,
     };
 
@@ -594,6 +670,23 @@ export class Game {
     this.audio?.stopMusic();
   }
 
+  private normalizeMultiplayerGameMode(mode: unknown): MultiplayerGameMode {
+    return mode === 'chained_together' ? 'chained_together' : 'standard';
+  }
+
+  setMultiplayerGameMode(mode: MultiplayerGameMode) {
+    const normalized = this.normalizeMultiplayerGameMode(mode);
+    if (this.multiplayerGameMode === normalized) {
+      return;
+    }
+    this.multiplayerGameMode = normalized;
+    this.syncChainTopology({ forceRebuild: true });
+  }
+
+  getMultiplayerGameMode(): MultiplayerGameMode {
+    return this.multiplayerGameMode;
+  }
+
   setInputFeed(feed: QuantizedStick[] | null) {
     this.inputFeed = feed;
     this.inputFeedIndex = 0;
@@ -619,6 +712,7 @@ export class Game {
       this.localPlayerId = playerId;
       this.ball = existing.ball;
       this.cameraController = existing.camera;
+      this.syncChainTopology({ forceRebuild: true });
       return;
     }
     if (current) {
@@ -627,9 +721,11 @@ export class Game {
       this.localPlayerId = playerId;
       this.ball = current.ball;
       this.cameraController = current.camera;
+      this.syncChainTopology({ forceRebuild: true });
       return;
     }
     this.localPlayerId = playerId;
+    this.syncChainTopology({ forceRebuild: true });
   }
 
   applyFrameInputs(frameInputs: Map<number, QuantizedInput>) {
@@ -845,6 +941,193 @@ export class Game {
     return [...this.players].sort((a, b) => a.id - b.id);
   }
 
+  private isChainedTogetherMode() {
+    return this.multiplayerGameMode === 'chained_together';
+  }
+
+  private getChainActivePlayersSorted(players: PlayerState[] = this.getPlayersSorted()) {
+    return players
+      .filter((player) => !player.isSpectator && !player.pendingSpawn && !player.finished)
+      .slice(0, CHAIN_MAX_PLAYERS);
+  }
+
+  private getChainTopologyKey(players: PlayerState[]) {
+    if (players.length === 0) {
+      return '';
+    }
+    return players.map((player) => String(player.id)).join(':');
+  }
+
+  private createInitialChainNodes(start: Vec3, end: Vec3): ChainNodeState[] {
+    const nodes: ChainNodeState[] = new Array(CHAIN_SEGMENTS + 1);
+    for (let i = 0; i <= CHAIN_SEGMENTS; i += 1) {
+      const t = i / CHAIN_SEGMENTS;
+      const x = start.x + ((end.x - start.x) * t);
+      const y = start.y + ((end.y - start.y) * t);
+      const z = start.z + ((end.z - start.z) * t);
+      nodes[i] = {
+        pos: { x, y, z },
+        prevPos: { x, y, z },
+        animGroupId: 0,
+      };
+    }
+    return nodes;
+  }
+
+  private getChainEndpointTarget(
+    endpoint: ChainNodeState,
+    neighbor: ChainNodeState,
+    ball: ReturnType<typeof createBallState>,
+    usePrev: boolean,
+  ): Vec3 {
+    const center = usePrev ? ball.prevPos : ball.pos;
+    const radius = Math.max(0.01, ball.currRadius ?? 0.5);
+    let dx = endpoint.pos.x - ball.pos.x;
+    let dy = endpoint.pos.y - ball.pos.y;
+    let dz = endpoint.pos.z - ball.pos.z;
+    let len = sqrt((dx * dx) + (dy * dy) + (dz * dz));
+    if (len <= 1e-6) {
+      dx = neighbor.pos.x - ball.pos.x;
+      dy = neighbor.pos.y - ball.pos.y;
+      dz = neighbor.pos.z - ball.pos.z;
+      len = sqrt((dx * dx) + (dy * dy) + (dz * dz));
+    }
+    if (len <= 1e-6) {
+      return { x: center.x + radius, y: center.y, z: center.z };
+    }
+    const invLen = 1 / len;
+    return {
+      x: center.x + (dx * invLen * radius),
+      y: center.y + (dy * invLen * radius),
+      z: center.z + (dz * invLen * radius),
+    };
+  }
+
+  private anchorChainEndpointToBallSurface(
+    endpoint: ChainNodeState,
+    neighbor: ChainNodeState,
+    ball: ReturnType<typeof createBallState>,
+    snap = 1,
+  ) {
+    const targetPos = this.getChainEndpointTarget(endpoint, neighbor, ball, false);
+    const targetPrevPos = this.getChainEndpointTarget(endpoint, neighbor, ball, true);
+    endpoint.pos.x += (targetPos.x - endpoint.pos.x) * snap;
+    endpoint.pos.y += (targetPos.y - endpoint.pos.y) * snap;
+    endpoint.pos.z += (targetPos.z - endpoint.pos.z) * snap;
+    endpoint.prevPos.x += (targetPrevPos.x - endpoint.prevPos.x) * snap;
+    endpoint.prevPos.y += (targetPrevPos.y - endpoint.prevPos.y) * snap;
+    endpoint.prevPos.z += (targetPrevPos.z - endpoint.prevPos.z) * snap;
+    endpoint.animGroupId = ball.physBall?.animGroupId ?? 0;
+  }
+
+  private getChainEffectId(link: ChainLinkState, segmentIndex: number) {
+    const base = (Math.imul(link.id, 31) + segmentIndex) >>> 0;
+    return (CHAIN_EFFECT_ID_MASK | (base & 0x7fffffff)) >>> 0;
+  }
+
+  private cloneChainLinks(source: ChainLinkState[]) {
+    return source.map((link) => ({
+      id: link.id,
+      playerAId: link.playerAId,
+      playerBId: link.playerBId,
+      nodes: link.nodes.map((node) => ({
+        pos: this.cloneVec3(node.pos),
+        prevPos: this.cloneVec3(node.prevPos),
+        animGroupId: node.animGroupId ?? 0,
+      })),
+    }));
+  }
+
+  private syncChainTopology(
+    {
+      forceRebuild = false,
+      players = this.getPlayersSorted(),
+    }: {
+      forceRebuild?: boolean;
+      players?: PlayerState[];
+    } = {},
+  ) {
+    if (!this.isChainedTogetherMode()) {
+      this.chainLinks = [];
+      this.chainTopologyKey = '';
+      return;
+    }
+    const chainPlayers = this.getChainActivePlayersSorted(players);
+    const nextKey = this.getChainTopologyKey(chainPlayers);
+    const expectedLinkCount = Math.max(0, chainPlayers.length - 1);
+    if (!forceRebuild && nextKey === this.chainTopologyKey && this.chainLinks.length === expectedLinkCount) {
+      return;
+    }
+    this.chainTopologyKey = nextKey;
+    if (chainPlayers.length < 2) {
+      this.chainLinks = [];
+      return;
+    }
+    const prevLinks = new Map<string, ChainLinkState>();
+    for (const link of this.chainLinks) {
+      prevLinks.set(this.getPairKey(link.playerAId, link.playerBId), link);
+    }
+    const nextLinks: ChainLinkState[] = [];
+    for (let i = 0; i < chainPlayers.length - 1; i += 1) {
+      const playerA = chainPlayers[i];
+      const playerB = chainPlayers[i + 1];
+      const pairKey = this.getPairKey(playerA.id, playerB.id);
+      const prev = prevLinks.get(pairKey);
+      const linkId = ((playerA.id & 0xffff) << 16) | (playerB.id & 0xffff);
+      const nodes = prev && prev.nodes.length === (CHAIN_SEGMENTS + 1)
+        ? prev.nodes.map((node) => ({
+          pos: this.cloneVec3(node.pos),
+          prevPos: this.cloneVec3(node.prevPos),
+          animGroupId: node.animGroupId ?? 0,
+        }))
+        : this.createInitialChainNodes(playerA.ball.pos, playerB.ball.pos);
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      this.anchorChainEndpointToBallSurface(first, nodes[1], playerA.ball, 1);
+      this.anchorChainEndpointToBallSurface(last, nodes[nodes.length - 2], playerB.ball, 1);
+      nextLinks.push({
+        id: linkId >>> 0,
+        playerAId: playerA.id,
+        playerBId: playerB.id,
+        nodes,
+      });
+    }
+    this.chainLinks = nextLinks;
+  }
+
+  getMultiplayerDeterminismHash() {
+    const f32 = new Float32Array(1);
+    const u32 = new Uint32Array(f32.buffer);
+    const hashU32 = (hash: number, value: number) => {
+      let h = hash ^ (value >>> 0);
+      h = Math.imul(h, 16777619) >>> 0;
+      return h;
+    };
+    const hashF32 = (hash: number, value: number) => {
+      f32[0] = value;
+      return hashU32(hash, u32[0]);
+    };
+    let h = 0x811c9dc5;
+    h = hashU32(h, this.isChainedTogetherMode() ? 1 : 0);
+    h = hashU32(h, this.chainLinks.length);
+    for (const link of this.chainLinks) {
+      h = hashU32(h, link.id);
+      h = hashU32(h, link.playerAId);
+      h = hashU32(h, link.playerBId);
+      h = hashU32(h, link.nodes.length);
+      for (const node of link.nodes) {
+        h = hashF32(h, node.pos.x);
+        h = hashF32(h, node.pos.y);
+        h = hashF32(h, node.pos.z);
+        h = hashF32(h, node.prevPos.x);
+        h = hashF32(h, node.prevPos.y);
+        h = hashF32(h, node.prevPos.z);
+        h = hashU32(h, node.animGroupId ?? 0);
+      }
+    }
+    return h >>> 0;
+  }
+
   private markNoCollideForPlayer(playerId: number) {
     for (const player of this.players) {
       if (player.id === playerId) {
@@ -929,6 +1212,8 @@ export class Game {
       timeOverAnnouncerPlayed: this.timeOverAnnouncerPlayed,
       pendingAdvance: this.pendingAdvance,
       goalReplayStartArmed: this.goalReplayStartArmed,
+      multiplayerGameMode: this.multiplayerGameMode,
+      chainLinks: this.cloneChainLinks(this.chainLinks),
       world: this.world ? cloneWorldState(this.world) : null,
       players: this.players.map((player) => ({
         id: player.id,
@@ -1099,6 +1384,9 @@ export class Game {
     this.timeOverAnnouncerPlayed = !!state.timeOverAnnouncerPlayed;
     this.pendingAdvance = !!state.pendingAdvance;
     this.goalReplayStartArmed = !!state.goalReplayStartArmed;
+    this.multiplayerGameMode = this.normalizeMultiplayerGameMode(state.multiplayerGameMode);
+    this.chainLinks = Array.isArray(state.chainLinks) ? this.cloneChainLinks(state.chainLinks) : [];
+    this.chainTopologyKey = '';
     this.hudGoalEventTick = Number.isFinite(state.hudGoalEventTick) ? state.hudGoalEventTick : -1;
     this.hudRingoutEventTick = Number.isFinite(state.hudRingoutEventTick) ? state.hudRingoutEventTick : -1;
     if (state.world && this.world) {
@@ -1194,6 +1482,14 @@ export class Game {
     }
     if (state.stageRuntime) {
       this.stageRuntime.setState(state.stageRuntime);
+    }
+    const sortedPlayers = this.getPlayersSorted();
+    const chainPlayers = this.getChainActivePlayersSorted(sortedPlayers);
+    this.chainTopologyKey = this.getChainTopologyKey(chainPlayers);
+    if (this.isChainedTogetherMode() && this.chainLinks.length === 0 && chainPlayers.length >= 2) {
+      this.syncChainTopology({ forceRebuild: true, players: sortedPlayers });
+    } else {
+      this.syncChainTopology({ players: sortedPlayers });
     }
   }
 
@@ -1823,7 +2119,18 @@ export class Game {
       const startPos = start?.pos ?? { x: 0, y: 0, z: 0 };
       const startRotY = start?.rot?.y ?? 0;
       const stageFormat = this.stageRuntime?.stage?.format ?? this.stage?.format ?? 'smb1';
-      initBallForStage(ball, startPos, startRotY, stageFormat);
+      let spawnPos = this.cloneVec3(startPos);
+      if (this.isChainedTogetherMode()) {
+        const activePlayers = this.getPlayersSorted().filter((player) => !player.isSpectator && !player.pendingSpawn);
+        const orderedIds = [...activePlayers.map((player) => player.id), id].sort((a, b) => a - b);
+        const index = orderedIds.findIndex((playerId) => playerId === id);
+        if (index >= 0 && orderedIds.length > 1) {
+          const offset = (index - ((orderedIds.length - 1) * 0.5)) * CHAIN_SPAWN_SPACING;
+          spawnPos.x = startPos.x + (cosS16(startRotY) * offset);
+          spawnPos.z = startPos.z + (-sinS16(startRotY) * offset);
+        }
+      }
+      initBallForStage(ball, spawnPos, startRotY, stageFormat);
       camera.initForStage(ball, startRotY, this.stageRuntime);
     }
     this.players.push({
@@ -1852,6 +2159,7 @@ export class Game {
     if (!spectator && !pendingSpawn) {
       this.markNoCollideForPlayer(id);
     }
+    this.syncChainTopology({ forceRebuild: true });
   }
 
   createPlayer({ spectator = false } = {}) {
@@ -1874,6 +2182,7 @@ export class Game {
         this.noCollidePairs.delete(key);
       }
     }
+    this.syncChainTopology({ forceRebuild: true });
   }
 
   private ensureCameraPose() {
@@ -1984,6 +2293,296 @@ export class Game {
     ball.vel.z = 0;
     ball.speed = 0;
     ball.goalTimer = 0;
+  }
+
+  private getSpawnPositionForPlayer(
+    player: PlayerState,
+    activePlayers: PlayerState[],
+    startPos: Vec3,
+    startRotY: number,
+  ): Vec3 {
+    if (!this.isChainedTogetherMode() || activePlayers.length <= 1) {
+      return this.cloneVec3(startPos);
+    }
+    const index = activePlayers.findIndex((entry) => entry.id === player.id);
+    if (index < 0) {
+      return this.cloneVec3(startPos);
+    }
+    const offset = (index - ((activePlayers.length - 1) * 0.5)) * CHAIN_SPAWN_SPACING;
+    const rightX = cosS16(startRotY);
+    const rightZ = -sinS16(startRotY);
+    return {
+      x: startPos.x + (rightX * offset),
+      y: startPos.y,
+      z: startPos.z + (rightZ * offset),
+    };
+  }
+
+  private applyChainNodeCollision(node: ChainNodeState, stageFormat: string) {
+    if (!this.stage || !this.stageRuntime) {
+      return;
+    }
+    const phys = this.tmpChainPhysBall;
+    phys.flags = 0;
+    phys.pos.x = node.pos.x;
+    phys.pos.y = node.pos.y;
+    phys.pos.z = node.pos.z;
+    phys.prevPos.x = node.prevPos.x;
+    phys.prevPos.y = node.prevPos.y;
+    phys.prevPos.z = node.prevPos.z;
+    phys.vel.x = phys.pos.x - phys.prevPos.x;
+    phys.vel.y = phys.pos.y - phys.prevPos.y;
+    phys.vel.z = phys.pos.z - phys.prevPos.z;
+    phys.radius = CHAIN_NODE_RADIUS;
+    phys.gravityAccel = 0;
+    phys.restitution = 0.25;
+    phys.hardestColiSpeed = 0;
+    phys.hardestColiAnimGroupId = 0;
+    phys.friction = 0.01;
+    phys.frictionMode = stageFormat === 'smb2' ? 'smb2' : 'smb1';
+    phys.animGroupId = node.animGroupId ?? 0;
+
+    collideBallWithStage(phys, this.stage, this.stageRuntime.animGroups);
+    collideBallWithBonusWave(phys, this.stageRuntime);
+
+    node.pos.x = phys.pos.x;
+    node.pos.y = phys.pos.y;
+    node.pos.z = phys.pos.z;
+    node.prevPos.x = phys.prevPos.x;
+    node.prevPos.y = phys.prevPos.y;
+    node.prevPos.z = phys.prevPos.z;
+    node.animGroupId = phys.animGroupId ?? 0;
+  }
+
+  private applyChainLeashCorrection(ballA: ReturnType<typeof createBallState>, ballB: ReturnType<typeof createBallState>) {
+    const dx = ballB.pos.x - ballA.pos.x;
+    const dy = ballB.pos.y - ballA.pos.y;
+    const dz = ballB.pos.z - ballA.pos.z;
+    const distSq = (dx * dx) + (dy * dy) + (dz * dz);
+    if (distSq <= 1e-8) {
+      return;
+    }
+    const dist = sqrt(distSq);
+    if (dist <= CHAIN_LINK_LENGTH) {
+      return;
+    }
+    const over = dist - CHAIN_LINK_LENGTH;
+    const pull = Math.min(CHAIN_LEASH_MAX_STEP, over * CHAIN_LEASH_CORRECTION);
+    if (pull <= 1e-6) {
+      return;
+    }
+    const invDist = 1 / dist;
+    const nx = dx * invDist;
+    const ny = dy * invDist;
+    const nz = dz * invDist;
+    const corr = pull * 0.5;
+    const corrX = nx * corr;
+    const corrY = ny * corr;
+    const corrZ = nz * corr;
+    ballA.pos.x += corrX;
+    ballA.pos.y += corrY;
+    ballA.pos.z += corrZ;
+    ballB.pos.x -= corrX;
+    ballB.pos.y -= corrY;
+    ballB.pos.z -= corrZ;
+    // Keep verlet history aligned with leash correction to avoid large one-frame visual jumps.
+    ballA.prevPos.x += corrX;
+    ballA.prevPos.y += corrY;
+    ballA.prevPos.z += corrZ;
+    ballB.prevPos.x -= corrX;
+    ballB.prevPos.y -= corrY;
+    ballB.prevPos.z -= corrZ;
+    const velCorr = corr * CHAIN_LEASH_VEL_BLEND;
+    ballA.vel.x += nx * velCorr;
+    ballA.vel.y += ny * velCorr;
+    ballA.vel.z += nz * velCorr;
+    ballB.vel.x -= nx * velCorr;
+    ballB.vel.y -= ny * velCorr;
+    ballB.vel.z -= nz * velCorr;
+  }
+
+  private simulateChainedTogether(players: PlayerState[]) {
+    if (!this.isChainedTogetherMode() || !this.stage || !this.stageRuntime) {
+      return;
+    }
+    this.syncChainTopology({ players });
+    if (this.chainLinks.length === 0) {
+      return;
+    }
+    const playerMap = new Map<number, PlayerState>();
+    for (const player of players) {
+      playerMap.set(player.id, player);
+    }
+    const gravity = this.world?.gravity ?? { x: 0, y: -1, z: 0 };
+    const stageFormat = this.stageRuntime.stage?.format ?? this.stage?.format ?? 'smb1';
+    const substeps = Math.max(1, CHAIN_SUBSTEPS);
+    const substepDamping = Math.pow(CHAIN_NODE_DAMPING, 1 / substeps);
+    const substepGravity = CHAIN_NODE_GRAVITY / substeps;
+    const segmentRestLen = CHAIN_LINK_LENGTH / CHAIN_SEGMENTS;
+    for (let substep = 0; substep < substeps; substep += 1) {
+      for (const link of this.chainLinks) {
+        for (let i = 1; i < link.nodes.length - 1; i += 1) {
+          const node = link.nodes[i];
+          const oldX = node.pos.x;
+          const oldY = node.pos.y;
+          const oldZ = node.pos.z;
+          const velX = (node.pos.x - node.prevPos.x) * substepDamping;
+          const velY = (node.pos.y - node.prevPos.y) * substepDamping;
+          const velZ = (node.pos.z - node.prevPos.z) * substepDamping;
+          node.prevPos.x = oldX;
+          node.prevPos.y = oldY;
+          node.prevPos.z = oldZ;
+          node.pos.x = oldX + velX + (gravity.x * substepGravity);
+          node.pos.y = oldY + velY + (gravity.y * substepGravity);
+          node.pos.z = oldZ + velZ + (gravity.z * substepGravity);
+        }
+      }
+
+      for (let iter = 0; iter < CHAIN_CONSTRAINT_ITERS; iter += 1) {
+        for (const link of this.chainLinks) {
+          const playerA = playerMap.get(link.playerAId);
+          const playerB = playerMap.get(link.playerBId);
+          if (!playerA || !playerB) {
+            continue;
+          }
+          const first = link.nodes[0];
+          const last = link.nodes[link.nodes.length - 1];
+          this.anchorChainEndpointToBallSurface(first, link.nodes[1], playerA.ball, CHAIN_ENDPOINT_SNAP);
+          this.anchorChainEndpointToBallSurface(last, link.nodes[link.nodes.length - 2], playerB.ball, CHAIN_ENDPOINT_SNAP);
+
+          for (let i = 0; i < link.nodes.length - 1; i += 1) {
+            const nodeA = link.nodes[i];
+            const nodeB = link.nodes[i + 1];
+            const dx = nodeB.pos.x - nodeA.pos.x;
+            const dy = nodeB.pos.y - nodeA.pos.y;
+            const dz = nodeB.pos.z - nodeA.pos.z;
+            const distSq = (dx * dx) + (dy * dy) + (dz * dz);
+            if (distSq <= 1e-8) {
+              continue;
+            }
+            const dist = sqrt(distSq);
+            const diff = (dist - segmentRestLen) / dist;
+            if (i === 0) {
+              nodeB.pos.x -= dx * diff;
+              nodeB.pos.y -= dy * diff;
+              nodeB.pos.z -= dz * diff;
+            } else if (i === (link.nodes.length - 2)) {
+              nodeA.pos.x += dx * diff;
+              nodeA.pos.y += dy * diff;
+              nodeA.pos.z += dz * diff;
+            } else {
+              const half = diff * 0.5;
+              nodeA.pos.x += dx * half;
+              nodeA.pos.y += dy * half;
+              nodeA.pos.z += dz * half;
+              nodeB.pos.x -= dx * half;
+              nodeB.pos.y -= dy * half;
+              nodeB.pos.z -= dz * half;
+            }
+          }
+
+          for (let i = 1; i < link.nodes.length - 1; i += 1) {
+            this.applyChainNodeCollision(link.nodes[i], stageFormat);
+          }
+        }
+      }
+
+      for (const link of this.chainLinks) {
+        const playerA = playerMap.get(link.playerAId);
+        const playerB = playerMap.get(link.playerBId);
+        if (!playerA || !playerB) {
+          continue;
+        }
+        this.applyChainLeashCorrection(playerA.ball, playerB.ball);
+        this.anchorChainEndpointToBallSurface(link.nodes[0], link.nodes[1], playerA.ball, CHAIN_ENDPOINT_SNAP);
+        this.anchorChainEndpointToBallSurface(
+          link.nodes[link.nodes.length - 1],
+          link.nodes[link.nodes.length - 2],
+          playerB.ball,
+          CHAIN_ENDPOINT_SNAP,
+        );
+      }
+    }
+  }
+
+  private updateChainedTogetherFalloutState(
+    isBonusStage: boolean,
+    resultReplayActive: boolean,
+    stageInputEnabled: boolean,
+  ) {
+    if (!this.isChainedTogetherMode() || resultReplayActive || !stageInputEnabled) {
+      return;
+    }
+    const activePlayers = this.getChainActivePlayersSorted();
+    if (activePlayers.length === 0) {
+      return;
+    }
+    let allOut = true;
+    for (const player of activePlayers) {
+      const ball = player.ball;
+      const playable = !(ball.flags & BALL_FLAGS.INVISIBLE)
+        && (ball.state === BALL_STATES.PLAY || ball.state === BALL_STATES.GOAL_MAIN);
+      const isOut = !playable || this.isBallFalloutForBall(ball);
+      if (!isOut) {
+        allOut = false;
+        break;
+      }
+    }
+    if (allOut) {
+      this.beginFalloutSequence(isBonusStage);
+      return;
+    }
+    for (const player of activePlayers) {
+      player.ringoutTimerFrames = 0;
+      player.ringoutSkipTimerFrames = 0;
+    }
+  }
+
+  private beginChainedTeamGoalSequence(goalHit: any, resultReplayActive: boolean) {
+    const activePlayers = this.getChainActivePlayersSorted();
+    if (activePlayers.length === 0) {
+      return;
+    }
+    const goalType = goalHit?.goalType ?? this.stage?.goals?.[0]?.type ?? 'B';
+    const localPlayer = this.getLocalPlayer();
+    const localActive = !!localPlayer && activePlayers.some((player) => player.id === localPlayer.id);
+
+    if (localPlayer && localActive) {
+      if (resultReplayActive) {
+        localPlayer.finished = true;
+        localPlayer.goalType = goalType;
+        if (!localPlayer.goalInfo) {
+          localPlayer.goalInfo = goalHit;
+        }
+        localPlayer.goalTimerFrames = Math.max(localPlayer.goalTimerFrames, GOAL_SEQUENCE_FRAMES);
+        localPlayer.goalSkipTimerFrames = Math.max(localPlayer.goalSkipTimerFrames, GOAL_SKIP_TOTAL_FRAMES);
+        if (!(localPlayer.ball.flags & BALL_FLAGS.GOAL)) {
+          startGoal(localPlayer.ball);
+        }
+        this.breakGoalTapeForBall(localPlayer.ball, goalHit);
+      } else if (localPlayer.goalTimerFrames <= 0) {
+        this.beginGoalSequence(goalHit);
+      }
+    }
+
+    for (const player of activePlayers) {
+      if (localActive && player.id === this.localPlayerId) {
+        continue;
+      }
+      player.finished = true;
+      player.goalType = goalType;
+      player.goalInfo = goalHit;
+      player.goalTimerFrames = GOAL_SEQUENCE_FRAMES;
+      player.goalSkipTimerFrames = GOAL_SKIP_TOTAL_FRAMES;
+      if (!(player.ball.flags & BALL_FLAGS.GOAL)) {
+        startGoal(player.ball);
+      }
+      this.breakGoalTapeForBall(player.ball, goalHit);
+      player.camera.setGoalMain();
+      if (this.players.length > 1) {
+        player.spectateTimerFrames = GOAL_SPECTATE_DESTROY_FRAMES;
+      }
+    }
   }
 
   getInterpolationAlpha(): number {
@@ -2372,8 +2971,9 @@ export class Game {
     if (!this.stageRuntime) {
       return null;
     }
-    const effects = this.stageRuntime.effects;
-    if (!effects || effects.length === 0) {
+    const effects = this.stageRuntime.effects ?? [];
+    const hasChainEffects = this.isChainedTogetherMode() && this.chainLinks.length > 0;
+    if (effects.length === 0 && !hasChainEffects) {
       this.renderEffects = null;
       return null;
     }
@@ -2501,6 +3101,36 @@ export class Game {
           scale: effect.scale,
           alpha: effect.alpha,
         };
+      }
+    }
+    if (hasChainEffects) {
+      for (const link of this.chainLinks) {
+        for (let i = 0; i < link.nodes.length - 1; i += 1) {
+          const nodeA = link.nodes[i];
+          const nodeB = link.nodes[i + 1];
+          const from = {
+            x: nodeA.prevPos.x + ((nodeA.pos.x - nodeA.prevPos.x) * alpha),
+            y: nodeA.prevPos.y + ((nodeA.pos.y - nodeA.prevPos.y) * alpha),
+            z: nodeA.prevPos.z + ((nodeA.pos.z - nodeA.prevPos.z) * alpha),
+          };
+          const to = {
+            x: nodeB.prevPos.x + ((nodeB.pos.x - nodeB.prevPos.x) * alpha),
+            y: nodeB.prevPos.y + ((nodeB.pos.y - nodeB.prevPos.y) * alpha),
+            z: nodeB.prevPos.z + ((nodeB.pos.z - nodeB.prevPos.z) * alpha),
+          };
+          this.renderEffects[outIdx++] = {
+            kind: 'streak',
+            id: this.getChainEffectId(link, i),
+            pos: to,
+            prevPos: from,
+            scale: 1.5,
+            alpha: 0.85,
+            lifeRatio: 1,
+            colorR: 0.82,
+            colorG: 0.82,
+            colorB: 0.86,
+          };
+        }
       }
     }
     this.renderEffects.length = outIdx;
@@ -2861,6 +3491,7 @@ export class Game {
     const startPos = start?.pos ?? { x: 0, y: 0, z: 0 };
     const startRotY = start?.rot?.y ?? 0;
     const stageFormat = this.stageRuntime?.stage?.format ?? this.stage?.format ?? 'smb1';
+    const spawnPlayers = this.getPlayersSorted().filter((player) => !player.isSpectator);
     for (const player of this.players) {
       if (player.isSpectator) {
         continue;
@@ -2883,10 +3514,11 @@ export class Game {
       player.respawnTimerFrames = 0;
       player.ringoutTimerFrames = 0;
       player.ringoutSkipTimerFrames = 0;
+      const spawnPos = this.getSpawnPositionForPlayer(player, spawnPlayers, startPos, startRotY);
       if (withIntro) {
-        initBallForStage(player.ball, startPos, startRotY, stageFormat);
+        initBallForStage(player.ball, spawnPos, startRotY, stageFormat);
       } else {
-        resetBall(player.ball, startPos, startRotY, stageFormat);
+        resetBall(player.ball, spawnPos, startRotY, stageFormat);
       }
       player.ball.bananas = 0;
     }
@@ -2915,7 +3547,8 @@ export class Game {
         if (player.isSpectator || player.pendingSpawn || player.finished) {
           continue;
         }
-        player.camera.initReady(this.stageRuntime, startRotY, startPos, flyInFrames);
+        const spawnPos = this.getSpawnPositionForPlayer(player, spawnPlayers, startPos, startRotY);
+        player.camera.initReady(this.stageRuntime, startRotY, spawnPos, flyInFrames);
       }
       const poseSource = this.players.find((player) => !player.isSpectator && !player.pendingSpawn) ?? null;
       this.captureSpectatorStartPose(poseSource?.camera ?? null);
@@ -2932,6 +3565,7 @@ export class Game {
         player.camera.initForStage(player.ball, startRotY, this.stageRuntime);
       }
     }
+    this.syncChainTopology({ forceRebuild: true, players: this.getPlayersSorted() });
     if (localPlayer) {
       this.syncCameraPose();
     }
@@ -2949,7 +3583,9 @@ export class Game {
     const startPos = start?.pos ?? { x: 0, y: 0, z: 0 };
     const startRotY = start?.rot?.y ?? 0;
     const stageFormat = this.stageRuntime?.stage?.format ?? this.stage?.format ?? 'smb1';
-    resetBall(player.ball, startPos, startRotY, stageFormat);
+    const spawnPlayers = this.getPlayersSorted().filter((entry) => !entry.isSpectator && !entry.pendingSpawn);
+    const spawnPos = this.getSpawnPositionForPlayer(player, spawnPlayers, startPos, startRotY);
+    resetBall(player.ball, spawnPos, startRotY, stageFormat);
     player.finished = false;
     player.freeFly = false;
     player.goalType = null;
@@ -2961,6 +3597,7 @@ export class Game {
     player.ringoutSkipTimerFrames = 0;
     player.respawnTimerFrames = 0;
     this.markNoCollideForPlayer(player.id);
+    this.syncChainTopology({ forceRebuild: true });
     player.camera.initForStage(player.ball, startRotY, this.stageRuntime);
     if (player.id === this.localPlayerId) {
       this.syncCameraPose();
@@ -3076,6 +3713,13 @@ export class Game {
     localPlayer.ringoutSkipTimerFrames = 0;
     this.statusText = '';
     if (isBonusStage) {
+      if (this.isChainedTogetherMode()) {
+        this.accumulator = 0;
+        if (this.allowCourseAdvance) {
+          void this.advanceCourse(this.makeAdvanceInfo(INFO_FLAGS.FALLOUT));
+        }
+        return true;
+      }
       if (this.players.length > 1) {
         this.enterFreeFlyCamera(localPlayer);
         this.hidePlayerBall(localPlayer);
@@ -3088,7 +3732,7 @@ export class Game {
       return true;
     }
     this.accumulator = 0;
-    if (this.players.length <= 1 && this.stage) {
+    if ((this.players.length <= 1 || this.isChainedTogetherMode()) && this.stage) {
       void this.loadStage(this.stage.stageId);
     } else {
       this.respawnPlayerBall(localPlayer);
@@ -3605,9 +4249,11 @@ export class Game {
         const tickStart = this.simPerf.enabled ? nowMs() : 0;
         try {
         const simPlayers = this.getPlayersSorted();
+        this.syncChainTopology({ players: simPlayers });
+        const chainedTogetherMode = this.isChainedTogetherMode() && this.players.length > 1;
         const resultReplayActive = this.activeResultReplay !== null;
         const replayFalloutActive = this.activeResultReplay?.kind === 'fallout';
-        const ringoutActive = localPlayer.ringoutTimerFrames > 0 || replayFalloutActive;
+        let ringoutActive = localPlayer.ringoutTimerFrames > 0 || replayFalloutActive;
         const timeoverActive = this.timeoverTimerFrames > 0;
         const stageInputEnabled = this.introTimerFrames <= 0 && !timeoverActive;
         const localInputEnabled = stageInputEnabled
@@ -3829,18 +4475,25 @@ export class Game {
               player.camera.applyWormholeTransform(ball.wormholeTransform);
               ball.wormholeTransform = null;
             }
-            if (player.id === this.localPlayerId) {
-              if (!resultReplayActive && !localPlayer.finished && !ringoutActive && localPlayer.goalTimerFrames <= 0 && this.isBallFalloutForBall(ball)) {
-                this.beginFalloutSequence(isBonusStage);
+            if (!chainedTogetherMode) {
+              if (player.id === this.localPlayerId) {
+                if (!resultReplayActive && !localPlayer.finished && !ringoutActive && localPlayer.goalTimerFrames <= 0 && this.isBallFalloutForBall(ball)) {
+                  this.beginFalloutSequence(isBonusStage);
+                }
+              } else if (!resultReplayActive && !player.finished && player.ringoutTimerFrames <= 0 && this.isBallFalloutForBall(ball)) {
+                player.ringoutTimerFrames = isBonusStage ? BONUS_FALLOUT_SPECTATE_FRAMES : RINGOUT_TOTAL_FRAMES;
+                player.ringoutSkipTimerFrames = 0;
+                if (isBonusStage) {
+                  player.finished = true;
+                }
+                player.camera.initFalloutReplay(ball);
               }
-            } else if (!resultReplayActive && !player.finished && player.ringoutTimerFrames <= 0 && this.isBallFalloutForBall(ball)) {
-              player.ringoutTimerFrames = isBonusStage ? BONUS_FALLOUT_SPECTATE_FRAMES : RINGOUT_TOTAL_FRAMES;
-              player.ringoutSkipTimerFrames = 0;
-              if (isBonusStage) {
-                player.finished = true;
-              }
-              player.camera.initFalloutReplay(ball);
             }
+          }
+          if (chainedTogetherMode) {
+            this.simulateChainedTogether(simPlayers);
+            this.updateChainedTogetherFalloutState(isBonusStage, resultReplayActive, stageInputEnabled);
+            ringoutActive = localPlayer.ringoutTimerFrames > 0 || replayFalloutActive;
           }
           if (this.activeResultReplay && this.resultReplayNeedsRestart) {
             this.resultReplayNeedsRestart = false;
@@ -3943,6 +4596,10 @@ export class Game {
             if (!goalHit) {
               continue;
             }
+            if (chainedTogetherMode) {
+              this.beginChainedTeamGoalSequence(goalHit, resultReplayActive);
+              break;
+            }
             player.finished = true;
             player.goalType = goalHit?.goalType ?? null;
             if (player.id === this.localPlayerId) {
@@ -3985,17 +4642,19 @@ export class Game {
             break;
           }
         }
-        for (const player of simPlayers) {
-          if (player.id === this.localPlayerId || player.isSpectator || player.pendingSpawn) {
-            continue;
-          }
-          if (player.ringoutTimerFrames > 0) {
-            player.ringoutTimerFrames -= 1;
-            if (player.ringoutTimerFrames <= 0) {
-              if (isBonusStage) {
-                this.hidePlayerBall(player);
-              } else {
-                this.respawnPlayerBall(player);
+        if (!chainedTogetherMode) {
+          for (const player of simPlayers) {
+            if (player.id === this.localPlayerId || player.isSpectator || player.pendingSpawn) {
+              continue;
+            }
+            if (player.ringoutTimerFrames > 0) {
+              player.ringoutTimerFrames -= 1;
+              if (player.ringoutTimerFrames <= 0) {
+                if (isBonusStage) {
+                  this.hidePlayerBall(player);
+                } else {
+                  this.respawnPlayerBall(player);
+                }
               }
             }
           }

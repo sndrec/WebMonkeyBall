@@ -12,6 +12,7 @@ export type RoomSettings = {
 export type RoomMeta = {
   status: 'lobby' | 'in_game';
   gameSource?: GameSource;
+  gameMode?: 'standard' | 'chained_together';
   courseLabel?: string;
   stageLabel?: string;
   stageId?: number;
@@ -143,6 +144,7 @@ export type StartMatchMessage = {
   type: 'start';
   stageSeq: number;
   gameSource: GameSource;
+  gameMode?: 'standard' | 'chained_together';
   course: any;
   stageBasePath?: string;
   lateJoin?: boolean;

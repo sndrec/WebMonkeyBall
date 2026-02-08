@@ -1,5 +1,5 @@
 import { mat4, vec3, vec4 } from 'gl-matrix';
-import { Game } from './game.js';
+import { Game, type MultiplayerGameMode } from './game.js';
 import { AudioManager } from './audio.js';
 import { GAME_SOURCES, S16_TO_RAD, STAGE_BASE_PATHS, type GameSource } from './constants.js';
 import { getStageListForDifficulty } from './course.js';
@@ -591,12 +591,16 @@ const game = new Game({
       if (config) {
         netplayState.currentCourse = config;
         netplayState.currentGameSource = activeGameSource;
+        netplayState.currentGameMode = normalizeMultiplayerGameMode(
+          netplayState.currentGameMode ?? game.getMultiplayerGameMode(),
+        );
         netplayState.stageSeq += 1;
         promotePendingSpawns(netplayState.stageSeq);
         hostRelay.broadcast({
           type: 'start',
           stageSeq: netplayState.stageSeq,
           gameSource: activeGameSource,
+          gameMode: netplayState.currentGameMode,
           course: config,
           stageBasePath: getStageBasePath(activeGameSource),
         });
@@ -683,6 +687,7 @@ const lobbyRoomInfo = document.getElementById('lobby-room-info') as HTMLElement 
 const lobbyRoomStatus = document.getElementById('lobby-room-status') as HTMLElement | null;
 const lobbyRoomNameInput = document.getElementById('lobby-room-name') as HTMLInputElement | null;
 const lobbyPlayerList = document.getElementById('lobby-player-list') as HTMLElement | null;
+const lobbyGameModeSelect = document.getElementById('lobby-gamemode') as HTMLSelectElement | null;
 const lobbyMaxPlayersSelect = document.getElementById('lobby-max-players') as HTMLSelectElement | null;
 const lobbyCollisionToggle = document.getElementById('lobby-collision') as HTMLInputElement | null;
 const lobbyLockToggle = document.getElementById('lobby-locked') as HTMLInputElement | null;
@@ -814,11 +819,22 @@ const NETPLAY_MAX_INPUT_AHEAD = 60;
 const NETPLAY_MAX_INPUT_BEHIND = 60;
 const NETPLAY_HOST_MAX_INPUT_ROLLBACK = 16;
 const LOBBY_MAX_PLAYERS = 8;
+const CHAINED_MAX_PLAYERS = 4;
+const MULTIPLAYER_MODE_STANDARD: MultiplayerGameMode = 'standard';
+const MULTIPLAYER_MODE_CHAINED: MultiplayerGameMode = 'chained_together';
 const NAMEPLATE_OFFSET_SCALE = 1.6;
 const STAGE_TILT_SCALE = 0.6;
 const NETPLAY_DEBUG_STORAGE_KEY = 'smb_netplay_debug';
 const LOBBY_HEARTBEAT_INTERVAL_MS = 15000;
 const LOBBY_HEARTBEAT_FALLBACK_MS = 12000;
+
+function normalizeMultiplayerGameMode(mode: unknown): MultiplayerGameMode {
+  return mode === MULTIPLAYER_MODE_CHAINED ? MULTIPLAYER_MODE_CHAINED : MULTIPLAYER_MODE_STANDARD;
+}
+
+function formatMultiplayerGameModeLabel(mode: MultiplayerGameMode) {
+  return mode === MULTIPLAYER_MODE_CHAINED ? 'Chained Together' : 'Standard';
+}
 
 const netplayPerf = {
   enabled: perfEnabled,
@@ -962,6 +978,7 @@ type NetplayState = {
   stageReadyTimeoutMs: number | null;
   currentCourse: any | null;
   currentGameSource: GameSource | null;
+  currentGameMode: MultiplayerGameMode | null;
   awaitingSnapshot: boolean;
   pendingHostRollbackFrame: number | null;
   pendingHostRollbackPlayers: Set<number>;
@@ -1047,6 +1064,7 @@ function ensureNetplayState(role: NetplayRole) {
     stageReadyTimeoutMs: null,
     currentCourse: null,
     currentGameSource: null,
+    currentGameMode: null,
     awaitingSnapshot: false,
     pendingHostRollbackFrame: null,
     pendingHostRollbackPlayers: new Set(),
@@ -1230,7 +1248,8 @@ function getSimHash() {
   const players = [...game.players].sort((a, b) => a.id - b.id);
   const balls = players.map((player) => player.ball);
   const worlds = [game.world, ...players.map((player) => player.world)];
-  return hashSimState(balls, worlds, game.stageRuntime);
+  const baseHash = hashSimState(balls, worlds, game.stageRuntime);
+  return (baseHash ^ game.getMultiplayerDeterminismHash()) >>> 0;
 }
 
 function getAuthoritativeFrame(state: NetplayState) {
@@ -2007,6 +2026,39 @@ function formatCourseMeta(gameSource: GameSource, course: any) {
   return { courseLabel: `${modeLabel} ${difficulty}`.trim(), stageLabel: `Stage ${stageIndex + 1}` };
 }
 
+function getLobbySelectedGameMode() {
+  return normalizeMultiplayerGameMode(lobbyGameModeSelect?.value);
+}
+
+function getRoomGameMode(room: RoomInfo | null | undefined) {
+  return normalizeMultiplayerGameMode(room?.meta?.gameMode);
+}
+
+function getLobbyRoomGameMode() {
+  return normalizeMultiplayerGameMode(lobbyRoom?.meta?.gameMode ?? getLobbySelectedGameMode());
+}
+
+function getActiveLobbyPlayerCount() {
+  return game.players.filter((player) => !player.isSpectator && !player.pendingSpawn).length;
+}
+
+function getLobbyStartDisabledReason(isHost: boolean, mode: MultiplayerGameMode) {
+  if (!isHost) {
+    return 'Waiting for host...';
+  }
+  if (mode !== MULTIPLAYER_MODE_CHAINED) {
+    return '';
+  }
+  const activePlayers = getActiveLobbyPlayerCount();
+  if (activePlayers < 2) {
+    return 'Need at least 2 active players';
+  }
+  if (activePlayers > CHAINED_MAX_PLAYERS) {
+    return 'Chained Together supports up to 4 players';
+  }
+  return '';
+}
+
 function buildRoomMeta(): RoomMeta | null {
   if (!netplayState || netplayState.role !== 'host') {
     return null;
@@ -2025,10 +2077,12 @@ function buildRoomMeta(): RoomMeta | null {
   const labels = formatCourseMeta(gameSource, course);
   const stageId = game.stage?.stageId ?? undefined;
   const status = netplayState.currentCourse ? 'in_game' : 'lobby';
+  const gameMode = normalizeMultiplayerGameMode(netplayState.currentGameMode ?? getLobbySelectedGameMode());
   const roomName = sanitizeLobbyName(lobbyRoomNameInput?.value ?? lobbyRoom?.meta?.roomName ?? '');
   return {
     status,
     gameSource,
+    gameMode,
     courseLabel: labels.courseLabel,
     stageLabel: labels.stageLabel,
     stageId,
@@ -2046,9 +2100,11 @@ function buildRoomMetaForCreation(): RoomMeta {
       : buildSmb1CourseConfig();
   const labels = formatCourseMeta(gameSource, course);
   const roomName = sanitizeLobbyName(lobbyNameInput?.value ?? '');
+  const gameMode = getLobbySelectedGameMode();
   return {
     status: 'lobby',
     gameSource,
+    gameMode,
     courseLabel: labels.courseLabel,
     stageLabel: labels.stageLabel,
     roomName: roomName ?? undefined,
@@ -2133,6 +2189,10 @@ function updateLobbyUi() {
       lobbyRoomNameInput.value = '';
       lobbyRoomNameInput.disabled = true;
     }
+    if (lobbyGameModeSelect) {
+      lobbyGameModeSelect.value = MULTIPLAYER_MODE_STANDARD;
+      lobbyGameModeSelect.disabled = true;
+    }
     if (lobbyLockToggle) {
       lobbyLockToggle.checked = false;
       lobbyLockToggle.disabled = true;
@@ -2158,6 +2218,8 @@ function updateLobbyUi() {
   const playerCount = game.players.length;
   const maxPlayers = lobbyRoom.settings?.maxPlayers ?? game.maxPlayers;
   const isHost = netplayState?.role === 'host';
+  const gameMode = getLobbyRoomGameMode();
+  game.setMultiplayerGameMode(gameMode);
   if (lobbyRoomInfo) {
     lobbyRoomInfo.textContent = roomLabel;
   }
@@ -2170,7 +2232,7 @@ function updateLobbyUi() {
     lobbyRoomNameInput.disabled = !isHost;
   }
   if (lobbyRoomStatus) {
-    lobbyRoomStatus.textContent = `${statusLabel} • ${playerCount}/${maxPlayers} players`;
+    lobbyRoomStatus.textContent = `${statusLabel} • ${playerCount}/${maxPlayers} players • ${formatMultiplayerGameModeLabel(gameMode)}`;
   }
 
   const inMatch = lobbyRoom.meta?.status === 'in_game' || !!netplayState?.currentCourse;
@@ -2190,14 +2252,23 @@ function updateLobbyUi() {
       const sourceLabel = formatGameSourceLabel(meta.gameSource);
       const courseLabel = meta.courseLabel ?? 'Unknown';
       const stageLabel = meta.stageLabel ? ` • ${meta.stageLabel}` : '';
-      lobbyStageInfo.textContent = `${sourceLabel} • ${courseLabel}${stageLabel}`;
+      lobbyStageInfo.textContent = `${sourceLabel} • ${courseLabel}${stageLabel} • ${formatMultiplayerGameModeLabel(gameMode)}`;
     } else {
       lobbyStageInfo.textContent = 'Unknown';
     }
   }
 
+  if (lobbyGameModeSelect) {
+    lobbyGameModeSelect.value = gameMode;
+    lobbyGameModeSelect.disabled = !isHost;
+  }
+
   if (lobbyMaxPlayersSelect) {
     lobbyMaxPlayersSelect.value = String(maxPlayers);
+    for (const option of Array.from(lobbyMaxPlayersSelect.options)) {
+      const value = Number(option.value);
+      option.disabled = gameMode === MULTIPLAYER_MODE_CHAINED && Number.isFinite(value) && value > CHAINED_MAX_PLAYERS;
+    }
   }
   if (lobbyCollisionToggle) {
     lobbyCollisionToggle.checked = !!(lobbyRoom.settings?.collisionEnabled ?? true);
@@ -2218,9 +2289,10 @@ function updateLobbyUi() {
     lobbyStageButton.disabled = !isHost;
   }
   if (lobbyStartButton) {
+    const startBlockedReason = getLobbyStartDisabledReason(!!isHost, gameMode);
     lobbyStartButton.classList.remove('hidden');
-    lobbyStartButton.disabled = !isHost;
-    lobbyStartButton.textContent = isHost ? 'Start Match' : 'Waiting for host...';
+    lobbyStartButton.disabled = !!startBlockedReason;
+    lobbyStartButton.textContent = startBlockedReason || 'Start Match';
   }
   if (levelSelectOpenButton) {
     levelSelectOpenButton.disabled = !isHost;
@@ -2308,11 +2380,13 @@ function applyLobbySettingsFromInputs() {
   if (!lobbyRoom || netplayState?.role !== 'host') {
     return;
   }
+  const mode = getLobbyRoomGameMode();
   const currentPlayers = game.players.length;
   const requestedRaw = lobbyMaxPlayersSelect ? Number(lobbyMaxPlayersSelect.value) : lobbyRoom.settings.maxPlayers;
   const requestedMax = Number.isFinite(requestedRaw) ? requestedRaw : lobbyRoom.settings.maxPlayers;
-  const minPlayers = Math.max(2, currentPlayers);
-  const nextMax = clampInt(requestedMax, minPlayers, LOBBY_MAX_PLAYERS);
+  const minPlayers = mode === MULTIPLAYER_MODE_CHAINED ? 2 : Math.max(2, currentPlayers);
+  const maxPlayersCap = mode === MULTIPLAYER_MODE_CHAINED ? CHAINED_MAX_PLAYERS : LOBBY_MAX_PLAYERS;
+  const nextMax = clampInt(requestedMax, minPlayers, maxPlayersCap);
   const collisionEnabled = lobbyCollisionToggle ? !!lobbyCollisionToggle.checked : lobbyRoom.settings.collisionEnabled;
   const locked = lobbyLockToggle ? !!lobbyLockToggle.checked : lobbyRoom.settings.locked;
   lobbyRoom.settings = {
@@ -2323,6 +2397,36 @@ function applyLobbySettingsFromInputs() {
   };
   game.maxPlayers = nextMax;
   game.playerCollisionEnabled = collisionEnabled;
+  game.setMultiplayerGameMode(mode);
+  if (netplayState) {
+    netplayState.currentGameMode = mode;
+  }
+  if (lobbyMaxPlayersSelect) {
+    lobbyMaxPlayersSelect.value = String(nextMax);
+  }
+  broadcastRoomUpdate();
+  sendLobbyHeartbeat(performance.now(), true);
+  updateLobbyUi();
+}
+
+function applyLobbyGameModeFromInputs() {
+  if (!lobbyRoom || netplayState?.role !== 'host') {
+    return;
+  }
+  const mode = getLobbySelectedGameMode();
+  const maxPlayersCap = mode === MULTIPLAYER_MODE_CHAINED ? CHAINED_MAX_PLAYERS : LOBBY_MAX_PLAYERS;
+  const nextMax = clampInt(Math.min(lobbyRoom.settings.maxPlayers, maxPlayersCap), 2, maxPlayersCap);
+  lobbyRoom.settings = {
+    ...lobbyRoom.settings,
+    maxPlayers: nextMax,
+  };
+  game.maxPlayers = nextMax;
+  game.setMultiplayerGameMode(mode);
+  if (netplayState) {
+    netplayState.currentGameMode = mode;
+  }
+  const baseMeta = buildRoomMeta() ?? lobbyRoom.meta ?? { status: 'lobby' };
+  lobbyRoom.meta = { ...baseMeta, gameMode: mode };
   if (lobbyMaxPlayersSelect) {
     lobbyMaxPlayersSelect.value = String(nextMax);
   }
@@ -2470,6 +2574,7 @@ function resetMatchState() {
   if (netplayState) {
     netplayState.currentCourse = null;
     netplayState.currentGameSource = null;
+    netplayState.currentGameMode = null;
     netplayState.awaitingSnapshot = false;
   }
   pendingSnapshot = null;
@@ -2669,6 +2774,7 @@ function resetNetplayConnections({ preserveLobby = false }: { preserveLobby?: bo
     game.setPlayerInputFeed(player.id, null);
   }
   game.allowCourseAdvance = true;
+  game.setMultiplayerGameMode(MULTIPLAYER_MODE_STANDARD);
   stopLobbyHeartbeat();
   if (!preserveLobby) {
     lobbyRoom = null;
@@ -3658,8 +3764,17 @@ function handleHostMessage(msg: HostToClientMessage) {
     return;
   }
   if (msg.type === 'room_update') {
-    game.maxPlayers = msg.room.settings.maxPlayers;
+    const mode = getRoomGameMode(msg.room);
+    const cappedMaxPlayers = mode === MULTIPLAYER_MODE_CHAINED
+      ? Math.min(msg.room.settings.maxPlayers, CHAINED_MAX_PLAYERS)
+      : msg.room.settings.maxPlayers;
+    msg.room.settings.maxPlayers = cappedMaxPlayers;
+    game.maxPlayers = cappedMaxPlayers;
     game.playerCollisionEnabled = msg.room.settings.collisionEnabled;
+    game.setMultiplayerGameMode(mode);
+    if (netplayState) {
+      netplayState.currentGameMode = mode;
+    }
     lobbyRoom = msg.room;
     updateLobbyUi();
     return;
@@ -3669,6 +3784,7 @@ function handleHostMessage(msg: HostToClientMessage) {
       netplayState.stageSeq = msg.stageSeq;
       netplayState.currentCourse = msg.course;
       netplayState.currentGameSource = msg.gameSource;
+      netplayState.currentGameMode = normalizeMultiplayerGameMode(msg.gameMode);
       netplayState.awaitingSnapshot = false;
       netplayState.expectedHashes.clear();
       netplayState.hashHistory.clear();
@@ -3680,6 +3796,7 @@ function handleHostMessage(msg: HostToClientMessage) {
     pendingSnapshot = null;
     activeGameSource = msg.gameSource;
     game.setGameSource(activeGameSource);
+    game.setMultiplayerGameMode(normalizeMultiplayerGameMode(msg.gameMode));
     game.stageBasePath = msg.stageBasePath ?? getStageBasePath(activeGameSource);
     currentSmb2LikeMode = activeGameSource !== GAME_SOURCES.SMB1 && msg.course?.mode ? msg.course.mode : null;
     void startStage(msg.course);
@@ -4290,7 +4407,8 @@ async function refreshLobbyList() {
       const sourceLabel = formatGameSourceLabel(room.meta?.gameSource);
       const courseLabel = room.meta?.courseLabel ?? room.courseId ?? 'Unknown';
       const stageLabel = room.meta?.stageLabel ? ` • ${room.meta.stageLabel}` : '';
-      subtitle.textContent = `${sourceLabel} • ${courseLabel}${stageLabel}`;
+      const modeLabel = ` • ${formatMultiplayerGameModeLabel(getRoomGameMode(room))}`;
+      subtitle.textContent = `${sourceLabel} • ${courseLabel}${stageLabel}${modeLabel}`;
       const meta = document.createElement('div');
       meta.className = 'lobby-item-meta';
       const status = room.meta?.status === 'in_game' ? 'In Game' : 'Waiting';
@@ -4328,12 +4446,14 @@ async function createRoom() {
     return;
   }
   const isPublic = lobbyPublicCheckbox?.checked ?? true;
+  const mode = getLobbySelectedGameMode();
+  const defaultMaxPlayers = mode === MULTIPLAYER_MODE_CHAINED ? CHAINED_MAX_PLAYERS : LOBBY_MAX_PLAYERS;
   lobbyStatus.textContent = 'Lobby: creating...';
   try {
     const result = await lobbyClient.createRoom({
       isPublic,
       courseId: 'smb1-main',
-      settings: { maxPlayers: LOBBY_MAX_PLAYERS, collisionEnabled: true, locked: false },
+      settings: { maxPlayers: defaultMaxPlayers, collisionEnabled: true, locked: false },
       meta: buildRoomMetaForCreation(),
     });
     destroySingleplayerForNetplay();
@@ -4506,19 +4626,26 @@ function startHost(room: LobbyRoom, playerToken: string) {
     return;
   }
   netplayEnabled = true;
-  ensureNetplayState('host');
+  const state = ensureNetplayState('host');
+  const roomMode = getRoomGameMode(room);
+  state.currentGameMode = roomMode;
   game.setLocalPlayerId(room.hostId);
   applyLocalProfileToSession();
-  game.maxPlayers = room.settings.maxPlayers;
+  const cappedMaxPlayers = roomMode === MULTIPLAYER_MODE_CHAINED
+    ? Math.min(room.settings.maxPlayers, CHAINED_MAX_PLAYERS)
+    : room.settings.maxPlayers;
+  room.settings.maxPlayers = cappedMaxPlayers;
+  game.maxPlayers = cappedMaxPlayers;
   game.playerCollisionEnabled = room.settings.collisionEnabled;
+  game.setMultiplayerGameMode(roomMode);
   game.allowCourseAdvance = true;
   hostRelay = new HostRelay((playerId, msg) => {
     handleClientMessage(playerId, msg);
   });
   hostRelay.hostId = room.hostId;
   hostRelay.onConnect = (playerId) => {
-    const state = netplayState;
-    if (!state) {
+    const liveState = netplayState;
+    if (!liveState) {
       rejectHostConnection(playerId, 'Host unavailable');
       return;
     }
@@ -4526,8 +4653,8 @@ function startHost(room: LobbyRoom, playerToken: string) {
       rejectHostConnection(playerId, 'Room is full');
       return;
     }
-    if (!state.clientStates.has(playerId)) {
-      state.clientStates.set(playerId, {
+    if (!liveState.clientStates.has(playerId)) {
+      liveState.clientStates.set(playerId, {
         lastAckedHostFrame: -1,
         lastAckedClientInput: -1,
         lastSnapshotMs: null,
@@ -4538,7 +4665,7 @@ function startHost(room: LobbyRoom, playerToken: string) {
     game.addPlayer(playerId, { spectator: joinAsSpectator });
     const player = game.players.find((p) => p.id === playerId);
     if (joinAsSpectator) {
-      markPlayerPendingSpawn(playerId, state.stageSeq);
+      markPlayerPendingSpawn(playerId, liveState.stageSeq);
     }
     const pendingSpawn = !!player?.pendingSpawn;
     if (!lobbyProfiles.has(playerId)) {
@@ -4548,7 +4675,7 @@ function startHost(room: LobbyRoom, playerToken: string) {
       hostRelay?.sendTo(playerId, {
         type: 'player_join',
         playerId: existing.id,
-        stageSeq: state.stageSeq,
+        stageSeq: liveState.stageSeq,
         spectator: existing.isSpectator,
         pendingSpawn: existing.pendingSpawn,
       });
@@ -4556,7 +4683,7 @@ function startHost(room: LobbyRoom, playerToken: string) {
     hostRelay?.broadcast({
       type: 'player_join',
       playerId,
-      stageSeq: state.stageSeq,
+      stageSeq: liveState.stageSeq,
       spectator: joinAsSpectator,
       pendingSpawn,
     });
@@ -4568,13 +4695,14 @@ function startHost(room: LobbyRoom, playerToken: string) {
     for (const [id, profile] of lobbyProfiles.entries()) {
       hostRelay?.sendTo(playerId, { type: 'player_profile', playerId: id, profile });
     }
-    if (state.currentCourse && state.currentGameSource) {
+    if (liveState.currentCourse && liveState.currentGameSource) {
       hostRelay?.sendTo(playerId, {
         type: 'start',
-        stageSeq: state.stageSeq,
-        gameSource: state.currentGameSource,
-        course: state.currentCourse,
-        stageBasePath: getStageBasePath(state.currentGameSource),
+        stageSeq: liveState.stageSeq,
+        gameSource: liveState.currentGameSource,
+        gameMode: normalizeMultiplayerGameMode(liveState.currentGameMode),
+        course: liveState.currentCourse,
+        stageBasePath: getStageBasePath(liveState.currentGameSource),
         lateJoin: joinAsSpectator,
       });
     }
@@ -4636,11 +4764,18 @@ async function startClient(room: LobbyRoom, playerId: number, playerToken: strin
     return;
   }
   netplayEnabled = true;
-  ensureNetplayState('client');
+  const state = ensureNetplayState('client');
+  const roomMode = getRoomGameMode(room);
+  state.currentGameMode = roomMode;
   game.setLocalPlayerId(playerId);
   applyLocalProfileToSession();
-  game.maxPlayers = room.settings.maxPlayers;
+  const cappedMaxPlayers = roomMode === MULTIPLAYER_MODE_CHAINED
+    ? Math.min(room.settings.maxPlayers, CHAINED_MAX_PLAYERS)
+    : room.settings.maxPlayers;
+  room.settings.maxPlayers = cappedMaxPlayers;
+  game.maxPlayers = cappedMaxPlayers;
   game.playerCollisionEnabled = room.settings.collisionEnabled;
+  game.setMultiplayerGameMode(roomMode);
   game.allowCourseAdvance = false;
   game.addPlayer(room.hostId, { spectator: false });
   clientPeer = new ClientPeer((msg) => {
@@ -5394,8 +5529,20 @@ function handleStartRequest() {
     }
     return;
   }
+  const gameMode = netplayEnabled ? getLobbyRoomGameMode() : MULTIPLAYER_MODE_STANDARD;
+  const startBlockedReason = netplayEnabled
+    ? getLobbyStartDisabledReason(netplayState?.role === 'host', gameMode)
+    : '';
+  if (startBlockedReason) {
+    if (hudStatus) {
+      hudStatus.textContent = startBlockedReason;
+    }
+    updateLobbyUi();
+    return;
+  }
   const resolved = resolveSelectedGameSource();
   activeGameSource = resolved.gameSource;
+  game.setMultiplayerGameMode(gameMode);
   const difficulty = activeGameSource === GAME_SOURCES.SMB2
     ? buildSmb2CourseConfig()
     : activeGameSource === GAME_SOURCES.MB2WS
@@ -5404,6 +5551,7 @@ function handleStartRequest() {
   if (netplayEnabled && netplayState?.role === 'host') {
     netplayState.currentCourse = difficulty;
     netplayState.currentGameSource = activeGameSource;
+    netplayState.currentGameMode = gameMode;
     if (lobbyRoom) {
       const meta = buildRoomMeta();
       if (meta) {
@@ -5509,6 +5657,11 @@ if (lobbyJoinButton) {
 if (lobbyLeaveButton) {
   lobbyLeaveButton.addEventListener('click', () => {
     void leaveRoom();
+  });
+}
+if (lobbyGameModeSelect) {
+  lobbyGameModeSelect.addEventListener('change', () => {
+    applyLobbyGameModeFromInputs();
   });
 }
 if (lobbyMaxPlayersSelect) {
