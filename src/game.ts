@@ -89,17 +89,24 @@ const SPEED_MPH_SCALE = 134.21985;
 const SPEED_BAR_MAX_MPH = 70;
 const CHAIN_MAX_PLAYERS = 4;
 const CHAIN_LINK_LENGTH = 2.0;
-const CHAIN_SEGMENTS = 12;
+const CHAIN_SEGMENTS = 10;
 const CHAIN_SPAWN_SPACING = 1.5;
 const CHAIN_NODE_RADIUS = 0.25;
 const CHAIN_NODE_DAMPING = 0.992;
 const CHAIN_NODE_GRAVITY = 0.0035;
-const CHAIN_SUBSTEPS = 3;
-const CHAIN_CONSTRAINT_ITERS = 7;
+const CHAIN_SUBSTEPS = 2;
+const CHAIN_CONSTRAINT_ITERS = 6;
 const CHAIN_LEASH_CORRECTION = 0.0;
 const CHAIN_LEASH_MAX_STEP = 0.15;
 const CHAIN_LEASH_VEL_BLEND = 0.2;
-const CHAIN_ENDPOINT_SNAP = 0.65;
+const CHAIN_ENDPOINT_SNAP = 0.9;
+const CHAIN_ENDPOINT_TRANSFER = 0.6;
+const CHAIN_ENDPOINT_TRANSFER_MAX_STEP = 0.1;
+const CHAIN_ENDPOINT_SEGMENT_TRANSFER = 0.9;
+const CHAIN_ENDPOINT_SEGMENT_MAX_STEP = 0.12;
+const CHAIN_ENDPOINT_POS_BLEND = 0.5;
+const CHAIN_ENDPOINT_PREV_BLEND = 0.9;
+const CHAIN_ENDPOINT_VEL_BLEND = 0.1;
 const CHAIN_EFFECT_ID_MASK = 0x80000000;
 const fallOutStack = new MatrixStack();
 const fallOutLocal = { x: 0, y: 0, z: 0 };
@@ -118,6 +125,13 @@ type ChainLinkState = {
   playerAId: number;
   playerBId: number;
   nodes: ChainNodeState[];
+};
+
+type ChainBallTransferState = {
+  x: number;
+  y: number;
+  z: number;
+  endpoints: ChainNodeState[];
 };
 
 type PlayerState = {
@@ -1008,16 +1022,102 @@ export class Game {
     neighbor: ChainNodeState,
     ball: ReturnType<typeof createBallState>,
     snap = 1,
-  ) {
+    transferToBall = false,
+  ): Vec3 | null {
+    const radius = Math.max(0.01, ball.currRadius ?? 0.5);
+    const segmentRestLen = CHAIN_LINK_LENGTH / CHAIN_SEGMENTS;
+    const preDx = endpoint.pos.x - ball.pos.x;
+    const preDy = endpoint.pos.y - ball.pos.y;
+    const preDz = endpoint.pos.z - ball.pos.z;
+    const preDist = sqrt((preDx * preDx) + (preDy * preDy) + (preDz * preDz));
+    const preStretch = Math.max(0, preDist - radius);
     const targetPos = this.getChainEndpointTarget(endpoint, neighbor, ball, false);
     const targetPrevPos = this.getChainEndpointTarget(endpoint, neighbor, ball, true);
-    endpoint.pos.x += (targetPos.x - endpoint.pos.x) * snap;
-    endpoint.pos.y += (targetPos.y - endpoint.pos.y) * snap;
-    endpoint.pos.z += (targetPos.z - endpoint.pos.z) * snap;
-    endpoint.prevPos.x += (targetPrevPos.x - endpoint.prevPos.x) * snap;
-    endpoint.prevPos.y += (targetPrevPos.y - endpoint.prevPos.y) * snap;
-    endpoint.prevPos.z += (targetPrevPos.z - endpoint.prevPos.z) * snap;
+    const corrX = (targetPos.x - endpoint.pos.x) * snap;
+    const corrY = (targetPos.y - endpoint.pos.y) * snap;
+    const corrZ = (targetPos.z - endpoint.pos.z) * snap;
+    const corrPrevX = (targetPrevPos.x - endpoint.prevPos.x) * snap;
+    const corrPrevY = (targetPrevPos.y - endpoint.prevPos.y) * snap;
+    const corrPrevZ = (targetPrevPos.z - endpoint.prevPos.z) * snap;
+    endpoint.pos.x += corrX;
+    endpoint.pos.y += corrY;
+    endpoint.pos.z += corrZ;
+    endpoint.prevPos.x += corrPrevX;
+    endpoint.prevPos.y += corrPrevY;
+    endpoint.prevPos.z += corrPrevZ;
     endpoint.animGroupId = ball.physBall?.animGroupId ?? 0;
+    if (!transferToBall) {
+      return null;
+    }
+    const segDx = neighbor.pos.x - endpoint.pos.x;
+    const segDy = neighbor.pos.y - endpoint.pos.y;
+    const segDz = neighbor.pos.z - endpoint.pos.z;
+    const segDist = sqrt((segDx * segDx) + (segDy * segDy) + (segDz * segDz));
+    const segStretch = Math.max(0, segDist - segmentRestLen);
+    let transferX = 0;
+    let transferY = 0;
+    let transferZ = 0;
+
+    if (preStretch > 1e-6) {
+      const stretchRatio = Math.min(1, preStretch / radius);
+      let radialX = -corrX * CHAIN_ENDPOINT_TRANSFER * stretchRatio;
+      let radialY = -corrY * CHAIN_ENDPOINT_TRANSFER * stretchRatio;
+      let radialZ = -corrZ * CHAIN_ENDPOINT_TRANSFER * stretchRatio;
+      const radialLen = sqrt((radialX * radialX) + (radialY * radialY) + (radialZ * radialZ));
+      if (radialLen > CHAIN_ENDPOINT_TRANSFER_MAX_STEP && radialLen > 1e-6) {
+        const scale = CHAIN_ENDPOINT_TRANSFER_MAX_STEP / radialLen;
+        radialX *= scale;
+        radialY *= scale;
+        radialZ *= scale;
+      }
+      transferX += radialX;
+      transferY += radialY;
+      transferZ += radialZ;
+    }
+
+    if (segStretch > 1e-6 && segDist > 1e-6) {
+      const segPull = Math.min(CHAIN_ENDPOINT_SEGMENT_MAX_STEP, segStretch * CHAIN_ENDPOINT_SEGMENT_TRANSFER);
+      const invSegDist = 1 / segDist;
+      transferX += segDx * invSegDist * segPull;
+      transferY += segDy * invSegDist * segPull;
+      transferZ += segDz * invSegDist * segPull;
+    }
+
+    const transferLen = sqrt((transferX * transferX) + (transferY * transferY) + (transferZ * transferZ));
+    if (transferLen <= 1e-6) {
+      return null;
+    }
+    return { x: transferX, y: transferY, z: transferZ };
+  }
+
+  private applyChainBallTransfer(
+    ball: ReturnType<typeof createBallState>,
+    transfer: Vec3,
+    endpoints: ChainNodeState[],
+  ) {
+    ball.vel.x += transfer.x * CHAIN_ENDPOINT_VEL_BLEND;
+    ball.vel.y += transfer.y * CHAIN_ENDPOINT_VEL_BLEND;
+    ball.vel.z += transfer.z * CHAIN_ENDPOINT_VEL_BLEND;
+    if (CHAIN_ENDPOINT_POS_BLEND <= 0) {
+      return;
+    }
+    const posX = transfer.x * CHAIN_ENDPOINT_POS_BLEND;
+    const posY = transfer.y * CHAIN_ENDPOINT_POS_BLEND;
+    const posZ = transfer.z * CHAIN_ENDPOINT_POS_BLEND;
+    ball.pos.x += posX;
+    ball.pos.y += posY;
+    ball.pos.z += posZ;
+    ball.prevPos.x += posX * CHAIN_ENDPOINT_PREV_BLEND;
+    ball.prevPos.y += posY * CHAIN_ENDPOINT_PREV_BLEND;
+    ball.prevPos.z += posZ * CHAIN_ENDPOINT_PREV_BLEND;
+    for (const endpoint of endpoints) {
+      endpoint.pos.x += posX;
+      endpoint.pos.y += posY;
+      endpoint.pos.z += posZ;
+      endpoint.prevPos.x += posX * CHAIN_ENDPOINT_PREV_BLEND;
+      endpoint.prevPos.y += posY * CHAIN_ENDPOINT_PREV_BLEND;
+      endpoint.prevPos.z += posZ * CHAIN_ENDPOINT_PREV_BLEND;
+    }
   }
 
   private getChainEffectId(link: ChainLinkState, segmentIndex: number) {
@@ -1064,15 +1164,17 @@ export class Game {
       return;
     }
     const prevLinks = new Map<string, ChainLinkState>();
-    for (const link of this.chainLinks) {
-      prevLinks.set(this.getPairKey(link.playerAId, link.playerBId), link);
+    if (!forceRebuild) {
+      for (const link of this.chainLinks) {
+        prevLinks.set(this.getPairKey(link.playerAId, link.playerBId), link);
+      }
     }
     const nextLinks: ChainLinkState[] = [];
     for (let i = 0; i < chainPlayers.length - 1; i += 1) {
       const playerA = chainPlayers[i];
       const playerB = chainPlayers[i + 1];
       const pairKey = this.getPairKey(playerA.id, playerB.id);
-      const prev = prevLinks.get(pairKey);
+      const prev = forceRebuild ? undefined : prevLinks.get(pairKey);
       const linkId = ((playerA.id & 0xffff) << 16) | (playerB.id & 0xffff);
       const nodes = prev && prev.nodes.length === (CHAIN_SEGMENTS + 1)
         ? prev.nodes.map((node) => ({
@@ -2462,23 +2564,13 @@ export class Game {
             }
             const dist = sqrt(distSq);
             const diff = (dist - segmentRestLen) / dist;
-            if (i === 0) {
-              nodeB.pos.x -= dx * diff;
-              nodeB.pos.y -= dy * diff;
-              nodeB.pos.z -= dz * diff;
-            } else if (i === (link.nodes.length - 2)) {
-              nodeA.pos.x += dx * diff;
-              nodeA.pos.y += dy * diff;
-              nodeA.pos.z += dz * diff;
-            } else {
-              const half = diff * 0.5;
-              nodeA.pos.x += dx * half;
-              nodeA.pos.y += dy * half;
-              nodeA.pos.z += dz * half;
-              nodeB.pos.x -= dx * half;
-              nodeB.pos.y -= dy * half;
-              nodeB.pos.z -= dz * half;
-            }
+            const half = diff * 0.5;
+            nodeA.pos.x += dx * half;
+            nodeA.pos.y += dy * half;
+            nodeA.pos.z += dz * half;
+            nodeB.pos.x -= dx * half;
+            nodeB.pos.y -= dy * half;
+            nodeB.pos.z -= dz * half;
           }
 
           for (let i = 1; i < link.nodes.length - 1; i += 1) {
@@ -2493,13 +2585,55 @@ export class Game {
         if (!playerA || !playerB) {
           continue;
         }
-        this.applyChainLeashCorrection(playerA.ball, playerB.ball);
-        this.anchorChainEndpointToBallSurface(link.nodes[0], link.nodes[1], playerA.ball, CHAIN_ENDPOINT_SNAP);
-        this.anchorChainEndpointToBallSurface(
-          link.nodes[link.nodes.length - 1],
+        if (CHAIN_LEASH_CORRECTION > 0) {
+          this.applyChainLeashCorrection(playerA.ball, playerB.ball);
+        }
+      }
+
+      const pendingBallTransfers = new Map<number, ChainBallTransferState>();
+      for (const link of this.chainLinks) {
+        const playerA = playerMap.get(link.playerAId);
+        const playerB = playerMap.get(link.playerBId);
+        if (!playerA || !playerB) {
+          continue;
+        }
+        const first = link.nodes[0];
+        const last = link.nodes[link.nodes.length - 1];
+        const transferA = this.anchorChainEndpointToBallSurface(first, link.nodes[1], playerA.ball, CHAIN_ENDPOINT_SNAP, true);
+        const transferB = this.anchorChainEndpointToBallSurface(
+          last,
           link.nodes[link.nodes.length - 2],
           playerB.ball,
           CHAIN_ENDPOINT_SNAP,
+          true,
+        );
+        if (transferA) {
+          const state = pendingBallTransfers.get(playerA.id) ?? { x: 0, y: 0, z: 0, endpoints: [] };
+          state.x += transferA.x;
+          state.y += transferA.y;
+          state.z += transferA.z;
+          state.endpoints.push(first);
+          pendingBallTransfers.set(playerA.id, state);
+        }
+        if (transferB) {
+          const state = pendingBallTransfers.get(playerB.id) ?? { x: 0, y: 0, z: 0, endpoints: [] };
+          state.x += transferB.x;
+          state.y += transferB.y;
+          state.z += transferB.z;
+          state.endpoints.push(last);
+          pendingBallTransfers.set(playerB.id, state);
+        }
+      }
+
+      for (const [playerId, transferState] of pendingBallTransfers.entries()) {
+        const player = playerMap.get(playerId);
+        if (!player) {
+          continue;
+        }
+        this.applyChainBallTransfer(
+          player.ball,
+          { x: transferState.x, y: transferState.y, z: transferState.z },
+          transferState.endpoints,
         );
       }
     }
