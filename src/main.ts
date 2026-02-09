@@ -29,6 +29,7 @@ import * as Nl from './noclip/SuperMonkeyBall/NaomiLib.js';
 import * as Gma from './noclip/SuperMonkeyBall/Gma.js';
 import { GameplaySyncState, Renderer } from './noclip/Render.js';
 import { LobbyClient, HostRelay, ClientPeer, createHostOffer, applyHostSignal } from './netplay.js';
+import { LeaderboardsClient, type CourseReplayData, type CourseReplaySegment } from './leaderboards.js';
 import type { QuantizedInput } from './determinism.js';
 import { hashSimState } from './sim_hash.js';
 import type {
@@ -394,6 +395,7 @@ async function applyLoadedPack(pack: LoadedPack) {
   activePackKey = key;
   setActivePack(pack);
   setPackEnabled(true);
+  void refreshLeaderboardAllowlist(true);
   updatePackUi();
   updateSmb2ChallengeStages();
   updateSmb2StoryOptions();
@@ -614,6 +616,12 @@ const game = new Game({
     }
     void handleStageLoaded(stageId);
   },
+  onStageGoal: (info) => {
+    handleStageGoal(info);
+  },
+  onStageFail: (info) => {
+    handleStageFail(info);
+  },
   onCourseComplete: () => {
     handleCourseComplete();
   },
@@ -659,17 +667,49 @@ const syncState: GameplaySyncState = {
 
 type LobbyRoom = RoomInfo;
 
+type LeaderboardSession = {
+  active: boolean;
+  eligible: boolean;
+  gameSource: GameSource;
+  packId: string | null;
+  courseId: string;
+  mode: 'story' | 'challenge' | 'smb1';
+  courseConfig: any;
+  warpUsed: boolean;
+  courseTimerFrames: number;
+  penaltyFrames: number;
+  retryCount: number;
+  stageScoreStart: number;
+  segments: CourseReplaySegment[];
+  hasSkipped: boolean;
+};
+
 const lobbyBaseUrl = (window as any).LOBBY_URL ?? "";
 const lobbyClient = lobbyBaseUrl ? new LobbyClient(lobbyBaseUrl) : null;
+const leaderboardBaseUrl = (window as any).LEADERBOARD_URL ?? lobbyBaseUrl;
+const leaderboardsClient = leaderboardBaseUrl ? new LeaderboardsClient(leaderboardBaseUrl) : null;
 
 const multiplayerOpenButton = document.getElementById('open-multiplayer') as HTMLButtonElement | null;
 const multiplayerBackButton = document.getElementById('multiplayer-back') as HTMLButtonElement | null;
 const levelSelectOpenButton = document.getElementById('open-level-select') as HTMLButtonElement | null;
 const levelSelectBackButton = document.getElementById('level-select-back') as HTMLButtonElement | null;
+const leaderboardsOpenButton = document.getElementById('open-leaderboards') as HTMLButtonElement | null;
+const leaderboardsBackButton = document.getElementById('leaderboards-back') as HTMLButtonElement | null;
 const settingsOpenButton = document.getElementById('open-settings') as HTMLButtonElement | null;
 const settingsBackButton = document.getElementById('settings-back') as HTMLButtonElement | null;
 const settingsTabButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-settings-tab]'));
 const settingsTabPanels = Array.from(document.querySelectorAll<HTMLElement>('[data-settings-panel]'));
+const leaderboardsMenuPanel = document.getElementById('leaderboards-menu') as HTMLElement | null;
+const leaderboardTypeSelect = document.getElementById('leaderboard-type') as HTMLSelectElement | null;
+const leaderboardGoalField = document.getElementById('leaderboard-goal-field') as HTMLElement | null;
+const leaderboardGoalSelect = document.getElementById('leaderboard-goal') as HTMLSelectElement | null;
+const leaderboardMetricField = document.getElementById('leaderboard-metric-field') as HTMLElement | null;
+const leaderboardMetricSelect = document.getElementById('leaderboard-metric') as HTMLSelectElement | null;
+const leaderboardWarpField = document.getElementById('leaderboard-warp-field') as HTMLElement | null;
+const leaderboardWarpSelect = document.getElementById('leaderboard-warp') as HTMLSelectElement | null;
+const leaderboardRefreshButton = document.getElementById('leaderboard-refresh') as HTMLButtonElement | null;
+const leaderboardStatus = document.getElementById('leaderboard-status') as HTMLElement | null;
+const leaderboardList = document.getElementById('leaderboard-list') as HTMLElement | null;
 const multiplayerOnlineCount = document.getElementById('lobby-online-count') as HTMLElement | null;
 const multiplayerLayout = document.getElementById('multiplayer-layout') as HTMLElement | null;
 const multiplayerBrowser = document.getElementById('multiplayer-browser') as HTMLElement | null;
@@ -756,7 +796,9 @@ let pendingSnapshot: {
 let lobbyHeartbeatTimer: number | null = null;
 let lastLobbyHeartbeatMs: number | null = null;
 let netplayAccumulator = 0;
-type MenuPanel = 'main' | 'multiplayer' | 'multiplayer-ingame' | 'settings' | 'level-select';
+let leaderboardAllowlist: string[] = [];
+let leaderboardSession: LeaderboardSession | null = null;
+type MenuPanel = 'main' | 'multiplayer' | 'multiplayer-ingame' | 'settings' | 'level-select' | 'leaderboards';
 type SettingsTab = 'input' | 'audio' | 'multiplayer';
 let activeMenu: MenuPanel = 'main';
 let settingsReturnMenu: MenuPanel = 'main';
@@ -2326,6 +2368,130 @@ function updateLevelSelectUi() {
   }
 }
 
+function formatLeaderboardTimer(frames: number): string {
+  const clampedFrames = Math.max(0, Math.floor(frames));
+  const totalSeconds = Math.floor(clampedFrames / 60);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const frameRemainder = clampedFrames % 60;
+  const centis = Math.floor((frameRemainder * 100) / 60);
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(centis).padStart(2, '0')}`;
+}
+
+function updateLeaderboardsUi() {
+  const type = leaderboardTypeSelect?.value ?? 'stage';
+  leaderboardGoalField?.classList.toggle('hidden', type !== 'stage');
+  leaderboardMetricField?.classList.toggle('hidden', type !== 'stage');
+  leaderboardWarpField?.classList.toggle('hidden', type !== 'course');
+  if (leaderboardStatus) {
+    leaderboardStatus.textContent = leaderboardsClient ? 'Leaderboards: ready' : 'Leaderboards: unavailable';
+  }
+}
+
+function renderLeaderboardEntries(entries: { displayName: string; value: number }[], metric: 'time' | 'score') {
+  if (!leaderboardList) {
+    return;
+  }
+  leaderboardList.innerHTML = '';
+  if (entries.length === 0) {
+    const empty = document.createElement('div');
+    empty.textContent = 'No entries yet.';
+    leaderboardList.appendChild(empty);
+    return;
+  }
+  entries.forEach((entry, index) => {
+    const row = document.createElement('div');
+    row.className = 'leaderboard-row';
+    const rank = document.createElement('div');
+    rank.className = 'leaderboard-rank';
+    rank.textContent = String(index + 1);
+    const name = document.createElement('div');
+    name.textContent = entry.displayName || 'Anonymous';
+    const value = document.createElement('div');
+    value.className = 'leaderboard-value';
+    value.textContent = metric === 'time' ? formatLeaderboardTimer(entry.value) : String(entry.value);
+    row.append(rank, name, value);
+    leaderboardList.appendChild(row);
+  });
+}
+
+function resolveSelectedStageId(gameSource: GameSource): number | null {
+  if (gameSource === GAME_SOURCES.SMB1) {
+    const stages = getStageListForDifficulty(difficultySelect?.value ?? 'beginner');
+    const index = Math.max(0, Number(smb1StageSelect?.value ?? 0));
+    return stages[index]?.id ?? null;
+  }
+  const mode = smb2ModeSelect?.value === 'story' ? 'story' : 'challenge';
+  if (mode === 'story') {
+    const storyOrder = getSmb2LikeStoryOrder(gameSource);
+    const worldIndex = Math.max(0, Number(smb2StoryWorldSelect?.value ?? 1) - 1);
+    const stageIndex = Math.max(0, Number(smb2StoryStageSelect?.value ?? 1) - 1);
+    const stageList = storyOrder[worldIndex] ?? [];
+    return stageList[stageIndex] ?? null;
+  }
+  const order = getSmb2LikeChallengeOrder(gameSource);
+  const difficulty = (smb2ChallengeSelect?.value ?? 'beginner') as Smb2ChallengeDifficulty | Mb2wsChallengeDifficulty;
+  const stages = order[difficulty] ?? [];
+  const stageIndex = Math.max(0, Number(smb2ChallengeStageSelect?.value ?? 1) - 1);
+  return stages[stageIndex] ?? null;
+}
+
+async function refreshLeaderboards() {
+  if (!leaderboardsClient) {
+    if (leaderboardStatus) {
+      leaderboardStatus.textContent = 'Leaderboards: unavailable';
+    }
+    return;
+  }
+  const type = (leaderboardTypeSelect?.value ?? 'stage') as 'stage' | 'course';
+  const { gameSource } = resolveSelectedGameSource();
+  const packId = getActivePackId();
+  if (leaderboardStatus) {
+    leaderboardStatus.textContent = 'Leaderboards: loading...';
+  }
+  try {
+    if (type === 'stage') {
+      const stageId = resolveSelectedStageId(gameSource);
+      if (!stageId) {
+        throw new Error('invalid_stage');
+      }
+      const goalType = (leaderboardGoalSelect?.value ?? 'B') as 'B' | 'G' | 'R';
+      const metric = (leaderboardMetricSelect?.value ?? 'time') as 'time' | 'score';
+      const entries = await leaderboardsClient.getStageLeaderboard({
+        gameSource,
+        stageId,
+        goalType,
+        metric,
+        packId,
+      });
+      renderLeaderboardEntries(entries, metric);
+    } else {
+      const config = gameSource === GAME_SOURCES.MB2WS ? buildMb2wsCourseConfig() : gameSource === GAME_SOURCES.SMB2
+        ? buildSmb2CourseConfig()
+        : { difficulty: String(difficultySelect?.value ?? 'beginner'), stageIndex: 0 };
+      const courseId = buildCourseId(gameSource, config);
+      const mode = buildCourseMode(gameSource, config);
+      const warpFlag = (leaderboardWarpSelect?.value ?? 'warpless') as 'warpless' | 'warped';
+      const entries = await leaderboardsClient.getCourseLeaderboard({
+        gameSource,
+        courseId,
+        mode,
+        warpFlag,
+        packId,
+      });
+      renderLeaderboardEntries(entries, 'time');
+    }
+    if (leaderboardStatus) {
+      leaderboardStatus.textContent = 'Leaderboards: ready';
+    }
+  } catch (error) {
+    console.error(error);
+    if (leaderboardStatus) {
+      leaderboardStatus.textContent = 'Leaderboards: failed';
+    }
+  }
+}
+
 function setActiveMenu(menu: MenuPanel) {
   if (activeMenu === menu) {
     return;
@@ -2337,6 +2503,7 @@ function setActiveMenu(menu: MenuPanel) {
   multiplayerIngameMenuPanel?.classList.toggle('hidden', menu !== 'multiplayer-ingame');
   settingsMenuPanel?.classList.toggle('hidden', menu !== 'settings');
   levelSelectMenuPanel?.classList.toggle('hidden', menu !== 'level-select');
+  leaderboardsMenuPanel?.classList.toggle('hidden', menu !== 'leaderboards');
   updateLobbyUi();
   if (menu === 'multiplayer' && lobbyClient) {
     void refreshLobbyList();
@@ -2346,6 +2513,10 @@ function setActiveMenu(menu: MenuPanel) {
   }
   if (menu === 'level-select') {
     updateLevelSelectUi();
+  }
+  if (menu === 'leaderboards') {
+    updateLeaderboardsUi();
+    void refreshLeaderboards();
   }
   syncTouchPreviewVisibility();
 }
@@ -2577,6 +2748,7 @@ function resetMatchState() {
     netplayState.currentGameMode = null;
     netplayState.awaitingSnapshot = false;
   }
+  leaderboardSession = null;
   pendingSnapshot = null;
   if (netplayEnabled) {
     resetNetplayForStage();
@@ -2645,6 +2817,46 @@ function handleCourseComplete() {
   if (!running) {
     return;
   }
+  if (!netplayEnabled && leaderboardsClient && leaderboardSession?.active) {
+    const session = leaderboardSession;
+    const packAllowed = isPackAllowed(session.packId);
+    if (session.eligible && !session.hasSkipped && packAllowed) {
+      const totalFrames = session.courseTimerFrames + session.penaltyFrames;
+      const playerId = getLeaderboardPlayerId();
+      const displayName = localProfile?.name ?? 'Player';
+      const warpFlag = session.mode === 'challenge' && session.warpUsed ? 'warped' : 'warpless';
+      const courseReplay: CourseReplayData = {
+        version: 1,
+        gameSource: session.gameSource,
+        packId: session.packId ?? undefined,
+        course: {
+          mode: session.mode,
+          difficulty: session.courseConfig?.difficulty,
+          worldIndex: session.courseConfig?.worldIndex,
+          stageIndex: session.courseConfig?.stageIndex,
+        },
+        segments: session.segments,
+      };
+      void leaderboardsClient.submitCourse({
+        type: 'course',
+        playerId,
+        displayName,
+        gameSource: session.gameSource,
+        courseId: session.courseId,
+        mode: session.mode,
+        warpFlag,
+        value: Math.max(0, Math.trunc(totalFrames)),
+        packId: session.packId,
+        replay: courseReplay,
+        clientMeta: {
+          version: 1,
+          retries: session.retryCount,
+          penaltyFrames: session.penaltyFrames,
+        },
+      }).catch(() => {});
+    }
+    leaderboardSession = null;
+  }
   if (netplayEnabled) {
     if (netplayState?.role !== 'host') {
       return;
@@ -2696,6 +2908,10 @@ privacySettings = loadPrivacySettings();
 updatePrivacyUi();
 setSettingsTab(activeSettingsTab);
 updateChatUi();
+void refreshLeaderboardAllowlist();
+if (leaderboardsOpenButton) {
+  leaderboardsOpenButton.disabled = !leaderboardsClient;
+}
 
 function startLobbyHeartbeat(roomId: string) {
   if (!lobbyClient) {
@@ -3250,6 +3466,9 @@ async function handleStageLoaded(stageId: number) {
       game.enterLocalSpectatorFreeFly();
     }
     preloadNextStages();
+    if (leaderboardSession?.active) {
+      leaderboardSession.stageScoreStart = Math.max(0, Math.trunc(game.score ?? 0));
+    }
     if (netplayEnabled && netplayState?.role === 'host' && lobbyRoom) {
       const meta = buildRoomMeta();
       if (meta) {
@@ -3292,6 +3511,9 @@ async function handleStageLoaded(stageId: number) {
     game.enterLocalSpectatorFreeFly();
   }
   preloadNextStages();
+  if (leaderboardSession?.active) {
+    leaderboardSession.stageScoreStart = Math.max(0, Math.trunc(game.score ?? 0));
+  }
   if (netplayEnabled && netplayState?.role === 'host' && lobbyRoom) {
     const meta = buildRoomMeta();
     if (meta) {
@@ -3300,6 +3522,197 @@ async function handleStageLoaded(stageId: number) {
       sendLobbyHeartbeat(performance.now(), true);
     }
   }
+}
+
+function getLeaderboardPlayerId(): string {
+  const key = 'smb_leaderboard_player_id';
+  const existing = localStorage.getItem(key);
+  if (existing) {
+    return existing;
+  }
+  const id = crypto.randomUUID();
+  localStorage.setItem(key, id);
+  return id;
+}
+
+function getActivePackId(): string | null {
+  const pack = getActivePack();
+  if (!pack) {
+    return null;
+  }
+  const id = pack.manifest.id || pack.manifest.name;
+  return id ? String(id).slice(0, 64) : null;
+}
+
+async function refreshLeaderboardAllowlist(force = false) {
+  if (!leaderboardsClient) {
+    leaderboardAllowlist = [];
+    return;
+  }
+  try {
+    const list = await leaderboardsClient.getAllowlist(force);
+    leaderboardAllowlist = list.map((entry) => entry.packId);
+  } catch {
+    leaderboardAllowlist = [];
+  }
+}
+
+function isPackAllowed(packId: string | null): boolean {
+  if (!packId) {
+    return true;
+  }
+  return leaderboardAllowlist.includes(packId);
+}
+
+function buildCourseId(gameSource: GameSource, config: any): string {
+  if (gameSource === GAME_SOURCES.SMB1) {
+    return String(config?.difficulty ?? 'beginner');
+  }
+  const mode = config?.mode === 'story' ? 'story' : 'challenge';
+  if (mode === 'story') {
+    return 'story';
+  }
+  return String(config?.difficulty ?? 'beginner');
+}
+
+function buildCourseMode(gameSource: GameSource, config: any): 'story' | 'challenge' | 'smb1' {
+  if (gameSource === GAME_SOURCES.SMB1) {
+    return 'smb1';
+  }
+  return config?.mode === 'story' ? 'story' : 'challenge';
+}
+
+function isFullCourseRun(gameSource: GameSource, config: any): boolean {
+  if (gameSource === GAME_SOURCES.SMB1) {
+    const index = Number(config?.stageIndex ?? 0);
+    return index === 0;
+  }
+  const mode = config?.mode === 'story' ? 'story' : 'challenge';
+  if (mode === 'story') {
+    const worldIndex = Number(config?.worldIndex ?? 0);
+    const stageIndex = Number(config?.stageIndex ?? 0);
+    return worldIndex === 0 && stageIndex === 0;
+  }
+  const stageIndex = Number(config?.stageIndex ?? 0);
+  return stageIndex === 0;
+}
+
+function startLeaderboardSession(courseConfig: any) {
+  const packId = getActivePackId();
+  const eligible = isFullCourseRun(activeGameSource, courseConfig);
+  leaderboardSession = {
+    active: true,
+    eligible,
+    gameSource: activeGameSource,
+    packId,
+    courseId: buildCourseId(activeGameSource, courseConfig),
+    mode: buildCourseMode(activeGameSource, courseConfig),
+    courseConfig: courseConfig ?? {},
+    warpUsed: false,
+    courseTimerFrames: 0,
+    penaltyFrames: 0,
+    retryCount: 0,
+    stageScoreStart: game.score ?? 0,
+    segments: [],
+    hasSkipped: false,
+  };
+}
+
+function handleStageGoal(info: {
+  stageId: number;
+  goalType: string | null;
+  timerFrames: number;
+  score: number;
+  isBonusStage: boolean;
+}) {
+  if (!leaderboardsClient || netplayEnabled || info.isBonusStage) {
+    return;
+  }
+  const packId = getActivePackId();
+  if (!isPackAllowed(packId)) {
+    return;
+  }
+  const goalType = (info.goalType ?? 'B') as 'B' | 'G' | 'R';
+  const playerId = getLeaderboardPlayerId();
+  const displayName = localProfile?.name ?? 'Player';
+  const stageScoreDelta = Math.max(0, Math.trunc(info.score - (leaderboardSession?.stageScoreStart ?? 0)));
+  const replay = game.exportReplay();
+  if (replay) {
+    void leaderboardsClient.submitStage({
+      type: 'stage',
+      playerId,
+      displayName,
+      gameSource: activeGameSource,
+      stageId: info.stageId,
+      goalType,
+      metric: 'time',
+      value: Math.max(0, Math.trunc(info.timerFrames)),
+      packId,
+      replay,
+      clientMeta: { version: 1 },
+    }).catch(() => {});
+    void leaderboardsClient.submitStage({
+      type: 'stage',
+      playerId,
+      displayName,
+      gameSource: activeGameSource,
+      stageId: info.stageId,
+      goalType,
+      metric: 'score',
+      value: stageScoreDelta,
+      packId,
+      replay,
+      clientMeta: { version: 1 },
+    }).catch(() => {});
+  }
+
+  if (leaderboardSession && leaderboardSession.active) {
+    leaderboardSession.courseTimerFrames += Math.max(0, Math.trunc(info.timerFrames));
+    if (leaderboardSession.mode === 'challenge' && (goalType === 'G' || goalType === 'R')) {
+      leaderboardSession.warpUsed = true;
+    }
+    if (replay) {
+      const segment: CourseReplaySegment = {
+        stageId: info.stageId,
+        inputs: replay.inputs,
+        inputStartTick: replay.inputStartTick ?? 0,
+        ticks: replay.ticks ?? replay.inputs.length,
+        endReason: 'goal',
+        goalType,
+      };
+      leaderboardSession.segments.push(segment);
+    }
+  }
+}
+
+function handleStageFail(info: {
+  stageId: number;
+  reason: 'ringout' | 'timeover' | 'manual_reset' | 'skip';
+  timerFrames: number;
+  score: number;
+  isBonusStage: boolean;
+}) {
+  if (!leaderboardSession || !leaderboardSession.active || info.isBonusStage) {
+    return;
+  }
+  const replay = game.exportReplay();
+  if (replay) {
+    const segment: CourseReplaySegment = {
+      stageId: info.stageId,
+      inputs: replay.inputs,
+      inputStartTick: replay.inputStartTick ?? 0,
+      ticks: replay.ticks ?? replay.inputs.length,
+      endReason: info.reason,
+    };
+    leaderboardSession.segments.push(segment);
+  }
+  leaderboardSession.courseTimerFrames += Math.max(0, Math.trunc(info.timerFrames));
+  if (info.reason === 'skip') {
+    leaderboardSession.hasSkipped = true;
+    return;
+  }
+  leaderboardSession.retryCount += 1;
+  leaderboardSession.penaltyFrames += 60;
 }
 
 function setSelectOptions(select: HTMLSelectElement, values: { value: string; label: string }[]) {
@@ -3476,6 +3889,11 @@ async function startStage(
     activeGameSource !== GAME_SOURCES.SMB1 && hasSmb2LikeMode(difficulty) ? difficulty.mode : null;
   void audio.resume();
   await game.start(difficulty);
+  if (!netplayEnabled && leaderboardsClient) {
+    startLeaderboardSession(difficulty);
+  } else {
+    leaderboardSession = null;
+  }
 }
 
 function requestSnapshot(reason: 'mismatch' | 'lag', frame?: number, force = false) {
@@ -5462,7 +5880,14 @@ document.addEventListener('webkitfullscreenchange', () => {
   updateFullscreenButtonVisibility();
 });
 
-for (const panel of [mainMenuPanel, multiplayerMenuPanel, multiplayerIngameMenuPanel, settingsMenuPanel, levelSelectMenuPanel]) {
+for (const panel of [
+  mainMenuPanel,
+  multiplayerMenuPanel,
+  multiplayerIngameMenuPanel,
+  settingsMenuPanel,
+  levelSelectMenuPanel,
+  leaderboardsMenuPanel,
+]) {
   panel?.addEventListener('scroll', () => {
     syncTouchPreviewVisibility();
   });
@@ -5493,6 +5918,10 @@ multiplayerOpenButton?.addEventListener('click', () => {
   setActiveMenu('multiplayer');
 });
 
+leaderboardsOpenButton?.addEventListener('click', () => {
+  setActiveMenu('leaderboards');
+});
+
 multiplayerBackButton?.addEventListener('click', () => {
   setActiveMenu('main');
 });
@@ -5505,12 +5934,24 @@ levelSelectBackButton?.addEventListener('click', () => {
   setActiveMenu(levelSelectReturnMenu);
 });
 
+leaderboardsBackButton?.addEventListener('click', () => {
+  setActiveMenu('main');
+});
+
 settingsOpenButton?.addEventListener('click', () => {
   openSettingsMenu();
 });
 
 settingsBackButton?.addEventListener('click', () => {
   setActiveMenu(settingsReturnMenu);
+});
+
+leaderboardTypeSelect?.addEventListener('change', () => {
+  updateLeaderboardsUi();
+});
+
+leaderboardRefreshButton?.addEventListener('click', () => {
+  void refreshLeaderboards();
 });
 
 for (const button of settingsTabButtons) {

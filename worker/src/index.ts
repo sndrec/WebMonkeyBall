@@ -2,6 +2,11 @@ export interface Env {
   LOBBY: DurableObjectNamespace;
   ROOM: DurableObjectNamespace;
   ALLOWED_ORIGINS?: string;
+  LEADERBOARDS_DB: D1Database;
+  REPLAYS: R2Bucket;
+  ADMIN_PASSWORD_HASH?: string;
+  ADMIN_SESSION_SECRET?: string;
+  LEADERBOARD_ALLOWLIST?: string;
 }
 
 type RoomSettings = {
@@ -83,6 +88,105 @@ function jsonResponse(data: any, status = 200, origin: string | null = "*"): Res
   });
 }
 
+function textResponse(text: string, status = 200, origin: string | null = "*"): Response {
+  const headers: Record<string, string> = { "content-type": "text/plain; charset=utf-8" };
+  if (origin) {
+    headers["access-control-allow-origin"] = origin;
+  }
+  return new Response(text, { status, headers });
+}
+
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlDecode(input: string): Uint8Array {
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "===".slice((normalized.length + 3) % 4);
+  const binary = atob(padded);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const data = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  const bytes = new Uint8Array(digest);
+  let out = "";
+  for (const b of bytes) {
+    out += b.toString(16).padStart(2, "0");
+  }
+  return out;
+}
+
+async function signToken(payload: Record<string, any>, secret: string): Promise<string> {
+  const header = { alg: "HS256", typ: "JWT" };
+  const encoder = new TextEncoder();
+  const headerBytes = encoder.encode(JSON.stringify(header));
+  const payloadBytes = encoder.encode(JSON.stringify(payload));
+  const headerPart = base64UrlEncode(headerBytes);
+  const payloadPart = base64UrlEncode(payloadBytes);
+  const data = `${headerPart}.${payloadPart}`;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(data));
+  const sigPart = base64UrlEncode(new Uint8Array(signature));
+  return `${data}.${sigPart}`;
+}
+
+async function verifyToken(token: string, secret: string): Promise<Record<string, any> | null> {
+  const parts = token.split(".");
+  if (parts.length !== 3) {
+    return null;
+  }
+  const [headerPart, payloadPart, sigPart] = parts;
+  const data = `${headerPart}.${payloadPart}`;
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"],
+  );
+  const signature = base64UrlDecode(sigPart);
+  const valid = await crypto.subtle.verify("HMAC", key, signature, encoder.encode(data));
+  if (!valid) {
+    return null;
+  }
+  const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadPart)));
+  if (payload?.exp && typeof payload.exp === "number" && Date.now() > payload.exp) {
+    return null;
+  }
+  return payload;
+}
+
+function parseAllowlistEnv(raw?: string | null): Array<{ packId: string; label: string }> {
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [packId, label] = entry.split("|").map((part) => part.trim());
+      return { packId, label: label || packId };
+    });
+}
+
 function parseJson<T>(req: Request): Promise<T> {
   return req.json() as Promise<T>;
 }
@@ -132,6 +236,72 @@ function randomPlayerId(existing: Set<number>): number {
 
 function playerKey(playerId: number): string {
   return String(playerId);
+}
+
+async function ensureAllowlistSeed(db: D1Database, env: Env): Promise<void> {
+  const seed = parseAllowlistEnv(env.LEADERBOARD_ALLOWLIST);
+  if (seed.length === 0) {
+    return;
+  }
+  const existing = await db.prepare("SELECT COUNT(*) as count FROM allowlist").first<any>();
+  if ((existing?.count ?? 0) > 0) {
+    return;
+  }
+  const now = nowMs();
+  const batch = seed.map((entry) =>
+    db.prepare("INSERT INTO allowlist (pack_id, label, created_at) VALUES (?, ?, ?)")
+      .bind(entry.packId, entry.label, now),
+  );
+  if (batch.length > 0) {
+    await db.batch(batch);
+  }
+}
+
+async function loadAllowlist(db: D1Database, env: Env): Promise<Array<{ packId: string; label: string }>> {
+  await ensureAllowlistSeed(db, env);
+  const result = await db.prepare("SELECT pack_id as packId, label FROM allowlist ORDER BY pack_id ASC").all<any>();
+  return (result?.results ?? []).map((row) => ({ packId: row.packId, label: row.label ?? row.packId }));
+}
+
+function normalizePackId(raw?: string | null): string | null {
+  if (!raw) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  return trimmed ? trimmed.slice(0, 64) : null;
+}
+
+function normalizeName(raw?: string | null): string {
+  const trimmed = (raw ?? "").trim().slice(0, 64);
+  return trimmed || "Anonymous";
+}
+
+function normalizeMetric(raw?: string | null): string | null {
+  if (raw === "time" || raw === "score") {
+    return raw;
+  }
+  return null;
+}
+
+function normalizeGoalType(raw?: string | null): string | null {
+  if (raw === "B" || raw === "G" || raw === "R") {
+    return raw;
+  }
+  return null;
+}
+
+function normalizeWarpFlag(raw?: string | null): string | null {
+  if (raw === "warped" || raw === "warpless") {
+    return raw;
+  }
+  return null;
+}
+
+function normalizeMode(raw?: string | null): string | null {
+  if (raw === "story" || raw === "challenge" || raw === "smb1") {
+    return raw;
+  }
+  return null;
 }
 
 function playerOccupiesSlot(player: PlayerRecord, now = nowMs()): boolean {
@@ -768,9 +938,399 @@ export class Room implements DurableObject {
   }
 }
 
+function getAuthToken(request: Request): string | null {
+  const header = request.headers.get("authorization") ?? "";
+  if (header.startsWith("Bearer ")) {
+    return header.slice("Bearer ".length).trim();
+  }
+  return null;
+}
+
+async function requireAdmin(request: Request, env: Env): Promise<Record<string, any> | null> {
+  const secret = env.ADMIN_SESSION_SECRET ?? "";
+  if (!secret) {
+    return null;
+  }
+  const token = getAuthToken(request);
+  if (!token) {
+    return null;
+  }
+  return verifyToken(token, secret);
+}
+
+async function logAdminAction(
+  env: Env,
+  action: string,
+  actorIp: string,
+  targetId?: string | null,
+  metadata?: Record<string, any>,
+) {
+  const db = env.LEADERBOARDS_DB;
+  const auditId = crypto.randomUUID();
+  const now = nowMs();
+  await db.prepare(
+    "INSERT INTO admin_audit (audit_id, action, target_id, metadata, actor_ip, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+  ).bind(
+    auditId,
+    action,
+    targetId ?? null,
+    metadata ? JSON.stringify(metadata) : null,
+    actorIp || "unknown",
+    now,
+  ).run();
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const origin = getCorsOrigin(request, env);
+
+    if (url.pathname.startsWith("/leaderboards") || url.pathname.startsWith("/admin")) {
+      if (request.method === "OPTIONS") {
+        const headers: Record<string, string> = {
+          "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+          "access-control-allow-headers": "content-type,authorization",
+        };
+        if (origin) {
+          headers["access-control-allow-origin"] = origin;
+        }
+        return new Response(null, { status: 204, headers });
+      }
+    }
+
+    if (url.pathname === "/leaderboards/allowlist" && request.method === "GET") {
+      const list = await loadAllowlist(env.LEADERBOARDS_DB, env);
+      return jsonResponse({ packs: list }, 200, origin);
+    }
+
+    if (url.pathname === "/leaderboards/submit" && request.method === "POST") {
+      const body = await parseJson<any>(request);
+      const type = body?.type === "course" ? "course" : "stage";
+      const playerId = typeof body?.playerId === "string" ? body.playerId.slice(0, 64) : "";
+      const displayName = normalizeName(body?.displayName);
+      const gameSource = body?.gameSource === "smb2" || body?.gameSource === "mb2ws" ? body.gameSource : "smb1";
+      const packId = normalizePackId(body?.packId);
+      if (packId) {
+        const allowlist = await loadAllowlist(env.LEADERBOARDS_DB, env);
+        const allowed = allowlist.some((entry) => entry.packId === packId);
+        if (!allowed) {
+          return jsonResponse({ error: "pack_not_allowed" }, 403, origin);
+        }
+      }
+      if (!playerId) {
+        return jsonResponse({ error: "missing_player" }, 400, origin);
+      }
+      const submissionId = crypto.randomUUID();
+      const now = nowMs();
+      const replay = body?.replay ?? null;
+      if (!replay) {
+        return jsonResponse({ error: "missing_replay" }, 400, origin);
+      }
+      const replayKey = `replays/${submissionId}.json`;
+      await env.REPLAYS.put(replayKey, JSON.stringify(replay), {
+        httpMetadata: { contentType: "application/json" },
+      });
+
+      let stageId: number | null = null;
+      let goalType: string | null = null;
+      let metric: string | null = null;
+      let courseId: string | null = null;
+      let mode: string | null = null;
+      let warpFlag: string | null = null;
+
+      if (type === "stage") {
+        stageId = Number.isFinite(body?.stageId) ? Number(body.stageId) : null;
+        goalType = normalizeGoalType(body?.goalType);
+        metric = normalizeMetric(body?.metric);
+        if (!stageId || !goalType || !metric) {
+          return jsonResponse({ error: "invalid_stage_payload" }, 400, origin);
+        }
+      } else {
+        courseId = typeof body?.courseId === "string" ? body.courseId.slice(0, 64) : null;
+        mode = normalizeMode(body?.mode);
+        warpFlag = normalizeWarpFlag(body?.warpFlag);
+        if (!courseId || !mode || !warpFlag) {
+          return jsonResponse({ error: "invalid_course_payload" }, 400, origin);
+        }
+      }
+
+      const clientValue = Number.isFinite(body?.value) ? Math.trunc(body.value) : null;
+      const clientMeta = body?.clientMeta ? JSON.stringify(body.clientMeta) : null;
+
+      await env.LEADERBOARDS_DB.prepare(
+        `INSERT INTO submissions (
+          submission_id, type, status, player_id, display_name, game_source,
+          stage_id, goal_type, metric, course_id, mode, warp_flag, pack_id,
+          replay_key, client_value, client_meta, submitted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        submissionId,
+        type,
+        "pending",
+        playerId,
+        displayName,
+        gameSource,
+        stageId,
+        goalType,
+        metric,
+        courseId,
+        mode,
+        warpFlag,
+        packId,
+        replayKey,
+        clientValue,
+        clientMeta,
+        now,
+      ).run();
+
+      return jsonResponse({ submissionId, status: "pending" }, 200, origin);
+    }
+
+    if (url.pathname === "/leaderboards/stage" && request.method === "GET") {
+      const stageId = Number(url.searchParams.get("stageId") ?? "");
+      const gameSource = url.searchParams.get("gameSource") ?? "smb1";
+      const goalType = normalizeGoalType(url.searchParams.get("goalType"));
+      const metric = normalizeMetric(url.searchParams.get("metric"));
+      const packId = normalizePackId(url.searchParams.get("packId"));
+      if (!stageId || !goalType || !metric) {
+        return jsonResponse({ error: "invalid_query" }, 400, origin);
+      }
+      const order = metric === "score" ? "DESC" : "ASC";
+      const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 50)));
+      const query = `
+        SELECT entry_id as entryId, player_id as playerId, display_name as displayName, value, created_at as createdAt
+        FROM entries
+        WHERE type = 'stage'
+          AND game_source = ?
+          AND stage_id = ?
+          AND goal_type = ?
+          AND metric = ?
+          AND (pack_id IS ? OR pack_id = ?)
+        ORDER BY value ${order}
+        LIMIT ?`;
+      const rows = await env.LEADERBOARDS_DB.prepare(query)
+        .bind(gameSource, stageId, goalType, metric, packId, packId, limit)
+        .all<any>();
+      return jsonResponse({ entries: rows.results ?? [] }, 200, origin);
+    }
+
+    if (url.pathname === "/leaderboards/course" && request.method === "GET") {
+      const courseId = url.searchParams.get("courseId") ?? "";
+      const gameSource = url.searchParams.get("gameSource") ?? "smb1";
+      const mode = normalizeMode(url.searchParams.get("mode"));
+      const warpFlag = normalizeWarpFlag(url.searchParams.get("warpFlag"));
+      const packId = normalizePackId(url.searchParams.get("packId"));
+      if (!courseId || !mode || !warpFlag) {
+        return jsonResponse({ error: "invalid_query" }, 400, origin);
+      }
+      const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 50)));
+      const query = `
+        SELECT entry_id as entryId, player_id as playerId, display_name as displayName, value, created_at as createdAt
+        FROM entries
+        WHERE type = 'course'
+          AND game_source = ?
+          AND course_id = ?
+          AND mode = ?
+          AND warp_flag = ?
+          AND (pack_id IS ? OR pack_id = ?)
+        ORDER BY value ASC
+        LIMIT ?`;
+      const rows = await env.LEADERBOARDS_DB.prepare(query)
+        .bind(gameSource, courseId, mode, warpFlag, packId, packId, limit)
+        .all<any>();
+      return jsonResponse({ entries: rows.results ?? [] }, 200, origin);
+    }
+
+    if (url.pathname.startsWith("/leaderboards/replay/") && request.method === "GET") {
+      const replayId = url.pathname.slice("/leaderboards/replay/".length).trim();
+      if (!replayId) {
+        return jsonResponse({ error: "missing_replay_id" }, 400, origin);
+      }
+      const key = `replays/${replayId}.json`;
+      const obj = await env.REPLAYS.get(key);
+      if (!obj) {
+        return jsonResponse({ error: "replay_not_found" }, 404, origin);
+      }
+      const headers = new Headers();
+      headers.set("content-type", "application/json");
+      if (origin) {
+        headers.set("access-control-allow-origin", origin);
+      }
+      return new Response(obj.body, { status: 200, headers });
+    }
+
+    if (url.pathname === "/admin/login" && request.method === "POST") {
+      const secret = env.ADMIN_SESSION_SECRET ?? "";
+      const hash = env.ADMIN_PASSWORD_HASH ?? "";
+      if (!secret || !hash) {
+        return jsonResponse({ error: "admin_unconfigured" }, 500, origin);
+      }
+      const body = await parseJson<any>(request);
+      const password = typeof body?.password === "string" ? body.password : "";
+      const candidateHash = await sha256Hex(password);
+      if (candidateHash !== hash) {
+        return jsonResponse({ error: "unauthorized" }, 401, origin);
+      }
+      const payload = { sub: "admin", exp: Date.now() + 1000 * 60 * 120 };
+      const token = await signToken(payload, secret);
+      return jsonResponse({ token, expiresIn: 7200 }, 200, origin);
+    }
+
+    if (url.pathname.startsWith("/admin/")) {
+      const admin = await requireAdmin(request, env);
+      if (!admin) {
+        return jsonResponse({ error: "unauthorized" }, 401, origin);
+      }
+    }
+
+    if (url.pathname === "/admin/leaderboards" && request.method === "GET") {
+      const type = url.searchParams.get("type") ?? "stage";
+      const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") ?? 100)));
+      const rows = await env.LEADERBOARDS_DB.prepare(
+        `SELECT entry_id as entryId, submission_id as submissionId, type, player_id as playerId, display_name as displayName,
+                game_source as gameSource, stage_id as stageId, goal_type as goalType, metric, course_id as courseId,
+                mode, warp_flag as warpFlag, pack_id as packId, value, created_at as createdAt
+         FROM entries WHERE type = ? ORDER BY created_at DESC LIMIT ?`,
+      ).bind(type, limit).all<any>();
+      return jsonResponse({ entries: rows.results ?? [] }, 200, origin);
+    }
+
+    if (url.pathname.startsWith("/admin/entries/") && request.method === "DELETE") {
+      const entryId = url.pathname.slice("/admin/entries/".length).trim();
+      if (!entryId) {
+        return jsonResponse({ error: "missing_entry" }, 400, origin);
+      }
+      const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+      await env.LEADERBOARDS_DB.prepare("DELETE FROM entries WHERE entry_id = ?").bind(entryId).run();
+      await logAdminAction(env, "entry_delete", ip, entryId);
+      return jsonResponse({ ok: true }, 200, origin);
+    }
+
+    if (url.pathname === "/admin/allowlist" && request.method === "GET") {
+      const list = await loadAllowlist(env.LEADERBOARDS_DB, env);
+      return jsonResponse({ packs: list }, 200, origin);
+    }
+
+    if (url.pathname === "/admin/allowlist" && request.method === "PUT") {
+      const body = await parseJson<any>(request);
+      const packs = Array.isArray(body?.packs) ? body.packs : [];
+      const normalized = packs
+        .map((entry) => ({
+          packId: normalizePackId(entry?.packId),
+          label: typeof entry?.label === "string" && entry.label.trim()
+            ? entry.label.trim().slice(0, 64)
+            : (typeof entry?.packId === "string" ? entry.packId.trim().slice(0, 64) : "pack"),
+        }))
+        .filter((entry) => !!entry.packId);
+      const now = nowMs();
+      await env.LEADERBOARDS_DB.prepare("DELETE FROM allowlist").run();
+      if (normalized.length > 0) {
+        const batch = normalized.map((entry) =>
+          env.LEADERBOARDS_DB.prepare(
+            "INSERT INTO allowlist (pack_id, label, created_at) VALUES (?, ?, ?)",
+          ).bind(entry.packId, entry.label, now),
+        );
+        await env.LEADERBOARDS_DB.batch(batch);
+      }
+      const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+      await logAdminAction(env, "allowlist_update", ip, null, { count: normalized.length });
+      return jsonResponse({ ok: true }, 200, origin);
+    }
+
+    if (url.pathname === "/admin/audit" && request.method === "GET") {
+      const rows = await env.LEADERBOARDS_DB.prepare(
+        "SELECT audit_id as auditId, action, target_id as targetId, metadata, actor_ip as actorIp, created_at as createdAt FROM admin_audit ORDER BY created_at DESC LIMIT 200",
+      ).all<any>();
+      return jsonResponse({ entries: rows.results ?? [] }, 200, origin);
+    }
+
+    if (url.pathname === "/admin/submissions/pending" && request.method === "GET") {
+      const limit = Math.min(50, Math.max(1, Number(url.searchParams.get("limit") ?? 20)));
+      const rows = await env.LEADERBOARDS_DB.prepare(
+        `SELECT submission_id as submissionId, type, player_id as playerId, display_name as displayName,
+                game_source as gameSource, stage_id as stageId, goal_type as goalType, metric,
+                course_id as courseId, mode, warp_flag as warpFlag, pack_id as packId,
+                replay_key as replayKey, submitted_at as submittedAt
+         FROM submissions WHERE status = 'pending' ORDER BY submitted_at ASC LIMIT ?`,
+      ).bind(limit).all<any>();
+      return jsonResponse({ submissions: rows.results ?? [] }, 200, origin);
+    }
+
+    if (url.pathname.startsWith("/admin/submissions/") && request.method === "GET") {
+      const parts = url.pathname.split("/").filter(Boolean);
+      const submissionId = parts[2] ?? "";
+      if (!submissionId) {
+        return jsonResponse({ error: "invalid_request" }, 400, origin);
+      }
+      const submission = await env.LEADERBOARDS_DB.prepare(
+        `SELECT submission_id as submissionId, type, player_id as playerId, display_name as displayName,
+                game_source as gameSource, stage_id as stageId, goal_type as goalType, metric,
+                course_id as courseId, mode, warp_flag as warpFlag, pack_id as packId,
+                replay_key as replayKey, submitted_at as submittedAt
+         FROM submissions WHERE submission_id = ?`,
+      ).bind(submissionId).first<any>();
+      if (!submission) {
+        return jsonResponse({ error: "submission_not_found" }, 404, origin);
+      }
+      return jsonResponse({ submission }, 200, origin);
+    }
+
+    if (url.pathname.startsWith("/admin/submissions/") && request.method === "POST") {
+      const parts = url.pathname.split("/").filter(Boolean);
+      const submissionId = parts[2] ?? "";
+      const action = parts[3] ?? "";
+      if (!submissionId || (action !== "verify" && action !== "reject")) {
+        return jsonResponse({ error: "invalid_request" }, 400, origin);
+      }
+      const body = await parseJson<any>(request);
+      const now = nowMs();
+      if (action === "reject") {
+        await env.LEADERBOARDS_DB.prepare(
+          "UPDATE submissions SET status = 'rejected', verified_at = ?, verified_details = ? WHERE submission_id = ?",
+        ).bind(now, body?.reason ? JSON.stringify({ reason: body.reason }) : null, submissionId).run();
+      } else {
+        const value = Number.isFinite(body?.value) ? Math.trunc(body.value) : null;
+        if (value === null) {
+          return jsonResponse({ error: "missing_value" }, 400, origin);
+        }
+        const submission = await env.LEADERBOARDS_DB.prepare(
+          "SELECT * FROM submissions WHERE submission_id = ?",
+        ).bind(submissionId).first<any>();
+        if (!submission) {
+          return jsonResponse({ error: "submission_not_found" }, 404, origin);
+        }
+        const entryId = crypto.randomUUID();
+        await env.LEADERBOARDS_DB.prepare(
+          `INSERT INTO entries (
+            entry_id, submission_id, type, player_id, display_name, game_source,
+            stage_id, goal_type, metric, course_id, mode, warp_flag, pack_id,
+            value, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).bind(
+          entryId,
+          submissionId,
+          submission.type,
+          submission.player_id,
+          submission.display_name,
+          submission.game_source,
+          submission.stage_id,
+          submission.goal_type,
+          submission.metric,
+          submission.course_id,
+          submission.mode,
+          submission.warp_flag,
+          submission.pack_id,
+          value,
+          now,
+        ).run();
+        await env.LEADERBOARDS_DB.prepare(
+          "UPDATE submissions SET status = 'verified', verified_value = ?, verified_at = ?, verified_details = ? WHERE submission_id = ?",
+        ).bind(value, now, body?.details ? JSON.stringify(body.details) : null, submissionId).run();
+      }
+      const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+      await logAdminAction(env, `submission_${action}`, ip, submissionId);
+      return jsonResponse({ ok: true }, 200, origin);
+    }
 
     if (url.pathname.startsWith("/room/")) {
       const roomId = url.pathname.slice("/room/".length);

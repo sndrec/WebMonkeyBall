@@ -77,6 +77,13 @@
       </div>
 
       <div class="panel-section">
+        <button id="open-leaderboards" class="menu-button" type="button">
+          <span class="menu-button-title">Leaderboards</span>
+          <span class="menu-button-subtitle">Stage and course rankings</span>
+        </button>
+      </div>
+
+      <div class="panel-section">
         <button id="open-multiplayer" class="menu-button" type="button">
           <span class="menu-button-title">Online Multiplayer</span>
           <span id="lobby-online-count" class="menu-button-subtitle">0 players online</span>
@@ -204,6 +211,51 @@
         </div>
         <button id="lobby-stage-choose" type="button">Choose</button>
         <div class="control-hint">Updates the lobby selection without starting the match.</div>
+      </div>
+    </div>
+    <div class="panel hidden" id="leaderboards-menu">
+      <div class="menu-header">
+        <button id="leaderboards-back" class="ghost compact" type="button">Back</button>
+        <div>
+          <h1>Leaderboards</h1>
+          <p>Rankings for the current stage or course selection.</p>
+        </div>
+      </div>
+      <div class="panel-section">
+        <label class="field">
+          <span>Type</span>
+          <select id="leaderboard-type">
+            <option value="stage">Stage</option>
+            <option value="course">Course</option>
+          </select>
+        </label>
+        <label class="field" id="leaderboard-goal-field">
+          <span>Goal</span>
+          <select id="leaderboard-goal">
+            <option value="B">Blue</option>
+            <option value="G">Green</option>
+            <option value="R">Red</option>
+          </select>
+        </label>
+        <label class="field" id="leaderboard-metric-field">
+          <span>Metric</span>
+          <select id="leaderboard-metric">
+            <option value="time">Time</option>
+            <option value="score">Score</option>
+          </select>
+        </label>
+        <label class="field hidden" id="leaderboard-warp-field">
+          <span>Warp</span>
+          <select id="leaderboard-warp">
+            <option value="warpless">Warpless</option>
+            <option value="warped">Warped</option>
+          </select>
+        </label>
+        <div class="row">
+          <button id="leaderboard-refresh" class="ghost" type="button">Refresh</button>
+          <div id="leaderboard-status" class="pack-status">Leaderboards: idle</div>
+        </div>
+        <div id="leaderboard-list" class="leaderboard-list"></div>
       </div>
     </div>
     <div class="multiplayer-layout hidden" id="multiplayer-layout">

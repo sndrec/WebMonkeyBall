@@ -1210,3 +1210,42 @@ button:disabled {
   padding: 6px 10px;
   font-size: 11px;
 }
+
+.leaderboard-list {
+  margin-top: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(6, 6, 10, 0.55);
+  padding: 10px 12px;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 13px;
+}
+
+.leaderboard-row {
+  display: grid;
+  grid-template-columns: 32px 1fr 120px;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.leaderboard-row.admin-row {
+  grid-template-columns: 32px 1fr 120px auto;
+}
+
+.leaderboard-row:last-child {
+  border-bottom: none;
+}
+
+.leaderboard-rank {
+  font-weight: 700;
+  opacity: 0.8;
+}
+
+.leaderboard-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+}

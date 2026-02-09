@@ -283,6 +283,20 @@ type GameOptions = {
   onResumed?: () => void;
   onStageLoadStart?: (stageId: number) => void;
   onStageLoaded?: (stageId: number) => void;
+  onStageGoal?: (info: {
+    stageId: number;
+    goalType: string | null;
+    timerFrames: number;
+    score: number;
+    isBonusStage: boolean;
+  }) => void;
+  onStageFail?: (info: {
+    stageId: number;
+    reason: 'ringout' | 'timeover' | 'manual_reset' | 'skip';
+    timerFrames: number;
+    score: number;
+    isBonusStage: boolean;
+  }) => void;
   onCourseComplete?: (info: { flags: number; goalType: string | null; timerCurr: number; u_currStageId: number }) => void;
   stageBasePath?: string;
   gameSource?: GameSource;
@@ -377,6 +391,20 @@ export class Game {
   public onResumed?: () => void;
   public onStageLoadStart?: (stageId: number) => void;
   public onStageLoaded?: (stageId: number) => void;
+  public onStageGoal?: (info: {
+    stageId: number;
+    goalType: string | null;
+    timerFrames: number;
+    score: number;
+    isBonusStage: boolean;
+  }) => void;
+  public onStageFail?: (info: {
+    stageId: number;
+    reason: 'ringout' | 'timeover' | 'manual_reset' | 'skip';
+    timerFrames: number;
+    score: number;
+    isBonusStage: boolean;
+  }) => void;
   public onCourseComplete?: (info: { flags: number; goalType: string | null; timerCurr: number; u_currStageId: number }) => void;
   public stageBasePath: string;
   public gameSource: GameSource;
@@ -525,6 +553,8 @@ export class Game {
     onResumed,
     onStageLoadStart,
     onStageLoaded,
+    onStageGoal,
+    onStageFail,
     onCourseComplete,
     stageBasePath,
     gameSource,
@@ -536,6 +566,8 @@ export class Game {
     this.onResumed = onResumed;
     this.onStageLoadStart = onStageLoadStart;
     this.onStageLoaded = onStageLoaded;
+    this.onStageGoal = onStageGoal;
+    this.onStageFail = onStageFail;
     this.onCourseComplete = onCourseComplete;
     this.gameSource = gameSource ?? GAME_SOURCES.SMB1;
     this.stageBasePath = stageBasePath ?? STAGE_BASE_PATHS[this.gameSource];
@@ -3846,6 +3878,15 @@ export class Game {
 
     localPlayer.ringoutSkipTimerFrames = 0;
     this.statusText = '';
+    if (!this.rollbackSession?.suppressVisuals && this.stage) {
+      this.onStageFail?.({
+        stageId: this.stage.stageId,
+        reason: 'ringout',
+        timerFrames: this.stageTimerFrames,
+        score: this.score,
+        isBonusStage,
+      });
+    }
     if (isBonusStage) {
       if (this.isChainedTogetherMode()) {
         this.accumulator = 0;
@@ -3883,6 +3924,15 @@ export class Game {
       return false;
     }
     this.statusText = '';
+    if (!this.rollbackSession?.suppressVisuals && this.stage) {
+      this.onStageFail?.({
+        stageId: this.stage.stageId,
+        reason: 'timeover',
+        timerFrames: this.stageTimerFrames,
+        score: this.score,
+        isBonusStage,
+      });
+    }
     if (isBonusStage) {
       this.accumulator = 0;
       if (this.allowCourseAdvance) {
@@ -4108,6 +4158,15 @@ export class Game {
     }
     if (this.input.wasPressed('KeyR')) {
       if (this.course) {
+        if (!this.rollbackSession?.suppressVisuals && this.stage) {
+          this.onStageFail?.({
+            stageId: this.stage.stageId,
+            reason: 'manual_reset',
+            timerFrames: this.stageTimerFrames,
+            score: this.score,
+            isBonusStage: this.isBonusStageActive(),
+          });
+        }
         void this.loadStage(this.course.currentStageId);
       }
     }
@@ -4122,6 +4181,15 @@ export class Game {
     }
     if (!this.course || !this.stage) {
       return;
+    }
+    if (!this.rollbackSession?.suppressVisuals) {
+      this.onStageFail?.({
+        stageId: this.stage.stageId,
+        reason: 'skip',
+        timerFrames: this.stageTimerFrames,
+        score: this.score,
+        isBonusStage: this.isBonusStageActive(),
+      });
     }
     const goalType = this.stage.goals?.[0]?.type ?? 'B';
     const advanced = this.course.advance({
@@ -4162,6 +4230,15 @@ export class Game {
     this.score += computeGoalScore(goalHit?.goalType ?? this.stage.goals?.[0]?.type ?? 'B', timeRemaining, this.stageTimeLimitFrames);
     if (this.score > 999999999) {
       this.score = 999999999;
+    }
+    if (!this.rollbackSession?.suppressVisuals) {
+      this.onStageGoal?.({
+        stageId: this.stage.stageId,
+        goalType: goalHit?.goalType ?? this.stage.goals?.[0]?.type ?? 'B',
+        timerFrames: this.stageTimerFrames,
+        score: this.score,
+        isBonusStage: this.isBonusStageActive(),
+      });
     }
     localPlayer.goalTimerFrames = GOAL_SEQUENCE_FRAMES;
     localPlayer.goalSkipTimerFrames = GOAL_SKIP_TOTAL_FRAMES;

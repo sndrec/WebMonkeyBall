@@ -11,3 +11,17 @@ bindings = [
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Lobby", "Room"]
+
+[[d1_databases]]
+binding = "LEADERBOARDS_DB"
+database_name = "webmonkeyball-leaderboards"
+database_id = "CHANGE_ME"
+
+[[r2_buckets]]
+binding = "REPLAYS"
+bucket_name = "webmonkeyball-replays"
+
+[vars]
+ADMIN_PASSWORD_HASH = ""
+ADMIN_SESSION_SECRET = ""
+LEADERBOARD_ALLOWLIST = ""
