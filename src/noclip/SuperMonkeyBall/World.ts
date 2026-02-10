@@ -55,7 +55,7 @@ import { MkbTime } from "./Utils.js";
 import { AnimGroup } from "./AnimGroup.js";
 import { Lighting, LightingGroups } from "./Lighting.js";
 import { CommonModelID } from "./ModelInfo.js";
-import { GAME_SOURCES } from "../../constants.js";
+import { GAME_SOURCES } from "../../shared/constants/index.js";
 import { CommonNlModelID } from "./NlModelInfo.js";
 import { S16_TO_RADIANS } from "./Utils.js";
 import { Vec3Zero, transformVec3Mat4w0, transformVec3Mat4w1 } from "../MathHelpers.js";

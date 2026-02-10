@@ -1,563 +1,256 @@
-import { DEFAULT_STAGE_TIME, stageIdFromName, stageLabelFromName, INFO_FLAGS } from './constants.js';
+import { DEFAULT_STAGE_TIME, stageLabelFromName, INFO_FLAGS } from './shared/constants/index.js';
+import { getPackStageRules } from './pack.js';
 
-const CMD_FLOOR = 'CMD_FLOOR';
-const CMD_IF = 'CMD_IF';
-const CMD_THEN = 'CMD_THEN';
-const CMD_COURSE_END = 'CMD_COURSE_END';
+const DEFAULT_SMB1_PARSER_ID = 'smb1_stagedef';
+const DEFAULT_SMB1_RULESET_ID = 'smb1';
 
-const IF_FLOOR_CLEAR = 'IF_FLOOR_CLEAR';
-const IF_GOAL_TYPE = 'IF_GOAL_TYPE';
-const IF_TIME_ELAPSED = 'IF_TIME_ELAPSED';
-
-const THEN_JUMP_FLOOR = 'THEN_JUMP_FLOOR';
-
-const FLOOR_STAGE_ID = 'FLOOR_STAGE_ID';
-const FLOOR_TIME = 'FLOOR_TIME';
-
-// beginnerMain
-const beginnerMainScript = [
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_001_PLAIN' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_002_DIAMOND' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'B' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'G' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 3 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_003_HAIRPIN' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_004_WIDE_BRIDGE' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_091_BONUS_BASIC' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_005_SLOPES' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_006_STEPS' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_007_BLOCKS' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_008_JUMP_SINGLE' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_009_EXAM_A' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: '2', value: 0 },
-  { op: 'CMD_COURSE_END', type: '0', value: 0 },
-];
-
-// advancedMain
-const advancedMainScript = [
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_011_BUMP' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_012_WALKING' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_013_REPULSE' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_014_NARROW_BRIDGE' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_091_BONUS_BASIC' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_015_BREAK' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'B' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'G' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 4 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_016_CURVES' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_017_DOWNHILL' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_018_BLOCKS_SLIM' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_092_BONUS_WAVE' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_021_CHOICE' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'B' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'G' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 3 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_022_BOWL' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_023_JUMPIES' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_024_STOPPERS' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_025_FLOOR_BENT' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_026_CONVEYOR' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_027_EXAM_B' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_028_CHASER' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'B' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'G' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 2 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'R' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 7 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_029_JUMP_DOUBLE' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_093_BONUS_GRID' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_031_MIDDLE_JAM' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_032_ANTLION' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_033_COLLAPSE' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_034_SWING_BAR' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_035_LABYRINTH' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'B' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'G' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 3 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_036_SPIRAL' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_037_WAVY_JUMP' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_038_SPIKY' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_039_UNREST' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_040_POLAR' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: '2', value: 0 },
-  { op: 'CMD_COURSE_END', type: '0', value: 0 },
-];
-
-const expertMainScript = [
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_041_RUIN' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_042_BRANCH' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'B' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'R' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 3 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_043_OVERTURN' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'B' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'G' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 2 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_044_EXCURSION' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_091_BONUS_BASIC' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_045_DODECAGON' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_046_EXAM_C' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_047_SKELETON' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_048_TRACKS' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_092_BONUS_WAVE' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_051_DOWNHILL_HARD' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_052_GEARS' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_053_DESTRUCTION' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_054_INVASION' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_055_DIVING' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_056_FLOOR_SLANT' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_057_TRAM' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_058_SWING_BAR_LONG' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_059_PAPERWORK' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_093_BONUS_GRID' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_061_TWIN_ATTACKER' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_062_SEGA_LOGO' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_063_SNAKE' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_064_WIND' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_065_WINDY_SLIDE' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_066_FALL_DOWN' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_067_TWIN_CROSS' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_068_SPIRAL_HARD' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_069_CONVEYOR_PARTS' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_094_BONUS_BUMPY' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_071_GAPS' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_072_CURVATURE' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_073_ANT_LION_SUPER' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_074_DRUM' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_075_TWIST_AND_SPIN' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_076_SPEEDY_JAM' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_077_QUAKE' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_078_CASSIOPEIA' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_079_PIRATES' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_095_BONUS_HUNTING' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_081_BOWL_OPEN' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_082_CHECKER' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'B' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'G' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 2 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'R' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 3 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_083_CARPET' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_084_RIDGE' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_085_MIXER' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_086_RINGS' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'B' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_IF', type: 'IF_GOAL_TYPE', value: 'G' },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 2 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_087_STAIRS' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_088_CLOVER' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_089_COFFEE_CUP' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_090_METAMORPHASIS' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: '2', value: 0 },
-  { op: 'CMD_COURSE_END', type: '0', value: 0 },
-];
-
-const beginnerExtraScript = [
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_101_BLUR_BRIDGE' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_102_HITTER' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_103_AV_LOGO' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: '2', value: 0 },
-  { op: 'CMD_COURSE_END', type: '0', value: 0 },
-];
-
-const advancedExtraScript = [
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_101_BLUR_BRIDGE' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_104_HARD_HITTER' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_105_PUZZLE' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_103_AV_LOGO' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_106_POLAR_LARGE' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: '2', value: 0 },
-  { op: 'CMD_COURSE_END', type: '0', value: 0 },
-];
-
-const expertExtraScript = [
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_101_BLUR_BRIDGE' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_107_BREATHE' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_104_HARD_HITTER' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_108_FERRIS_WHEEL' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_109_FACTORY' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_110_CURL_PIPE' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_111_MAGIC_HAND' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_103_AV_LOGO' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_112_SANCTUARY' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_113_DAA_LOO_MAA' },
-  { op: 'CMD_FLOOR', type: 'FLOOR_TIME', value: 1800 },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: '2', value: 0 },
-  { op: 'CMD_COURSE_END', type: '0', value: 0 },
-];
-
-const masterScript = [
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_121_WAVE_MASTER' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_122_FAN_MASTER' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_123_STAMINA_MASTER' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_124_SPRING_MASTER' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_125_DANCE_MASTER' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_126_ROLL_MASTER' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_127_EDGE_MASTER' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_128_DODGE_MASTER' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_129_BRIDGE_MASTER' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: 'THEN_JUMP_FLOOR', value: 1 },
-  { op: 'CMD_FLOOR', type: 'FLOOR_STAGE_ID', value: 'ST_130_MONKEY_MASTER' },
-  { op: 'CMD_IF', type: 'IF_FLOOR_CLEAR', value: 0 },
-  { op: 'CMD_THEN', type: '2', value: 0 },
-  { op: 'CMD_COURSE_END', type: '0', value: 0 },
-];
-
-const scripts = {
-  beginner: beginnerMainScript,
-  advanced: advancedMainScript,
-  expert: expertMainScript,
-  'beginner-extra': beginnerExtraScript,
-  'advanced-extra': advancedExtraScript,
-  'expert-extra': expertExtraScript,
-  master: masterScript,
+export type CourseStageEntry = {
+  id: number;
+  name: string;
+  label: string;
+  parserId: string;
+  rulesetId: string;
+  timeLimitFrames?: number;
+  warpDefault?: number;
+  warpDistances?: Partial<Record<'B' | 'G' | 'R', number>>;
 };
+
+type CourseDefinition = {
+  stages: Array<Omit<CourseStageEntry, 'parserId' | 'rulesetId'>>;
+};
+
+const courseDefinitions: Record<string, CourseDefinition> = {
+  "beginner": {
+    "stages": [
+      { "id": 1, "name": "ST_001_PLAIN", "label": "PLAIN", "warpDefault": 1 },
+      { "id": 2, "name": "ST_002_DIAMOND", "label": "DIAMOND", "warpDistances": { "B": 1, "G": 3 } },
+      { "id": 3, "name": "ST_003_HAIRPIN", "label": "HAIRPIN", "warpDefault": 1 },
+      { "id": 4, "name": "ST_004_WIDE_BRIDGE", "label": "WIDE BRIDGE", "warpDefault": 1 },
+      { "id": 91, "name": "ST_091_BONUS_BASIC", "label": "BONUS BASIC", "warpDefault": 1 },
+      { "id": 5, "name": "ST_005_SLOPES", "label": "SLOPES", "warpDefault": 1 },
+      { "id": 6, "name": "ST_006_STEPS", "label": "STEPS", "warpDefault": 1 },
+      { "id": 7, "name": "ST_007_BLOCKS", "label": "BLOCKS", "warpDefault": 1 },
+      { "id": 8, "name": "ST_008_JUMP_SINGLE", "label": "JUMP SINGLE", "warpDefault": 1 },
+      { "id": 9, "name": "ST_009_EXAM_A", "label": "EXAM A" }
+    ]
+  },
+  "advanced": {
+    "stages": [
+      { "id": 11, "name": "ST_011_BUMP", "label": "BUMP", "warpDefault": 1 },
+      { "id": 12, "name": "ST_012_WALKING", "label": "WALKING", "warpDefault": 1 },
+      { "id": 13, "name": "ST_013_REPULSE", "label": "REPULSE", "warpDefault": 1 },
+      { "id": 14, "name": "ST_014_NARROW_BRIDGE", "label": "NARROW BRIDGE", "warpDefault": 1 },
+      { "id": 91, "name": "ST_091_BONUS_BASIC", "label": "BONUS BASIC", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 15, "name": "ST_015_BREAK", "label": "BREAK", "warpDistances": { "B": 1, "G": 4 } },
+      { "id": 16, "name": "ST_016_CURVES", "label": "CURVES", "warpDefault": 1 },
+      { "id": 17, "name": "ST_017_DOWNHILL", "label": "DOWNHILL", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 18, "name": "ST_018_BLOCKS_SLIM", "label": "BLOCKS SLIM", "warpDefault": 1 },
+      { "id": 92, "name": "ST_092_BONUS_WAVE", "label": "BONUS WAVE", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 21, "name": "ST_021_CHOICE", "label": "CHOICE", "timeLimitFrames": 1800, "warpDistances": { "B": 1, "G": 3 } },
+      { "id": 22, "name": "ST_022_BOWL", "label": "BOWL", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 23, "name": "ST_023_JUMPIES", "label": "JUMPIES", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 24, "name": "ST_024_STOPPERS", "label": "STOPPERS", "warpDefault": 1 },
+      { "id": 25, "name": "ST_025_FLOOR_BENT", "label": "FLOOR BENT", "warpDefault": 1 },
+      { "id": 26, "name": "ST_026_CONVEYOR", "label": "CONVEYOR", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 27, "name": "ST_027_EXAM_B", "label": "EXAM B", "warpDefault": 1 },
+      { "id": 28, "name": "ST_028_CHASER", "label": "CHASER", "warpDistances": { "B": 1, "G": 2, "R": 7 } },
+      { "id": 29, "name": "ST_029_JUMP_DOUBLE", "label": "JUMP DOUBLE", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 93, "name": "ST_093_BONUS_GRID", "label": "BONUS GRID", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 31, "name": "ST_031_MIDDLE_JAM", "label": "MIDDLE JAM", "warpDefault": 1 },
+      { "id": 32, "name": "ST_032_ANTLION", "label": "ANTLION", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 33, "name": "ST_033_COLLAPSE", "label": "COLLAPSE", "warpDefault": 1 },
+      { "id": 34, "name": "ST_034_SWING_BAR", "label": "SWING BAR", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 35, "name": "ST_035_LABYRINTH", "label": "LABYRINTH", "warpDistances": { "B": 1, "G": 3 } },
+      { "id": 36, "name": "ST_036_SPIRAL", "label": "SPIRAL", "warpDefault": 1 },
+      { "id": 37, "name": "ST_037_WAVY_JUMP", "label": "WAVY JUMP", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 38, "name": "ST_038_SPIKY", "label": "SPIKY", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 39, "name": "ST_039_UNREST", "label": "UNREST", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 40, "name": "ST_040_POLAR", "label": "POLAR", "timeLimitFrames": 1800 }
+    ]
+  },
+  "expert": {
+    "stages": [
+      { "id": 41, "name": "ST_041_RUIN", "label": "RUIN", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 42, "name": "ST_042_BRANCH", "label": "BRANCH", "timeLimitFrames": 1800, "warpDistances": { "B": 1, "R": 3 } },
+      { "id": 43, "name": "ST_043_OVERTURN", "label": "OVERTURN", "timeLimitFrames": 1800, "warpDistances": { "B": 1, "G": 2 } },
+      { "id": 44, "name": "ST_044_EXCURSION", "label": "EXCURSION", "warpDefault": 1 },
+      { "id": 91, "name": "ST_091_BONUS_BASIC", "label": "BONUS BASIC", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 45, "name": "ST_045_DODECAGON", "label": "DODECAGON", "warpDefault": 1 },
+      { "id": 46, "name": "ST_046_EXAM_C", "label": "EXAM C", "warpDefault": 1 },
+      { "id": 47, "name": "ST_047_SKELETON", "label": "SKELETON", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 48, "name": "ST_048_TRACKS", "label": "TRACKS", "warpDefault": 1 },
+      { "id": 92, "name": "ST_092_BONUS_WAVE", "label": "BONUS WAVE", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 51, "name": "ST_051_DOWNHILL_HARD", "label": "DOWNHILL HARD", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 52, "name": "ST_052_GEARS", "label": "GEARS", "warpDefault": 1 },
+      { "id": 53, "name": "ST_053_DESTRUCTION", "label": "DESTRUCTION", "warpDefault": 1 },
+      { "id": 54, "name": "ST_054_INVASION", "label": "INVASION", "warpDefault": 1 },
+      { "id": 55, "name": "ST_055_DIVING", "label": "DIVING", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 56, "name": "ST_056_FLOOR_SLANT", "label": "FLOOR SLANT", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 57, "name": "ST_057_TRAM", "label": "TRAM", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 58, "name": "ST_058_SWING_BAR_LONG", "label": "SWING BAR LONG", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 59, "name": "ST_059_PAPERWORK", "label": "PAPERWORK", "warpDefault": 1 },
+      { "id": 93, "name": "ST_093_BONUS_GRID", "label": "BONUS GRID", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 61, "name": "ST_061_TWIN_ATTACKER", "label": "TWIN ATTACKER", "warpDefault": 1 },
+      { "id": 62, "name": "ST_062_SEGA_LOGO", "label": "SEGA LOGO", "warpDefault": 1 },
+      { "id": 63, "name": "ST_063_SNAKE", "label": "SNAKE", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 64, "name": "ST_064_WIND", "label": "WIND", "warpDefault": 1 },
+      { "id": 65, "name": "ST_065_WINDY_SLIDE", "label": "WINDY SLIDE", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 66, "name": "ST_066_FALL_DOWN", "label": "FALL DOWN", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 67, "name": "ST_067_TWIN_CROSS", "label": "TWIN CROSS", "warpDefault": 1 },
+      { "id": 68, "name": "ST_068_SPIRAL_HARD", "label": "SPIRAL HARD", "warpDefault": 1 },
+      { "id": 69, "name": "ST_069_CONVEYOR_PARTS", "label": "CONVEYOR PARTS", "warpDefault": 1 },
+      { "id": 94, "name": "ST_094_BONUS_BUMPY", "label": "BONUS BUMPY", "warpDefault": 1 },
+      { "id": 71, "name": "ST_071_GAPS", "label": "GAPS", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 72, "name": "ST_072_CURVATURE", "label": "CURVATURE", "warpDefault": 1 },
+      { "id": 73, "name": "ST_073_ANT_LION_SUPER", "label": "ANT LION SUPER", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 74, "name": "ST_074_DRUM", "label": "DRUM", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 75, "name": "ST_075_TWIST_AND_SPIN", "label": "TWIST AND SPIN", "warpDefault": 1 },
+      { "id": 76, "name": "ST_076_SPEEDY_JAM", "label": "SPEEDY JAM", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 77, "name": "ST_077_QUAKE", "label": "QUAKE", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 78, "name": "ST_078_CASSIOPEIA", "label": "CASSIOPEIA", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 79, "name": "ST_079_PIRATES", "label": "PIRATES", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 95, "name": "ST_095_BONUS_HUNTING", "label": "BONUS HUNTING", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 81, "name": "ST_081_BOWL_OPEN", "label": "BOWL OPEN", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 82, "name": "ST_082_CHECKER", "label": "CHECKER", "warpDistances": { "B": 1, "G": 2, "R": 3 } },
+      { "id": 83, "name": "ST_083_CARPET", "label": "CARPET", "warpDefault": 1 },
+      { "id": 84, "name": "ST_084_RIDGE", "label": "RIDGE", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 85, "name": "ST_085_MIXER", "label": "MIXER", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 86, "name": "ST_086_RINGS", "label": "RINGS", "timeLimitFrames": 1800, "warpDistances": { "B": 1, "G": 2 } },
+      { "id": 87, "name": "ST_087_STAIRS", "label": "STAIRS", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 88, "name": "ST_088_CLOVER", "label": "CLOVER", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 89, "name": "ST_089_COFFEE_CUP", "label": "COFFEE CUP", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 90, "name": "ST_090_METAMORPHASIS", "label": "METAMORPHASIS", "timeLimitFrames": 1800 }
+    ]
+  },
+  "beginner-extra": {
+    "stages": [
+      { "id": 101, "name": "ST_101_BLUR_BRIDGE", "label": "BLUR BRIDGE", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 102, "name": "ST_102_HITTER", "label": "HITTER", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 103, "name": "ST_103_AV_LOGO", "label": "AV LOGO", "timeLimitFrames": 1800 }
+    ]
+  },
+  "advanced-extra": {
+    "stages": [
+      { "id": 101, "name": "ST_101_BLUR_BRIDGE", "label": "BLUR BRIDGE", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 104, "name": "ST_104_HARD_HITTER", "label": "HARD HITTER", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 105, "name": "ST_105_PUZZLE", "label": "PUZZLE", "warpDefault": 1 },
+      { "id": 103, "name": "ST_103_AV_LOGO", "label": "AV LOGO", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 106, "name": "ST_106_POLAR_LARGE", "label": "POLAR LARGE" }
+    ]
+  },
+  "expert-extra": {
+    "stages": [
+      { "id": 101, "name": "ST_101_BLUR_BRIDGE", "label": "BLUR BRIDGE", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 107, "name": "ST_107_BREATHE", "label": "BREATHE", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 104, "name": "ST_104_HARD_HITTER", "label": "HARD HITTER", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 108, "name": "ST_108_FERRIS_WHEEL", "label": "FERRIS WHEEL", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 109, "name": "ST_109_FACTORY", "label": "FACTORY", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 110, "name": "ST_110_CURL_PIPE", "label": "CURL PIPE", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 111, "name": "ST_111_MAGIC_HAND", "label": "MAGIC HAND", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 103, "name": "ST_103_AV_LOGO", "label": "AV LOGO", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 112, "name": "ST_112_SANCTUARY", "label": "SANCTUARY", "timeLimitFrames": 1800, "warpDefault": 1 },
+      { "id": 113, "name": "ST_113_DAA_LOO_MAA", "label": "DAA LOO MAA", "timeLimitFrames": 1800 }
+    ]
+  },
+  "master": {
+    "stages": [
+      { "id": 121, "name": "ST_121_WAVE_MASTER", "label": "WAVE MASTER", "warpDefault": 1 },
+      { "id": 122, "name": "ST_122_FAN_MASTER", "label": "FAN MASTER", "warpDefault": 1 },
+      { "id": 123, "name": "ST_123_STAMINA_MASTER", "label": "STAMINA MASTER", "warpDefault": 1 },
+      { "id": 124, "name": "ST_124_SPRING_MASTER", "label": "SPRING MASTER", "warpDefault": 1 },
+      { "id": 125, "name": "ST_125_DANCE_MASTER", "label": "DANCE MASTER", "warpDefault": 1 },
+      { "id": 126, "name": "ST_126_ROLL_MASTER", "label": "ROLL MASTER", "warpDefault": 1 },
+      { "id": 127, "name": "ST_127_EDGE_MASTER", "label": "EDGE MASTER", "warpDefault": 1 },
+      { "id": 128, "name": "ST_128_DODGE_MASTER", "label": "DODGE MASTER", "warpDefault": 1 },
+      { "id": 129, "name": "ST_129_BRIDGE_MASTER", "label": "BRIDGE MASTER", "warpDefault": 1 },
+      { "id": 130, "name": "ST_130_MONKEY_MASTER", "label": "MONKEY MASTER" }
+    ]
+  }
+};
+
+function resolveStageRules(stageId: number) {
+  const packRules = getPackStageRules(stageId);
+  return {
+    parserId: packRules?.parserId ?? DEFAULT_SMB1_PARSER_ID,
+    rulesetId: packRules?.rulesetId ?? DEFAULT_SMB1_RULESET_ID,
+  };
+}
 
 function isBonusStage(stageId) {
   return stageId >= 91 && stageId <= 95;
 }
 
-function buildStageList(script) {
-  const list = [];
-  for (let i = 0; i < script.length; i += 1) {
-    const cmd = script[i];
-    if (cmd.op === CMD_FLOOR && cmd.type === FLOOR_STAGE_ID) {
-      const name = cmd.value;
-      list.push({
-        id: stageIdFromName(name),
-        name,
-        label: stageLabelFromName(name),
-        nextIndex: i + 1,
-      });
-    }
+function getDefaultWarpDistance(goalType: string | null) {
+  if (goalType === 'G') {
+    return 1;
   }
-  return list;
+  if (goalType === 'R') {
+    return 2;
+  }
+  return 0;
+}
+
+function getWarpDistance(entry: CourseStageEntry, goalType: string | null) {
+  const normalized = (goalType === 'G' || goalType === 'R' || goalType === 'B') ? goalType : 'B';
+  const direct = entry.warpDistances?.[normalized];
+  if (typeof direct === 'number') {
+    return direct;
+  }
+  if (typeof entry.warpDefault === 'number') {
+    return entry.warpDefault;
+  }
+  return getDefaultWarpDistance(normalized);
+}
+
+function isFloorClear(info) {
+  if ((info.flags & INFO_FLAGS.GOAL) || (info.flags & INFO_FLAGS.BONUS_CLEAR)) {
+    return true;
+  }
+  if (isBonusStage(info.u_currStageId)
+    && ((info.flags & INFO_FLAGS.TIMEOVER) || (info.flags & INFO_FLAGS.FALLOUT))) {
+    return true;
+  }
+  return false;
 }
 
 export function getStageListForDifficulty(difficulty) {
-  const script = scripts[difficulty];
-  if (!script) {
+  const course = courseDefinitions[difficulty];
+  if (!course) {
     return [];
   }
-  return buildStageList(script).map((entry) => ({
-    id: entry.id,
-    name: entry.name,
-    label: entry.label,
-  }));
+  return course.stages.map((entry) => {
+    const rules = resolveStageRules(entry.id);
+    return {
+      id: entry.id,
+      name: entry.name,
+      label: entry.label,
+      parserId: rules.parserId,
+      rulesetId: rules.rulesetId,
+    };
+  });
 }
 
 export class Course {
   constructor(difficulty, stageIndex = 0) {
     this.difficulty = difficulty;
-    this.script = scripts[difficulty];
-    if (!this.script || this.script.length === 0) {
-      throw new Error(`Missing course script for ${difficulty}`);
+    this.definition = courseDefinitions[difficulty];
+    if (!this.definition || this.definition.stages.length === 0) {
+      throw new Error(`Missing course data for ${difficulty}`);
     }
-    this.stageList = buildStageList(this.script);
-    this.scriptIndex = 0;
+    this.stageList = this.definition.stages.map((entry) => {
+      const rules = resolveStageRules(entry.id);
+      return {
+        ...entry,
+        parserId: rules.parserId,
+        rulesetId: rules.rulesetId,
+      };
+    });
+    this.stageIndex = 0;
     this.currentFloor = 1;
     this.currentStageName = '';
     this.currentStageId = 0;
-    this.jumpFloors = -1;
+    this.currentStageParserId = DEFAULT_SMB1_PARSER_ID;
+    this.currentStageRulesetId = DEFAULT_SMB1_RULESET_ID;
     this.init();
     if (stageIndex > 0) {
       this.setStageIndex(stageIndex);
@@ -571,16 +264,15 @@ export class Course {
     }
     this.currentStageName = first.name;
     this.currentStageId = first.id;
-    this.scriptIndex = first.nextIndex;
+    this.currentStageParserId = first.parserId ?? DEFAULT_SMB1_PARSER_ID;
+    this.currentStageRulesetId = first.rulesetId ?? DEFAULT_SMB1_RULESET_ID;
+    this.stageIndex = 0;
     this.currentFloor = 1;
   }
 
   getTimeLimitFrames() {
-    const next = this.script[this.scriptIndex];
-    if (next && next.op === CMD_FLOOR && next.type === FLOOR_TIME) {
-      return next.value;
-    }
-    return DEFAULT_STAGE_TIME;
+    const entry = this.stageList[this.stageIndex];
+    return entry?.timeLimitFrames ?? DEFAULT_STAGE_TIME;
   }
 
   getStageLabel() {
@@ -616,27 +308,17 @@ export class Course {
   }
 
   getNextStageIds() {
-    const ids = new Set<number>();
-    const next = this.findStageAfterFloors(this.scriptIndex, 1);
-    if (next) {
-      ids.add(next.id);
+    const entry = this.stageList[this.stageIndex];
+    if (!entry) {
+      return [];
     }
+    const ids = new Set<number>();
     const goalTypes = ['B', 'G', 'R'];
-    const timerCandidates = [0, DEFAULT_STAGE_TIME];
     for (const goalType of goalTypes) {
-      for (const timerCurr of timerCandidates) {
-        const jumpCount = this.peekJumpCount({
-          flags: INFO_FLAGS.GOAL,
-          goalType,
-          timerCurr,
-          u_currStageId: this.currentStageId,
-        });
-        if (typeof jumpCount === 'number' && jumpCount > 0) {
-          const jumpStage = this.findStageAfterFloors(this.scriptIndex, jumpCount);
-          if (jumpStage) {
-            ids.add(jumpStage.id);
-          }
-        }
+      const warpDistance = getWarpDistance(entry, goalType);
+      const nextIndex = this.stageIndex + 1 + warpDistance;
+      if (nextIndex >= 0 && nextIndex < this.stageList.length) {
+        ids.add(this.stageList[nextIndex].id);
       }
     }
     return Array.from(ids.values());
@@ -653,183 +335,33 @@ export class Course {
     }
     this.currentStageName = entry.name;
     this.currentStageId = entry.id;
-    this.scriptIndex = entry.nextIndex;
+    this.currentStageParserId = entry.parserId ?? DEFAULT_SMB1_PARSER_ID;
+    this.currentStageRulesetId = entry.rulesetId ?? DEFAULT_SMB1_RULESET_ID;
+    this.stageIndex = clamped;
     this.currentFloor = clamped + 1;
   }
 
   advance(info) {
-    let prevOpcode = null;
-    let condResult = 0;
-    this.jumpFloors = -1;
-
-    for (let i = this.scriptIndex; i < this.script.length; i += 1) {
-      const cmd = this.script[i];
-      if (cmd.op === CMD_COURSE_END) {
-        return false;
-      }
-      if (cmd.op === CMD_FLOOR && cmd.type === FLOOR_STAGE_ID) {
-        break;
-      }
-
-      if (cmd.op === CMD_IF) {
-        const result = this.evalIf(cmd, info);
-        if (prevOpcode !== CMD_IF) {
-          condResult = result ? 1 : 0;
-        } else if (condResult) {
-          condResult = result ? 1 : 0;
-        }
-      }
-
-      if (cmd.op === CMD_THEN && condResult) {
-        this.evalThen(cmd);
-      }
-
-      if (this.jumpFloors !== -1) {
-        const jumped = this.performJump(i);
-        if (!jumped) {
-          return false;
-        }
-        return true;
-      }
-
-      prevOpcode = cmd.op;
+    const entry = this.stageList[this.stageIndex];
+    if (!entry) {
+      return false;
     }
-
-    return false;
-  }
-
-  peekJumpCount(info) {
-    let prevOpcode = null;
-    let condResult = 0;
-    let jumpFloors = -1;
-
-    for (let i = this.scriptIndex; i < this.script.length; i += 1) {
-      const cmd = this.script[i];
-      if (cmd.op === CMD_COURSE_END) {
-        return null;
-      }
-      if (cmd.op === CMD_FLOOR && cmd.type === FLOOR_STAGE_ID) {
-        break;
-      }
-
-      if (cmd.op === CMD_IF) {
-        const result = this.evalIf(cmd, info);
-        if (prevOpcode !== CMD_IF) {
-          condResult = result ? 1 : 0;
-        } else if (condResult) {
-          condResult = result ? 1 : 0;
-        }
-      }
-
-      if (cmd.op === CMD_THEN && condResult && cmd.type === THEN_JUMP_FLOOR) {
-        jumpFloors = cmd.value;
-      }
-
-      if (jumpFloors !== -1) {
-        let jumpCount = 0;
-        for (let j = i; j < this.script.length; j += 1) {
-          const jumpCmd = this.script[j];
-          if (jumpCmd.op === CMD_COURSE_END) {
-            return null;
-          }
-          if (jumpCmd.op === CMD_FLOOR && jumpCmd.type === FLOOR_STAGE_ID) {
-            jumpCount += 1;
-            if (jumpCount === jumpFloors) {
-              return jumpCount;
-            }
-          }
-        }
-        return null;
-      }
-
-      prevOpcode = cmd.op;
+    if (!isFloorClear(info)) {
+      return false;
     }
-
-    return null;
-  }
-
-  evalIf(cmd, info) {
-    switch (cmd.type) {
-      case IF_FLOOR_CLEAR:
-        if ((info.flags & INFO_FLAGS.GOAL) || (info.flags & INFO_FLAGS.BONUS_CLEAR)) {
-          return true;
-        }
-        if (isBonusStage(info.u_currStageId)
-          && ((info.flags & INFO_FLAGS.TIMEOVER) || (info.flags & INFO_FLAGS.FALLOUT))) {
-          return true;
-        }
-        return false;
-      case IF_GOAL_TYPE:
-        return info.goalType === cmd.value;
-      case IF_TIME_ELAPSED:
-        return info.timerCurr >= cmd.value;
-      default:
-        return false;
+    const goalType = info.goalType ?? 'B';
+    const warpDistance = getWarpDistance(entry, goalType);
+    const nextIndex = this.stageIndex + 1 + warpDistance;
+    if (nextIndex < 0 || nextIndex >= this.stageList.length) {
+      return false;
     }
-  }
-
-  evalThen(cmd) {
-    if (cmd.type === THEN_JUMP_FLOOR) {
-      this.jumpFloors = cmd.value;
-    }
-  }
-
-  performJump(fromIndex) {
-    let jumpCount = 0;
-    for (let i = fromIndex; i < this.script.length; i += 1) {
-      const cmd = this.script[i];
-      if (cmd.op === CMD_COURSE_END) {
-        return false;
-      }
-      if (cmd.op === CMD_FLOOR && cmd.type === FLOOR_STAGE_ID) {
-        jumpCount += 1;
-        if (jumpCount === this.jumpFloors) {
-          const stageName = cmd.value;
-          const stageId = stageIdFromName(stageName);
-          this.currentStageName = stageName;
-          this.currentStageId = stageId;
-          this.currentFloor += jumpCount;
-          this.scriptIndex = i + 1;
-          this.jumpFloors = -1;
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  findNextStage(startIndex) {
-    for (let i = startIndex; i < this.script.length; i += 1) {
-      const cmd = this.script[i];
-      if (cmd.op === CMD_FLOOR && cmd.type === FLOOR_STAGE_ID) {
-        return {
-          id: stageIdFromName(cmd.value),
-          name: cmd.value,
-          nextIndex: i + 1,
-        };
-      }
-    }
-    return null;
-  }
-
-  findStageAfterFloors(startIndex, floors) {
-    if (floors <= 0) {
-      return null;
-    }
-    let count = 0;
-    for (let i = startIndex; i < this.script.length; i += 1) {
-      const cmd = this.script[i];
-      if (cmd.op === CMD_FLOOR && cmd.type === FLOOR_STAGE_ID) {
-        count += 1;
-        if (count === floors) {
-          return {
-            id: stageIdFromName(cmd.value),
-            name: cmd.value,
-            nextIndex: i + 1,
-          };
-        }
-      }
-    }
-    return null;
+    const nextEntry = this.stageList[nextIndex];
+    this.currentStageName = nextEntry.name;
+    this.currentStageId = nextEntry.id;
+    this.currentStageParserId = nextEntry.parserId ?? DEFAULT_SMB1_PARSER_ID;
+    this.currentStageRulesetId = nextEntry.rulesetId ?? DEFAULT_SMB1_RULESET_ID;
+    this.currentFloor = nextIndex + 1;
+    this.stageIndex = nextIndex;
+    return true;
   }
 }

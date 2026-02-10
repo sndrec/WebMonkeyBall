@@ -1,5 +1,8 @@
-import { DEFAULT_STAGE_TIME, GAME_SOURCES } from './constants.js';
-import { getPackCourseData, getPackStageTimeOverride, hasPackForGameSource } from './pack.js';
+import { DEFAULT_STAGE_TIME, GAME_SOURCES } from './shared/constants/index.js';
+import { getPackCourseData, getPackStageRules, getPackStageTimeOverride, hasPackForGameSource } from './pack.js';
+
+const DEFAULT_SMB2_PARSER_ID = 'smb2_stagedef';
+const DEFAULT_SMB2_RULESET_ID = 'smb2';
 
 export const SMB2_CHALLENGE_ORDER = {
   'beginner': [201, 202, 203, 204, 205, 206, 207, 208, 209, 210],
@@ -35,6 +38,28 @@ export const SMB2_STORY_ORDER = [
   [341, 342, 343, 344, 345, 346, 347, 348, 349, 350],
 ] as const;
 
+type StageEntry = {
+  id: number;
+  parserId?: string;
+  rulesetId?: string;
+};
+
+function normalizeStageEntry(entry: number | StageEntry): StageEntry {
+  if (typeof entry === 'number') {
+    return { id: entry };
+  }
+  return { ...entry };
+}
+
+function resolveStageEntry(entry: StageEntry): StageEntry {
+  const packRules = getPackStageRules(entry.id);
+  return {
+    id: entry.id,
+    parserId: entry.parserId ?? packRules?.parserId ?? DEFAULT_SMB2_PARSER_ID,
+    rulesetId: entry.rulesetId ?? packRules?.rulesetId ?? DEFAULT_SMB2_RULESET_ID,
+  };
+}
+
 export type Smb2ChallengeDifficulty = keyof typeof SMB2_CHALLENGE_ORDER | string;
 
 export const SMB2_CHALLENGE_BONUS = Object.fromEntries(
@@ -65,7 +90,7 @@ export type Smb2CourseConfig =
       stageIndex: number;
     };
 
-function computeChallengeBonusFlags(list: number[]) {
+function computeChallengeBonusFlags(list: StageEntry[]) {
   return list.map((_id, index) => {
     const stageNumber = index + 1;
     if (stageNumber === 5) {
@@ -78,7 +103,7 @@ function computeChallengeBonusFlags(list: number[]) {
   });
 }
 
-function normalizeBonusFlags(list: number[], flags: boolean[] | null | undefined) {
+function normalizeBonusFlags(list: StageEntry[], flags: boolean[] | null | undefined) {
   if (!flags || flags.length === 0) {
     return computeChallengeBonusFlags(list);
   }
@@ -96,11 +121,14 @@ function getPackCourses() {
   return getPackCourseData();
 }
 
-function flattenStoryOrder(order: number[][]) {
-  return order.reduce<number[]>((acc, list) => acc.concat(list), []);
+function flattenStoryOrder(order: Array<Array<number | StageEntry>>) {
+  return order.reduce<StageEntry[]>((acc, list) => {
+    list.forEach((entry) => acc.push(normalizeStageEntry(entry)));
+    return acc;
+  }, []);
 }
 
-function getStoryIndex(order: number[][], worldIndex: number, stageIndex: number) {
+function getStoryIndex(order: Array<Array<number | StageEntry>>, worldIndex: number, stageIndex: number) {
   if (order.length === 0) {
     return 0;
   }
@@ -130,9 +158,11 @@ function titleCaseDifficulty(difficulty: string) {
 
 export class Smb2Course {
   public currentStageId: number;
+  public currentStageParserId: string;
+  public currentStageRulesetId: string;
 
   private mode: 'challenge' | 'story';
-  private stageList: number[];
+  private stageList: StageEntry[];
   private bonusFlags: boolean[];
   private currentIndex: number;
   private difficultyLabel: string | null;
@@ -144,7 +174,7 @@ export class Smb2Course {
     if (config.mode === 'challenge') {
       const packOrder = packCourses?.challenge?.order?.[config.difficulty];
       const list = packOrder ?? SMB2_CHALLENGE_ORDER[config.difficulty] ?? [];
-      this.stageList = list.slice();
+      this.stageList = list.map((entry) => resolveStageEntry(normalizeStageEntry(entry)));
       const packBonus = packCourses?.challenge?.bonus?.[config.difficulty];
       const defaultBonus = SMB2_CHALLENGE_BONUS[config.difficulty as keyof typeof SMB2_CHALLENGE_ORDER];
       this.bonusFlags = normalizeBonusFlags(this.stageList, packBonus ?? defaultBonus);
@@ -152,13 +182,16 @@ export class Smb2Course {
       this.difficultyLabel = titleCaseDifficulty(config.difficulty);
     } else {
       const storyOrder = packCourses?.story ?? SMB2_STORY_ORDER;
-      this.stageList = flattenStoryOrder(storyOrder);
+      this.stageList = flattenStoryOrder(storyOrder).map((entry) => resolveStageEntry(entry));
       this.bonusFlags = [];
       const storyIndex = getStoryIndex(storyOrder, config.worldIndex, config.stageIndex);
       this.currentIndex = clampIndex(storyIndex, this.stageList.length);
     }
 
-    this.currentStageId = this.stageList[this.currentIndex] ?? 0;
+    const entry = this.stageList[this.currentIndex];
+    this.currentStageId = entry?.id ?? 0;
+    this.currentStageParserId = entry?.parserId ?? DEFAULT_SMB2_PARSER_ID;
+    this.currentStageRulesetId = entry?.rulesetId ?? DEFAULT_SMB2_RULESET_ID;
   }
 
   getTimeLimitFrames() {
@@ -201,15 +234,15 @@ export class Smb2Course {
       return [];
     }
     const ids = new Set<number>();
-    const nextStageId = this.stageList[nextIndex];
+    const nextStageId = this.stageList[nextIndex]?.id;
     if (nextStageId) {
       ids.add(nextStageId);
     }
     if (this.mode === 'challenge') {
       const greenIndex = nextIndex + 1;
       const redIndex = nextIndex + 2;
-      const greenStageId = this.stageList[greenIndex];
-      const redStageId = this.stageList[redIndex];
+      const greenStageId = this.stageList[greenIndex]?.id;
+      const redStageId = this.stageList[redIndex]?.id;
       if (greenStageId) {
         ids.add(greenStageId);
       }
@@ -249,7 +282,10 @@ export class Smb2Course {
       return false;
     }
     this.currentIndex += step;
-    this.currentStageId = this.stageList[this.currentIndex] ?? this.currentStageId;
+    const entry = this.stageList[this.currentIndex];
+    this.currentStageId = entry?.id ?? this.currentStageId;
+    this.currentStageParserId = entry?.parserId ?? this.currentStageParserId;
+    this.currentStageRulesetId = entry?.rulesetId ?? this.currentStageRulesetId;
     return true;
   }
 }

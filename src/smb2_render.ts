@@ -1,5 +1,5 @@
 import { vec2, vec3 } from 'gl-matrix';
-import { GAME_SOURCES, type GameSource } from './constants.js';
+import { GAME_SOURCES, type GameSource } from './shared/constants/index.js';
 import {
   AnimType,
   BananaType,

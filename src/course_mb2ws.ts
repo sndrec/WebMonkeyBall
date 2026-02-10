@@ -1,5 +1,8 @@
-import { DEFAULT_STAGE_TIME, GAME_SOURCES } from './constants.js';
-import { getPackCourseData, getPackStageTimeOverride, hasPackForGameSource } from './pack.js';
+import { DEFAULT_STAGE_TIME, GAME_SOURCES } from './shared/constants/index.js';
+import { getPackCourseData, getPackStageRules, getPackStageTimeOverride, hasPackForGameSource } from './pack.js';
+
+const DEFAULT_MB2WS_PARSER_ID = 'smb2_stagedef';
+const DEFAULT_MB2WS_RULESET_ID = 'smb2';
 
 type ChallengeEntry = {
   id: number;
@@ -235,6 +238,28 @@ export const MB2WS_STORY_ORDER = [
   [308, 309, 310, 311, 312, 313, 314, 315, 316, 317],
 ] as const;
 
+type StageEntry = {
+  id: number;
+  parserId?: string;
+  rulesetId?: string;
+};
+
+function normalizeStageEntry(entry: number | StageEntry): StageEntry {
+  if (typeof entry === 'number') {
+    return { id: entry };
+  }
+  return { ...entry };
+}
+
+function resolveStageEntry(entry: StageEntry): StageEntry {
+  const packRules = getPackStageRules(entry.id);
+  return {
+    id: entry.id,
+    parserId: entry.parserId ?? packRules?.parserId ?? DEFAULT_MB2WS_PARSER_ID,
+    rulesetId: entry.rulesetId ?? packRules?.rulesetId ?? DEFAULT_MB2WS_RULESET_ID,
+  };
+}
+
 export type Mb2wsChallengeDifficulty = keyof typeof MB2WS_CHALLENGE_ORDER | string;
 
 export type Mb2wsCourseConfig =
@@ -249,7 +274,7 @@ export type Mb2wsCourseConfig =
       stageIndex: number;
     };
 
-function computeChallengeBonusFlags(list: number[]) {
+function computeChallengeBonusFlags(list: StageEntry[]) {
   return list.map((_id, index) => {
     const stageNumber = index + 1;
     if (stageNumber === 5) {
@@ -262,7 +287,7 @@ function computeChallengeBonusFlags(list: number[]) {
   });
 }
 
-function normalizeBonusFlags(list: number[], flags: boolean[] | null | undefined) {
+function normalizeBonusFlags(list: StageEntry[], flags: boolean[] | null | undefined) {
   if (!flags || flags.length === 0) {
     return computeChallengeBonusFlags(list);
   }
@@ -273,7 +298,7 @@ function normalizeBonusFlags(list: number[], flags: boolean[] | null | undefined
   return normalized;
 }
 
-function normalizeTimers(list: number[], timers: (number | null)[] | null | undefined) {
+function normalizeTimers(list: StageEntry[], timers: (number | null)[] | null | undefined) {
   if (!timers || timers.length === 0) {
     return list.map(() => null);
   }
@@ -291,11 +316,14 @@ function getPackCourses() {
   return getPackCourseData();
 }
 
-function flattenStoryOrder(order: number[][]) {
-  return order.reduce<number[]>((acc, list) => acc.concat(list), []);
+function flattenStoryOrder(order: Array<Array<number | StageEntry>>) {
+  return order.reduce<StageEntry[]>((acc, list) => {
+    list.forEach((entry) => acc.push(normalizeStageEntry(entry)));
+    return acc;
+  }, []);
 }
 
-function getStoryIndex(order: number[][], worldIndex: number, stageIndex: number) {
+function getStoryIndex(order: Array<Array<number | StageEntry>>, worldIndex: number, stageIndex: number) {
   if (order.length === 0) {
     return 0;
   }
@@ -325,9 +353,11 @@ function titleCaseDifficulty(difficulty: string) {
 
 export class Mb2wsCourse {
   public currentStageId: number;
+  public currentStageParserId: string;
+  public currentStageRulesetId: string;
 
   private mode: 'challenge' | 'story';
-  private stageList: number[];
+  private stageList: StageEntry[];
   private timeList: (number | null)[];
   private bonusFlags: boolean[];
   private currentIndex: number;
@@ -342,7 +372,7 @@ export class Mb2wsCourse {
       const list = packOrder ?? MB2WS_CHALLENGE_ORDER[config.difficulty] ?? [];
       const packTimers = packCourses?.challenge?.timers?.[config.difficulty];
       const times = packTimers ?? MB2WS_CHALLENGE_TIMERS[config.difficulty] ?? [];
-      this.stageList = list.slice();
+      this.stageList = list.map((entry) => resolveStageEntry(normalizeStageEntry(entry)));
       this.timeList = normalizeTimers(this.stageList, times);
       const packBonus = packCourses?.challenge?.bonus?.[config.difficulty];
       const defaultBonus = MB2WS_CHALLENGE_BONUS[config.difficulty as keyof typeof MB2WS_CHALLENGE_ORDER];
@@ -351,14 +381,17 @@ export class Mb2wsCourse {
       this.difficultyLabel = titleCaseDifficulty(config.difficulty);
     } else {
       const storyOrder = packCourses?.story ?? MB2WS_STORY_ORDER;
-      this.stageList = flattenStoryOrder(storyOrder);
+      this.stageList = flattenStoryOrder(storyOrder).map((entry) => resolveStageEntry(entry));
       this.timeList = [];
       this.bonusFlags = [];
       const storyIndex = getStoryIndex(storyOrder, config.worldIndex, config.stageIndex);
       this.currentIndex = clampIndex(storyIndex, this.stageList.length);
     }
 
-    this.currentStageId = this.stageList[this.currentIndex] ?? 0;
+    const entry = this.stageList[this.currentIndex];
+    this.currentStageId = entry?.id ?? 0;
+    this.currentStageParserId = entry?.parserId ?? DEFAULT_MB2WS_PARSER_ID;
+    this.currentStageRulesetId = entry?.rulesetId ?? DEFAULT_MB2WS_RULESET_ID;
   }
 
   getTimeLimitFrames() {
@@ -407,15 +440,15 @@ export class Mb2wsCourse {
       return [];
     }
     const ids = new Set<number>();
-    const nextStageId = this.stageList[nextIndex];
+    const nextStageId = this.stageList[nextIndex]?.id;
     if (nextStageId) {
       ids.add(nextStageId);
     }
     if (this.mode === 'challenge') {
       const greenIndex = nextIndex + 1;
       const redIndex = nextIndex + 2;
-      const greenStageId = this.stageList[greenIndex];
-      const redStageId = this.stageList[redIndex];
+      const greenStageId = this.stageList[greenIndex]?.id;
+      const redStageId = this.stageList[redIndex]?.id;
       if (greenStageId) {
         ids.add(greenStageId);
       }
@@ -455,7 +488,10 @@ export class Mb2wsCourse {
       return false;
     }
     this.currentIndex += step;
-    this.currentStageId = this.stageList[this.currentIndex] ?? this.currentStageId;
+    const entry = this.stageList[this.currentIndex];
+    this.currentStageId = entry?.id ?? this.currentStageId;
+    this.currentStageParserId = entry?.parserId ?? this.currentStageParserId;
+    this.currentStageRulesetId = entry?.rulesetId ?? this.currentStageRulesetId;
     return true;
   }
 }

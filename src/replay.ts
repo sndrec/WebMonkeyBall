@@ -1,4 +1,4 @@
-import type { GameSource } from './constants.js';
+import type { GameSource } from './shared/constants/index.js';
 import type { QuantizedStick } from './determinism.js';
 
 export type ReplayData = {

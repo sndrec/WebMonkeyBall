@@ -1,4 +1,4 @@
-import { DEG_TO_S16 } from './constants.js';
+import { DEG_TO_S16 } from './shared/constants/index.js';
 import { MatrixStack, atan2S16, sumSq2, sqrt, toS16 } from './math.js';
 
 const stack = new MatrixStack();

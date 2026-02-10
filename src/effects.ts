@@ -1,5 +1,6 @@
 import { raycastStageDown } from './collision.js';
 import { atan2S16, sqrt, sumSq2, toS16, vecDot } from './math.js';
+import type { Vec3 } from './shared/types.js';
 
 const SPARK_GRAVITY_SCALE = 0.008;
 const SPARK_DAMP = 0.992;
@@ -29,8 +30,6 @@ const STAR_SCALE_TARGET = 0.015;
 
 const randFloat = (rng) => rng.nextFloat();
 const randS16 = (rng) => rng.nextS16();
-
-type Vec3 = { x: number; y: number; z: number };
 
 export type BallEffectKind = 'coli' | 'colistar' | 'coliflash' | 'levitate';
 

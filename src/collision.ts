@@ -1,4 +1,4 @@
-import { COLI_FLAGS } from './constants.js';
+import { COLI_FLAGS } from './shared/constants/index.js';
 import {
   MatrixStack,
   atan2S16,

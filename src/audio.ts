@@ -1,4 +1,4 @@
-import { COLI_FLAGS, GAME_SOURCES, type GameSource } from './constants.js';
+import { COLI_FLAGS, GAME_SOURCES, type GameSource } from './shared/constants/index.js';
 import { getMb2wsStageInfo, getSmb2StageInfo } from './smb2_render.js';
 import { STAGE_INFO_MAP } from './noclip/SuperMonkeyBall/StageInfo.js';
 

@@ -1,6 +1,6 @@
 import { unzipSync } from 'fflate';
 import ArrayBufferSlice from './noclip/ArrayBufferSlice.js';
-import { STAGE_BASE_PATHS, type GameSource } from './constants.js';
+import { STAGE_BASE_PATHS, type GameSource } from './shared/constants/index.js';
 
 export type PackKeyframe = {
   t: number;
@@ -40,13 +40,24 @@ export type PackStageEnv = {
   fog?: PackFog;
 };
 
+export type PackStageRules = {
+  parserId?: string;
+  rulesetId?: string;
+};
+
+export type PackStageEntry = {
+  id: number;
+  parserId?: string;
+  rulesetId?: string;
+};
+
 export type PackCourseData = {
   challenge?: {
-    order?: Record<string, number[]>;
+    order?: Record<string, Array<number | PackStageEntry>>;
     bonus?: Record<string, boolean[]>;
     timers?: Record<string, (number | null)[]>;
   };
-  story?: number[][];
+  story?: Array<Array<number | PackStageEntry>>;
 };
 
 export type PackManifest = {
@@ -61,6 +72,7 @@ export type PackManifest = {
     stageTimeOverrides?: Record<string, number | null>;
   };
   courses?: PackCourseData;
+  stageRules?: Record<string, PackStageRules>;
   stageEnv?: Record<string, PackStageEnv>;
 };
 
@@ -166,6 +178,13 @@ export function getPackStageEnv(stageId: number): PackStageEnv | null {
     return null;
   }
   return activePack.manifest.stageEnv[String(stageId)] ?? null;
+}
+
+export function getPackStageRules(stageId: number): PackStageRules | null {
+  if (!packEnabled || !activePack?.manifest.stageRules) {
+    return null;
+  }
+  return activePack.manifest.stageRules[String(stageId)] ?? null;
 }
 
 export function getPackCourseData(): PackCourseData | null {

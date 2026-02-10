@@ -1,5 +1,5 @@
 import type { QuantizedInput } from './determinism.js';
-import type { GameSource } from './constants.js';
+import type { GameSource } from './shared/constants/index.js';
 
 export type PlayerId = number;
 

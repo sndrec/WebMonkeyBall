@@ -1,4 +1,4 @@
-import { GAME_SOURCES, INFO_FLAGS, type GameSource } from './constants.js';
+import { GAME_SOURCES, INFO_FLAGS, type GameSource } from './shared/constants/index.js';
 
 const HUD_WIDTH = 640;
 const HUD_HEIGHT = 480;

@@ -1,5 +1,5 @@
 import { mat3, mat4, vec3 } from 'gl-matrix';
-import { BALL_FLAGS, BALL_STATES, COLI_FLAGS } from './constants.js';
+import { BALL_FLAGS, BALL_STATES, COLI_FLAGS } from './shared/constants/index.js';
 import {
   MatrixStack,
   atan2S16,

@@ -1,7 +1,7 @@
 import { mat3, vec3 } from 'gl-matrix';
 import { MatrixStack, atan2S16, atan2S16Safe, clamp, sqrt, sumSq2, sumSq3, rsqrt, toS16 } from './math.js';
 import { smoothstep } from './animation.js';
-import { BALL_FLAGS, CAMERA_STATE, COLI_FLAGS, S16_TO_RAD } from './constants.js';
+import { BALL_FLAGS, CAMERA_STATE, COLI_FLAGS, S16_TO_RAD } from './shared/constants/index.js';
 
 const stack = new MatrixStack();
 const tmpVec = { x: 0, y: 0, z: 0 };
