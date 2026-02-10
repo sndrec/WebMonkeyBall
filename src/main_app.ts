@@ -1,4 +1,4 @@
-import { mat4, vec3, vec4 } from 'gl-matrix';
+import { mat4, vec3 } from 'gl-matrix';
 import { Game, type MultiplayerGameMode } from './game.js';
 import { AudioManager } from './audio.js';
 import { GAME_SOURCES, S16_TO_RAD, STAGE_BASE_PATHS, type GameSource } from './shared/constants/index.js';
@@ -21,9 +21,8 @@ import { GfxDevice } from './noclip/gfx/platform/GfxPlatform.js';
 import { createSwapChainForWebGL2 } from './noclip/gfx/platform/GfxPlatformWebGL2.js';
 import { GameplaySyncState, Renderer } from './noclip/Render.js';
 import { LobbyClient, HostRelay, ClientPeer } from './netplay.js';
-import { LeaderboardsClient, type CourseReplayData, type CourseReplaySegment } from './leaderboards.js';
+import { LeaderboardsClient, type CourseReplaySegment } from './leaderboards.js';
 import type { QuantizedInput } from './determinism.js';
-import { hashSimState } from './sim_hash.js';
 import type {
   ClientToHostMessage,
   FrameBundleMessage,
@@ -33,18 +32,26 @@ import type {
   RoomMeta,
   ChatMessage,
 } from './netcode_protocol.js';
-import { StageId, STAGE_INFO_MAP } from './noclip/SuperMonkeyBall/StageInfo.js';
 import type { StageData } from './noclip/SuperMonkeyBall/World.js';
-import { getMb2wsStageInfo, getSmb2StageInfo } from './smb2_render.js';
 import { HudRenderer } from './hud.js';
 import { createDefaultModRegistry } from './mods/index.js';
 import { runAppBootstrap } from './app/bootstrap.js';
 import { LeaderboardsUiController } from './app/leaderboards/ui.js';
+import { LeaderboardSessionController } from './app/leaderboards/session_flow.js';
 import { ChatUiController } from './app/netplay/chat_ui.js';
+import { NetplayConnectionStateController } from './app/netplay/connection_state.js';
 import { createNetplayDebugOverlay } from './app/netplay/debug_overlay.js';
 import { LobbyBrowserController } from './app/netplay/lobby_browser.js';
 import { bindLobbyEventHandlers } from './app/netplay/lobby_bindings.js';
+import { LobbyStateController } from './app/netplay/lobby_state.js';
+import { LobbyUiController } from './app/netplay/lobby_ui.js';
+import { NetplayMessageFlowController } from './app/netplay/message_flow.js';
+import { NameplateController } from './app/netplay/nameplates.js';
 import { PeerSessionController } from './app/netplay/peer_session.js';
+import { NetplayRuntimeController } from './app/netplay/runtime.js';
+import { SnapshotFlowController } from './app/netplay/snapshot_flow.js';
+import { NetplayStateSyncController } from './app/netplay/state_sync.js';
+import { NetplaySimulationSyncController } from './app/netplay/simulation_sync.js';
 import {
   formatCourseMeta,
   formatGameSourceLabel,
@@ -68,9 +75,11 @@ import { PackLoader } from './app/packs/pack_loader.js';
 import { PackSelectionController } from './app/packs/pack_selection.js';
 import { ReplayController } from './app/replay/controller.js';
 import { CourseSelectionController } from './app/gameplay/course_selection.js';
+import { MatchFlowController } from './app/gameplay/match_flow.js';
 import { initRendererGfx, prewarmConfettiRenderer as prewarmConfettiRenderResources, type ViewerInputState } from './app/render/boot.js';
-import { startRenderLoop } from './app/render/frame_loop.js';
+import { resizeCanvasToDisplaySize, startRenderLoop } from './app/render/frame_loop.js';
 import { StageLoader } from './app/render/stage_loader.js';
+import { StageFlowController } from './app/render/stage_flow.js';
 import { bindUiEventHandlers } from './app/ui/event_bindings.js';
 import { InputControlsController, bindRangeControl, bindVolumeControl } from './app/ui/input_controls.js';
 import { bindMainUiControls } from './app/ui/main_bindings.js';
@@ -556,12 +565,125 @@ const peerSession = new PeerSessionController({
   },
 });
 
+const matchFlow = new MatchFlowController({
+  game,
+  resumeButton,
+  hudStatus,
+  hideAllNameplates: () => {
+    nameplates?.hideAll();
+  },
+  isRunning: () => running,
+  setRunning: (value) => {
+    running = value;
+  },
+  isNetplayEnabled: () => netplayEnabled,
+  isHost: () => netplayState?.role === 'host',
+  getLobbyRoom: () => lobbyRoom,
+  setLobbyRoomMeta: (meta) => {
+    if (lobbyRoom) {
+      lobbyRoom.meta = meta;
+    }
+  },
+  buildRoomMeta,
+  broadcastRoomUpdate,
+  sendLobbyHeartbeat,
+  hostBroadcast: (msg) => {
+    hostRelay?.broadcast(msg);
+  },
+  setOverlayVisible,
+  setActiveMenu,
+  leaveRoom,
+  updateLobbyUi,
+  updateIngameChatVisibility,
+  resetNetplayForStage,
+  leaderboardsClient,
+  getLeaderboardSession: () => leaderboardSession,
+  setLeaderboardSession: (session) => {
+    leaderboardSession = session;
+  },
+  getPendingSnapshot: () => pendingSnapshot,
+  setPendingSnapshot: (snapshot) => {
+    pendingSnapshot = snapshot;
+  },
+  getLocalProfileName: () => localProfile?.name ?? 'Player',
+  isPackAllowed,
+  getLeaderboardPlayerId,
+});
+
+const lobbyState = new LobbyStateController({
+  game,
+  lobbyProfiles,
+  localProfile: () => localProfile,
+  setLocalProfile: (profile) => {
+    localProfile = profile;
+  },
+  saveLocalProfile,
+  updateLobbyUi,
+  updateProfileUi,
+  sanitizeProfile,
+  netplayRole: () => netplayState?.role ?? null,
+  hostRelay: () => hostRelay,
+  clientPeer: () => clientPeer,
+  setLastProfileBroadcastMs: (value) => {
+    lastProfileBroadcastMs = value;
+  },
+  getLastProfileBroadcastMs: () => lastProfileBroadcastMs,
+  profileBroadcastCooldownMs: PROFILE_BROADCAST_COOLDOWN_MS,
+  getProfileBroadcastTimer: () => profileBroadcastTimer,
+  setProfileBroadcastTimer: (id) => {
+    profileBroadcastTimer = id;
+  },
+  lobbyRoom: () => lobbyRoom,
+  isHost: () => netplayState?.role === 'host',
+  lobbyMaxPlayersSelect,
+  lobbyCollisionToggle,
+  lobbyLockToggle,
+  lobbyRoomNameInput,
+  clampInt,
+  getLobbyRoomGameMode,
+  getLobbySelectedGameMode,
+  chainedMaxPlayers: CHAINED_MAX_PLAYERS,
+  lobbyMaxPlayers: LOBBY_MAX_PLAYERS,
+  broadcastRoomUpdate,
+  sendLobbyHeartbeat,
+  buildRoomMeta,
+  setLastLobbyNameUpdateMs: (value) => {
+    lastLobbyNameUpdateMs = value;
+  },
+  getLastLobbyNameUpdateMs: () => lastLobbyNameUpdateMs,
+  lobbyNameUpdateCooldownMs: LOBBY_NAME_UPDATE_COOLDOWN_MS,
+  getLobbyNameUpdateTimer: () => lobbyNameUpdateTimer,
+  setLobbyNameUpdateTimer: (id) => {
+    lobbyNameUpdateTimer = id;
+  },
+  sanitizeLobbyName,
+  applyGameMode: (mode, maxPlayers, collisionEnabled) => {
+    game.maxPlayers = maxPlayers;
+    if (collisionEnabled !== undefined) {
+      game.playerCollisionEnabled = collisionEnabled;
+    }
+    game.setMultiplayerGameMode(mode);
+    if (netplayState) {
+      netplayState.currentGameMode = mode;
+    }
+  },
+});
+
+let lobbyUiController: LobbyUiController | null = null;
+let netplayMessageFlow: NetplayMessageFlowController | null = null;
+let snapshotFlow: SnapshotFlowController | null = null;
+let netplayRuntime: NetplayRuntimeController | null = null;
+let stageFlow: StageFlowController | null = null;
+let nameplates: NameplateController | null = null;
+let netplaySync: NetplayStateSyncController | null = null;
+let netplaySimSync: NetplaySimulationSyncController | null = null;
+let netplayConnectionState: NetplayConnectionStateController | null = null;
+
 let running = false;
 let paused = false;
 let lastTime = performance.now();
 let lastRenderTime = lastTime;
 let lastHudTime = lastTime;
-let stageLoadToken = 0;
 let renderReady = false;
 let activeGameSource: GameSource = GAME_SOURCES.SMB1;
 let interpolationEnabled = true;
@@ -724,18 +846,6 @@ const pendingSpawnStageSeq = new Map<number, number>();
 let lastLocalChatSentMs = 0;
 const chatRateLimitByPlayer = new Map<number, number>();
 let ingameChatOpen = false;
-type NameplateEntry = {
-  el: HTMLElement;
-  nameEl: HTMLElement;
-  avatarEl: HTMLElement;
-  lastName: string;
-  lastAvatarKey: string;
-};
-const nameplateEntries = new Map<number, NameplateEntry>();
-const nameplateScratch = vec4.create();
-const nameplateTiltPivot = vec3.create();
-const nameplateViewScratch = mat4.create();
-const nameplateClipScratch = mat4.create();
 const NETPLAY_MAX_FRAME_DELTA = 5;
 const NETPLAY_CLIENT_LEAD = 2;
 const NETPLAY_CLIENT_AHEAD_SLACK = 2;
@@ -768,11 +878,398 @@ const LOBBY_MAX_PLAYERS = 8;
 const CHAINED_MAX_PLAYERS = 4;
 const MULTIPLAYER_MODE_STANDARD: MultiplayerGameMode = 'standard';
 const MULTIPLAYER_MODE_CHAINED: MultiplayerGameMode = 'chained_together';
-const NAMEPLATE_OFFSET_SCALE = 1.6;
-const STAGE_TILT_SCALE = 0.6;
 const NETPLAY_DEBUG_STORAGE_KEY = 'smb_netplay_debug';
 const LOBBY_HEARTBEAT_INTERVAL_MS = 15000;
 const LOBBY_HEARTBEAT_FALLBACK_MS = 12000;
+
+netplaySync = new NetplayStateSyncController({
+  game,
+  setNetplayState: (state) => {
+    netplayState = state;
+  },
+  getNetplayState: () => netplayState,
+  getHostRelay: () => hostRelay,
+  getClientPeer: () => clientPeer,
+  setNetplayAccumulator: (value) => {
+    netplayAccumulator = value;
+  },
+  normalizeMultiplayerGameMode,
+  getActiveGameSource: () => activeGameSource,
+  getStageBasePath,
+  getLobbyRoom: () => lobbyRoom,
+  maxRollback: 30,
+  maxResend: 8,
+  hashInterval: 15,
+  netplayClientLead: NETPLAY_CLIENT_LEAD,
+  netplayClientMaxExtraLead: NETPLAY_CLIENT_MAX_EXTRA_LEAD,
+  stageReadyResendMs: NETPLAY_STAGE_READY_RESEND_MS,
+  stageReadyTimeoutMs: NETPLAY_STAGE_READY_TIMEOUT_MS,
+});
+netplaySimSync = new NetplaySimulationSyncController({
+  game,
+  getNetplayState: () => netplayState,
+  getPendingSnapshot: () => pendingSnapshot,
+  setPendingSnapshot: (snapshot) => {
+    pendingSnapshot = snapshot;
+  },
+  getSimHash,
+  resetNetplaySession,
+  quantizedEqual,
+  netplayPerf,
+});
+netplayConnectionState = new NetplayConnectionStateController({
+  game,
+  getRunning: () => running,
+  getLobbyClient: () => lobbyClient,
+  getLobbyRoom: () => lobbyRoom,
+  setLobbyRoom: (room) => {
+    lobbyRoom = room;
+  },
+  getLobbySelfId: () => lobbySelfId,
+  setLobbySelfId: (id) => {
+    lobbySelfId = id;
+  },
+  getLobbyPlayerToken: () => lobbyPlayerToken,
+  setLobbyPlayerToken: (token) => {
+    lobbyPlayerToken = token;
+  },
+  setLobbyHostToken: (token) => {
+    lobbyHostToken = token;
+  },
+  getLobbyHeartbeatTimer: () => lobbyHeartbeatTimer,
+  setLobbyHeartbeatTimer: (id) => {
+    lobbyHeartbeatTimer = id;
+  },
+  getLastLobbyHeartbeatMs: () => lastLobbyHeartbeatMs,
+  setLastLobbyHeartbeatMs: (value) => {
+    lastLobbyHeartbeatMs = value;
+  },
+  getLobbySignalRetryTimer: () => lobbySignalRetryTimer,
+  setLobbySignalRetryTimer: (id) => {
+    lobbySignalRetryTimer = id;
+  },
+  getLobbySignalRetryMs: () => lobbySignalRetryMs,
+  setLobbySignalRetryMs: (value) => {
+    lobbySignalRetryMs = value;
+  },
+  getLobbySignalShouldReconnect: () => lobbySignalShouldReconnect,
+  getLobbySignalReconnectFn: () => lobbySignalReconnectFn,
+  getLobbySignal: () => lobbySignal,
+  setLobbySignal: (signal) => {
+    lobbySignal = signal;
+  },
+  setLobbySignalShouldReconnect: (enabled) => {
+    lobbySignalShouldReconnect = enabled;
+  },
+  setLobbySignalReconnectFn: (fn) => {
+    lobbySignalReconnectFn = fn;
+  },
+  getHostRelay: () => hostRelay,
+  setHostRelay: (relay) => {
+    hostRelay = relay;
+  },
+  getClientPeer: () => clientPeer,
+  setClientPeer: (peer) => {
+    clientPeer = peer;
+  },
+  setNetplayEnabled: (enabled) => {
+    netplayEnabled = enabled;
+  },
+  setNetplayState: (state) => {
+    netplayState = state;
+  },
+  setPendingSnapshot: (snapshot) => {
+    pendingSnapshot = snapshot;
+  },
+  setNetplayAccumulator: (value) => {
+    netplayAccumulator = value;
+  },
+  setLastRoomMetaKey: (value) => {
+    lastRoomMetaKey = value;
+  },
+  setLastRoomPlayerCount: (value) => {
+    lastRoomPlayerCount = value;
+  },
+  setLastProfileBroadcastMs: (value) => {
+    lastProfileBroadcastMs = value;
+  },
+  setLastLobbyNameUpdateMs: (value) => {
+    lastLobbyNameUpdateMs = value;
+  },
+  lobbyProfiles,
+  pendingAvatarByPlayer,
+  profileUpdateThrottle,
+  setChatMessages: (messages) => {
+    chatMessages = messages;
+  },
+  chatRateLimitByPlayer,
+  setLastLocalChatSentMs: (value) => {
+    lastLocalChatSentMs = value;
+  },
+  pendingSpawnStageSeq,
+  clearNameplates: () => {
+    nameplates?.clear();
+  },
+  resetLocalPlayersAfterNetplay,
+  updateLobbyUi,
+  updateChatUi,
+  setIngameChatOpen,
+  modeStandard: MULTIPLAYER_MODE_STANDARD,
+  heartbeatIntervalMs: LOBBY_HEARTBEAT_INTERVAL_MS,
+  heartbeatFallbackMs: LOBBY_HEARTBEAT_FALLBACK_MS,
+  sendLobbyHeartbeat,
+});
+
+lobbyUiController = new LobbyUiController({
+  game,
+  netplayEnabled: () => netplayEnabled,
+  netplayRole: () => netplayState?.role ?? null,
+  netplayHasCurrentCourse: () => !!netplayState?.currentCourse,
+  lobbyRoom: () => lobbyRoom,
+  setLobbyRoomMeta: (meta) => {
+    if (lobbyRoom) {
+      lobbyRoom.meta = meta;
+    }
+  },
+  lobbyProfiles,
+  multiplayerBrowser,
+  multiplayerLobby,
+  multiplayerBackButton,
+  lobbyLeaveButton,
+  lobbyPlayerList,
+  ingamePlayerList,
+  lobbyRoomInfo,
+  lobbyRoomStatus,
+  lobbyRoomNameInput,
+  lobbyGameModeSelect,
+  lobbyMaxPlayersSelect,
+  lobbyCollisionToggle,
+  lobbyLockToggle,
+  lobbyChatPanel,
+  lobbyStartButton,
+  levelSelectOpenButton,
+  lobbyStageInfo,
+  lobbyStageButton,
+  lobbyStageActions,
+  lobbyStageChooseButton,
+  modeStandard: MULTIPLAYER_MODE_STANDARD,
+  modeChained: MULTIPLAYER_MODE_CHAINED,
+  chainedMaxPlayers: CHAINED_MAX_PLAYERS,
+  getLobbyRoomGameMode,
+  formatRoomInfoLabel,
+  formatMultiplayerGameModeLabel,
+  formatGameSourceLabel,
+  getPlayerDisplayName,
+  profileFallbackForPlayer,
+  createAvatarElement,
+  buildRoomMeta,
+  updateProfileUi,
+  updateChatUi,
+  kickPlayerFromRoom,
+});
+netplayMessageFlow = new NetplayMessageFlowController({
+  game,
+  lobbyStatus,
+  getNetplayState: () => netplayState,
+  setSuppressHostDisconnectUntil: (value) => {
+    suppressHostDisconnectUntil = value;
+  },
+  setLobbySignalShouldReconnect: (enabled) => {
+    lobbySignalShouldReconnect = enabled;
+  },
+  setLobbySignalReconnectFn: (fn) => {
+    lobbySignalReconnectFn = fn;
+  },
+  clearLobbySignalRetry,
+  resetNetplayConnections,
+  setActiveMenu,
+  requestSnapshot: (reason, frame, force) => {
+    requestSnapshot(reason, frame, force);
+  },
+  coerceFrame,
+  normalizeInput,
+  recordInputForFrame,
+  rollbackAndResim,
+  setPendingSnapshot: (snapshot) => {
+    pendingSnapshot = snapshot;
+  },
+  tryApplyPendingSnapshot,
+  markPlayerPendingSpawn,
+  promotePendingSpawns,
+  pendingSpawnStageSeq,
+  lobbyProfiles,
+  pendingAvatarByPlayer,
+  profileFallbackForPlayer,
+  updateLobbyUi,
+  appendChatMessage,
+  endMatchToLobby,
+  getRoomGameMode,
+  modeChained: MULTIPLAYER_MODE_CHAINED,
+  chainedMaxPlayers: CHAINED_MAX_PLAYERS,
+  normalizeMultiplayerGameMode,
+  setLobbyRoom: (room) => {
+    lobbyRoom = room;
+  },
+  setActiveGameSource: (source) => {
+    activeGameSource = source;
+  },
+  getStageBasePath,
+  setCurrentSmb2LikeMode: (mode) => {
+    currentSmb2LikeMode = mode;
+  },
+  startStage,
+  sendSnapshotToClient,
+  hostRelay: () => hostRelay,
+  rejectHostConnection,
+  shouldJoinAsSpectator,
+  sendStageSyncToClient,
+  maybeSendStageSync,
+  profileUpdateThrottle,
+  profileRemoteCooldownMs: PROFILE_REMOTE_COOLDOWN_MS,
+  sanitizeProfile,
+  getAvatarValidationCached,
+  sanitizeChatText,
+  chatRateLimitByPlayer,
+  chatSendCooldownMs: CHAT_SEND_COOLDOWN_MS,
+  maxInputAhead: NETPLAY_MAX_INPUT_AHEAD,
+  maxInputBehind: NETPLAY_MAX_INPUT_BEHIND,
+  hostMaxInputRollback: NETPLAY_HOST_MAX_INPUT_ROLLBACK,
+  hostSnapshotCooldownMs: NETPLAY_HOST_SNAPSHOT_COOLDOWN_MS,
+  snapshotCooldownMs: NETPLAY_SNAPSHOT_COOLDOWN_MS,
+});
+snapshotFlow = new SnapshotFlowController({
+  game,
+  getNetplayState: () => netplayState,
+  getClientPeer: () => clientPeer,
+  getHostRelay: () => hostRelay,
+  rollbackAndResim,
+  snapshotCooldownMs: NETPLAY_SNAPSHOT_COOLDOWN_MS,
+  snapshotMismatchCooldownMs: NETPLAY_SNAPSHOT_MISMATCH_COOLDOWN_MS,
+});
+netplayRuntime = new NetplayRuntimeController({
+  game,
+  netplayEnabled: () => netplayEnabled,
+  getNetplayState: () => netplayState,
+  getClientPeer: () => clientPeer,
+  getHostRelay: () => hostRelay,
+  getNetplayAccumulator: () => netplayAccumulator,
+  setNetplayAccumulator: (value) => {
+    netplayAccumulator = value;
+  },
+  buildInputsForFrame,
+  recordInputForFrame,
+  trimNetplayHistory,
+  getSimHash,
+  requestSnapshot: (reason, frame, force) => {
+    requestSnapshot(reason, frame, force);
+  },
+  hostApplyPendingRollback,
+  sendSnapshotToClient,
+  maybeResendStageReady,
+  maybeForceStageSync,
+  getAuthoritativeHashFrame,
+  getEstimatedHostFrame,
+  getClientLeadFrames,
+  recordNetplayPerf,
+  isNetplayDebugEnabled,
+  netplayDebugOverlay,
+  constants: {
+    maxFrameDelta: NETPLAY_MAX_FRAME_DELTA,
+    clientAheadSlack: NETPLAY_CLIENT_AHEAD_SLACK,
+    clientRateMin: NETPLAY_CLIENT_RATE_MIN,
+    clientRateMax: NETPLAY_CLIENT_RATE_MAX,
+    clientDriftRate: NETPLAY_CLIENT_DRIFT_RATE,
+    driftForceTick: NETPLAY_DRIFT_FORCE_TICK,
+    driftExtraTicks: NETPLAY_DRIFT_EXTRA_TICKS,
+    syncRateMin: NETPLAY_SYNC_RATE_MIN,
+    syncRateMax: NETPLAY_SYNC_RATE_MAX,
+    syncDriftRate: NETPLAY_SYNC_DRIFT_RATE,
+    syncForceTick: NETPLAY_SYNC_FORCE_TICK,
+    syncExtraTicks: NETPLAY_SYNC_EXTRA_TICKS,
+    syncMaxTicks: NETPLAY_SYNC_MAX_TICKS,
+    pingIntervalMs: NETPLAY_PING_INTERVAL_MS,
+    hostStallMs: NETPLAY_HOST_STALL_MS,
+    lagFuseFrames: NETPLAY_LAG_FUSE_FRAMES,
+    lagFuseMs: NETPLAY_LAG_FUSE_MS,
+    snapshotCooldownMs: NETPLAY_SNAPSHOT_COOLDOWN_MS,
+    hostSnapshotBehindFrames: NETPLAY_HOST_SNAPSHOT_BEHIND_FRAMES,
+    hostSnapshotCooldownMs: NETPLAY_HOST_SNAPSHOT_COOLDOWN_MS,
+  },
+});
+stageFlow = new StageFlowController({
+  game,
+  getActiveGameSource: () => activeGameSource,
+  setRunning: (value) => {
+    running = value;
+  },
+  setPaused: (value) => {
+    paused = value;
+  },
+  setRenderReady: (value) => {
+    renderReady = value;
+  },
+  setLastTime: (value) => {
+    lastTime = value;
+  },
+  ensureGfxReady: () => {
+    if (!swapChain || !gfxDevice) {
+      initGfx();
+    }
+  },
+  hasGfxDevice: () => !!gfxDevice,
+  destroyRenderer: () => {
+    if (renderer && gfxDevice) {
+      renderer.destroy(gfxDevice);
+    }
+  },
+  createRenderer: (stageData) => {
+    if (!gfxDevice) {
+      return;
+    }
+    renderer = new Renderer(gfxDevice, stageData);
+  },
+  prewarmConfettiRenderer,
+  applyGameCamera,
+  updateMobileMenuButtonVisibility,
+  updateIngameChatVisibility,
+  maybeStartSmb2LikeStageFade,
+  markStageReady,
+  tryApplyPendingSnapshot,
+  getLeaderboardSession: () => leaderboardSession,
+  isNetplayHostWithLobby: () => !!(netplayEnabled && netplayState?.role === 'host' && lobbyRoom),
+  buildRoomMeta,
+  setLobbyRoomMeta: (meta) => {
+    if (lobbyRoom) {
+      lobbyRoom.meta = meta;
+    }
+  },
+  broadcastRoomUpdate,
+  sendLobbyHeartbeatNow: () => {
+    sendLobbyHeartbeat(performance.now(), true);
+  },
+  loadRenderStage,
+  loadRenderStageSmb2,
+  getStageBasePath,
+  prefetchPath: (path) => {
+    void prefetchPackSlice(path);
+  },
+  isNaomiStage,
+});
+
+const leaderboardSessionFlow = new LeaderboardSessionController({
+  game,
+  getActiveGameSource: () => activeGameSource,
+  getActivePack: () => getActivePack(),
+  getLeaderboardAllowlist: () => leaderboardAllowlist,
+  getLocalProfileName: () => localProfile?.name ?? 'Player',
+  getLocalStoragePlayerId: () => localStorage.getItem('smb_leaderboard_player_id'),
+  leaderboardsClient,
+  isNetplayEnabled: () => netplayEnabled,
+  getLeaderboardSession: () => leaderboardSession,
+  setLeaderboardSession: (session) => {
+    leaderboardSession = session;
+  },
+});
 
 function normalizeMultiplayerGameMode(mode: unknown): MultiplayerGameMode {
   return mode === MULTIPLAYER_MODE_CHAINED ? MULTIPLAYER_MODE_CHAINED : MULTIPLAYER_MODE_STANDARD;
@@ -932,339 +1429,77 @@ type NetplayState = {
 
 let netplayState: NetplayState | null = null;
 
-function createNetplayId() {
-  const buf = new Uint32Array(1);
-  crypto.getRandomValues(buf);
-  return buf[0] >>> 0;
-}
-
 function quantizedEqual(a: QuantizedInput, b: QuantizedInput) {
-  return a.x === b.x && a.y === b.y && (a.buttons ?? 0) === (b.buttons ?? 0);
+  return netplaySync?.quantizedEqual(a, b) ?? (a.x === b.x && a.y === b.y && (a.buttons ?? 0) === (b.buttons ?? 0));
 }
 
 function coerceFrame(value: unknown): number | null {
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return null;
-  }
-  return Math.max(0, Math.floor(num));
-}
-
-function clampQuantizedAxis(value: unknown): number {
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return 0;
-  }
-  return clampInt(Math.round(num), -127, 127);
+  return netplaySync?.coerceFrame(value) ?? null;
 }
 
 function normalizeInput(input: any): QuantizedInput | null {
-  if (!input || typeof input !== 'object') {
-    return null;
-  }
-  const buttonsNum = Number(input.buttons ?? 0);
-  return {
-    x: clampQuantizedAxis(input.x),
-    y: clampQuantizedAxis(input.y),
-    buttons: Number.isFinite(buttonsNum) ? (buttonsNum | 0) : 0,
-  };
+  return netplaySync?.normalizeInput(input) ?? null;
 }
 
 function ensureNetplayState(role: NetplayRole) {
-  if (netplayState && netplayState.role === role) {
-    return netplayState;
+  if (netplaySync) {
+    return netplaySync.ensureNetplayState(role);
   }
-  const session = game.ensureRollbackSession();
-  session.prime(game.simTick);
-  game.netplayRttMs = null;
-  netplayState = {
-    role,
-    session,
-    inputHistory: new Map(),
-    lastInputs: new Map(),
-    pendingLocalInputs: new Map(),
-    lastAckedLocalFrame: -1,
-    lastReceivedHostFrame: game.simTick,
-    hostFrameBuffer: new Map(),
-    clientStates: new Map(),
-    maxRollback: 30,
-    maxResend: 8,
-    hashInterval: 15,
-    hashHistory: new Map(),
-    expectedHashes: new Map(),
-    lastAuthHashFrameSent: -1,
-    pendingHostUpdates: new Set(),
-    lastHostFrameTimeMs: null,
-    lagBehindSinceMs: null,
-    lastSnapshotRequestTimeMs: null,
-    rttMs: null,
-    pingSeq: 0,
-    pendingPings: new Map(),
-    lastPingTimeMs: 0,
-    currentStageId: null,
-    readyPlayers: new Set(),
-    awaitingStageReady: false,
-    awaitingStageSync: false,
-    stageSeq: 0,
-    stageReadySentMs: null,
-    stageReadyTimeoutMs: null,
-    currentCourse: null,
-    currentGameSource: null,
-    currentGameMode: null,
-    awaitingSnapshot: false,
-    pendingHostRollbackFrame: null,
-    pendingHostRollbackPlayers: new Set(),
-  };
+  if (!netplayState) {
+    throw new Error('Netplay sync controller unavailable');
+  }
   return netplayState;
 }
 
 function resetNetplaySession() {
-  game.rollbackSession = null;
-  const session = game.ensureRollbackSession();
-  session.prime(game.simTick);
-  if (netplayState) {
-    netplayState.session = session;
-  }
+  netplaySync?.resetNetplaySession();
 }
 
 function resetNetplayForStage() {
-  if (!netplayState) {
-    return;
-  }
-  netplayState.inputHistory.clear();
-  netplayState.lastInputs.clear();
-  netplayState.pendingLocalInputs.clear();
-  netplayState.hashHistory.clear();
-  netplayState.expectedHashes.clear();
-  netplayState.lastAuthHashFrameSent = -1;
-  netplayState.pendingHostUpdates.clear();
-  netplayState.lastHostFrameTimeMs = null;
-  netplayState.lagBehindSinceMs = null;
-  netplayState.lastSnapshotRequestTimeMs = null;
-  netplayState.awaitingSnapshot = false;
-  netplayState.pendingHostRollbackFrame = null;
-  netplayState.pendingHostRollbackPlayers.clear();
-  netplayState.lastAckedLocalFrame = 0;
-  netplayState.lastReceivedHostFrame = 0;
-  netplayState.hostFrameBuffer.clear();
+  netplaySync?.resetNetplayForStage();
   pendingSnapshot = null;
-  netplayState.readyPlayers.clear();
-  netplayState.awaitingStageReady = false;
-  netplayState.awaitingStageSync = false;
-  netplayState.currentStageId = null;
-  netplayState.stageReadySentMs = null;
-  netplayState.stageReadyTimeoutMs = null;
-  netplayAccumulator = 0;
-  for (const clientState of netplayState.clientStates.values()) {
-    clientState.lastAckedHostFrame = -1;
-    clientState.lastAckedClientInput = -1;
-    clientState.lastSnapshotMs = null;
-    clientState.lastSnapshotRequestMs = null;
-  }
-  resetNetplaySession();
-}
-
-function getExpectedStageReadyPlayers() {
-  return game.players.filter((player) => !player.isSpectator).map((player) => player.id);
 }
 
 function maybeSendStageSync() {
-  if (!netplayState || netplayState.role !== 'host' || !hostRelay) {
-    return;
-  }
-  const state = netplayState;
-  if (!state.awaitingStageReady) {
-    return;
-  }
-  const expected = getExpectedStageReadyPlayers();
-  const allReady = expected.every((playerId) => state.readyPlayers.has(playerId));
-  if (!allReady) {
-    return;
-  }
-  state.awaitingStageReady = false;
-  state.stageReadyTimeoutMs = null;
-  netplayAccumulator = 0;
-  hostRelay.broadcast({
-    type: 'stage_sync',
-    stageSeq: state.stageSeq,
-    stageId: state.currentStageId ?? game.stage?.stageId ?? 0,
-    frame: state.session.getFrame(),
-  });
+  netplaySync?.maybeSendStageSync();
 }
 
 function sendStageSyncToClient(playerId: number) {
-  if (!netplayState || netplayState.role !== 'host' || !hostRelay) {
-    return;
-  }
-  const state = netplayState;
-  hostRelay.sendTo(playerId, {
-    type: 'stage_sync',
-    stageSeq: state.stageSeq,
-    stageId: state.currentStageId ?? game.stage?.stageId ?? 0,
-    frame: state.session.getFrame(),
-  });
+  netplaySync?.sendStageSyncToClient(playerId);
 }
 
 function initStageSync(stageId: number) {
-  if (!netplayState || !netplayEnabled) {
-    return;
-  }
-  const state = netplayState;
-  state.currentStageId = stageId;
-  state.readyPlayers.clear();
-  if (state.role === 'host') {
-    state.awaitingStageReady = true;
-    state.awaitingStageSync = false;
-    state.stageReadyTimeoutMs = null;
-  } else {
-    state.awaitingStageSync = true;
-    state.awaitingStageReady = false;
-    state.stageReadySentMs = null;
-  }
+  netplaySync?.initStageSync(stageId);
   netplayAccumulator = 0;
 }
 
 function markStageReady(stageId: number) {
-  if (!netplayState || !netplayEnabled) {
-    return;
-  }
-  const state = netplayState;
-  if (state.currentStageId !== null && stageId !== state.currentStageId) {
-    return;
-  }
-  if (state.currentStageId === null) {
-    state.currentStageId = stageId;
-  }
-  if (state.role === 'host') {
-    state.readyPlayers.add(game.localPlayerId);
-    if (state.stageReadyTimeoutMs === null) {
-      state.stageReadyTimeoutMs = performance.now() + NETPLAY_STAGE_READY_TIMEOUT_MS;
-    }
-    maybeSendStageSync();
-    return;
-  }
-  if (clientPeer) {
-    clientPeer.send({ type: 'stage_ready', stageSeq: state.stageSeq, stageId });
-    state.stageReadySentMs = performance.now();
-  }
+  netplaySync?.markStageReady(stageId);
 }
 
 function maybeResendStageReady(nowMs: number) {
-  if (!netplayState || netplayState.role !== 'client' || !clientPeer) {
-    return;
-  }
-  if (!netplayState.awaitingStageSync) {
-    return;
-  }
-  const lastSent = netplayState.stageReadySentMs;
-  if (lastSent === null || (nowMs - lastSent) < NETPLAY_STAGE_READY_RESEND_MS) {
-    return;
-  }
-  const stageId = netplayState.currentStageId ?? game.stage?.stageId ?? 0;
-  clientPeer.send({ type: 'stage_ready', stageSeq: netplayState.stageSeq, stageId });
-  netplayState.stageReadySentMs = nowMs;
+  netplaySync?.maybeResendStageReady(nowMs);
 }
 
 function maybeForceStageSync(nowMs: number) {
-  if (!netplayState || netplayState.role !== 'host' || !hostRelay) {
-    return;
-  }
-  if (!netplayState.awaitingStageReady) {
-    return;
-  }
-  const timeoutAt = netplayState.stageReadyTimeoutMs;
-  if (timeoutAt === null || nowMs < timeoutAt) {
-    return;
-  }
-  netplayState.awaitingStageReady = false;
-  netplayState.stageReadyTimeoutMs = null;
+  netplaySync?.maybeForceStageSync(nowMs);
   netplayAccumulator = 0;
-  hostRelay.broadcast({
-    type: 'stage_sync',
-    stageSeq: netplayState.stageSeq,
-    stageId: netplayState.currentStageId ?? game.stage?.stageId ?? 0,
-    frame: netplayState.session.getFrame(),
-  });
 }
 
 function getSimHash() {
-  if (!game.stageRuntime || !game.world) {
-    return 0;
-  }
-  const players = [...game.players].sort((a, b) => a.id - b.id);
-  const balls = players.map((player) => player.ball);
-  const worlds = [game.world, ...players.map((player) => player.world)];
-  const baseHash = hashSimState(balls, worlds, game.stageRuntime);
-  return (baseHash ^ game.getMultiplayerDeterminismHash()) >>> 0;
-}
-
-function getAuthoritativeFrame(state: NetplayState) {
-  let authFrame = state.session.getFrame();
-  for (const player of game.players) {
-    if (player.isSpectator || player.pendingSpawn || player.id === game.localPlayerId) {
-      continue;
-    }
-    const clientState = state.clientStates.get(player.id);
-    if (!clientState) {
-      return -1;
-    }
-    authFrame = Math.min(authFrame, clientState.lastAckedClientInput);
-  }
-  return authFrame;
+  return netplaySync?.getSimHash() ?? 0;
 }
 
 function getAuthoritativeHashFrame(state: NetplayState) {
-  if (state.hashInterval <= 0) {
-    return null;
-  }
-  const authFrame = getAuthoritativeFrame(state);
-  if (authFrame < 0) {
-    return null;
-  }
-  const hashFrame = authFrame - (authFrame % state.hashInterval);
-  if (hashFrame < 0 || hashFrame <= state.lastAuthHashFrameSent) {
-    return null;
-  }
-  if (!state.hashHistory.has(hashFrame)) {
-    return null;
-  }
-  return hashFrame;
+  return netplaySync?.getAuthoritativeHashFrame(state) ?? null;
 }
 
 function getEstimatedHostFrame(state: NetplayState) {
-  if (state.role !== 'client') {
-    return state.lastReceivedHostFrame;
-  }
-  if (state.lastHostFrameTimeMs === null) {
-    return state.lastReceivedHostFrame;
-  }
-  const elapsedSeconds = (performance.now() - state.lastHostFrameTimeMs) / 1000;
-  const maxAdvance = Math.max(1, state.maxRollback);
-  const advance = Math.min(elapsedSeconds / game.fixedStep, maxAdvance);
-  return state.lastReceivedHostFrame + Math.max(0, advance);
-}
-
-function getIntroLeadScale() {
-  const total = game.introTotalFrames ?? 0;
-  const remaining = game.introTimerFrames ?? 0;
-  if (total <= 0 || remaining <= 0) {
-    return 1;
-  }
-  return clamp(1 - (remaining / total), 0, 1);
+  return netplaySync?.getEstimatedHostFrame(state) ?? state.lastReceivedHostFrame;
 }
 
 function getClientLeadFrames(state: NetplayState) {
-  let lead = NETPLAY_CLIENT_LEAD;
-  if (state.rttMs && state.rttMs > 0) {
-    const rttFrames = (state.rttMs / 1000) / game.fixedStep;
-    const extra = Math.min(NETPLAY_CLIENT_MAX_EXTRA_LEAD, Math.max(0, Math.floor(rttFrames * 0.5)));
-    lead += extra;
-  }
-  const scale = getIntroLeadScale();
-  if (scale >= 1) {
-    return lead;
-  }
-  return Math.max(0, Math.floor(lead * scale));
+  return netplaySync?.getClientLeadFrames(state) ?? NETPLAY_CLIENT_LEAD;
 }
 
 function setProfileAvatarError(message?: string) {
@@ -1382,162 +1617,8 @@ function blurActiveInput() {
   chatUi.blurActiveInput();
 }
 
-function getNameplateEntry(playerId: number): NameplateEntry {
-  let entry = nameplateEntries.get(playerId);
-  if (entry) {
-    return entry;
-  }
-  const profile = lobbyProfiles.get(playerId) ?? profileFallbackForPlayer(playerId);
-  const name = getPlayerDisplayName(playerId, profile);
-  const avatarKey = profile.avatarData ?? 'default';
-  const el = document.createElement('div');
-  el.className = 'nameplate';
-  const avatar = createAvatarElement(profile, playerId);
-  const nameEl = document.createElement('div');
-  nameEl.className = 'nameplate-name';
-  nameEl.textContent = name;
-  el.append(avatar, nameEl);
-  nameplateLayer.appendChild(el);
-  entry = { el, nameEl, avatarEl: avatar, lastName: name, lastAvatarKey: avatarKey };
-  nameplateEntries.set(playerId, entry);
-  return entry;
-}
-
-function updateNameplateContent(entry: NameplateEntry, playerId: number) {
-  const profile = lobbyProfiles.get(playerId) ?? profileFallbackForPlayer(playerId);
-  const name = getPlayerDisplayName(playerId, profile);
-  if (entry.lastName !== name) {
-    entry.lastName = name;
-    entry.nameEl.textContent = name;
-  }
-  const avatarKey = profile.avatarData ?? 'default';
-  if (entry.lastAvatarKey !== avatarKey) {
-    entry.lastAvatarKey = avatarKey;
-    const avatar = createAvatarElement(profile, playerId);
-    entry.avatarEl.replaceWith(avatar);
-    entry.avatarEl = avatar;
-  }
-}
-
-function projectWorldToScreen(
-  pos: { x: number; y: number; z: number },
-  rect: DOMRect,
-  clipFromWorld: mat4,
-  offsetY = 0,
-): { x: number; y: number } | null {
-  nameplateScratch[0] = pos.x;
-  nameplateScratch[1] = pos.y + offsetY;
-  nameplateScratch[2] = pos.z;
-  nameplateScratch[3] = 1;
-  vec4.transformMat4(nameplateScratch, nameplateScratch, clipFromWorld);
-  const w = nameplateScratch[3];
-  if (w <= 0.0001) {
-    return null;
-  }
-  const ndcX = nameplateScratch[0] / w;
-  const ndcY = nameplateScratch[1] / w;
-  if (ndcX < -1.05 || ndcX > 1.05 || ndcY < -1.05 || ndcY > 1.05) {
-    return null;
-  }
-  const screenX = rect.left + (ndcX * 0.5 + 0.5) * rect.width;
-  const screenY = rect.top + (1 - (ndcY * 0.5 + 0.5)) * rect.height;
-  return { x: screenX, y: screenY };
-}
-
 function updateNameplates(interpolationAlpha: number) {
-  const overlayVisible = !overlay.classList.contains('hidden');
-  if (!netplayEnabled || !running || overlayVisible) {
-    for (const entry of nameplateEntries.values()) {
-      entry.el.classList.remove('visible');
-    }
-    return;
-  }
-  const localPlayer = game.getLocalPlayer();
-  const localId = game.localPlayerId;
-  const spectator = localPlayer?.isSpectator ?? false;
-  const ballStates = game.getBallRenderStates(interpolationAlpha);
-  if (!ballStates || !canvas) {
-    return;
-  }
-  const rect = canvas.getBoundingClientRect();
-  const centerX = rect.left + rect.width / 2;
-  const centerY = rect.top + rect.height / 2;
-  let clipFromWorld = camera?.clipFromWorldMatrix ?? null;
-  const tilt = game.getStageTiltRenderState(interpolationAlpha);
-  if (camera && tilt) {
-    const rotX = tilt.xrot * STAGE_TILT_SCALE * S16_TO_RAD;
-    const rotZ = tilt.zrot * STAGE_TILT_SCALE * S16_TO_RAD;
-    if (rotX !== 0 || rotZ !== 0) {
-      let pivot = ballStates.find((state) => state.visible) ?? ballStates[0] ?? null;
-      if (pivot) {
-        vec3.set(nameplateTiltPivot, pivot.pos.x, pivot.pos.y, pivot.pos.z);
-        mat4.copy(nameplateViewScratch, camera.viewMatrix);
-        mat4.translate(nameplateViewScratch, nameplateViewScratch, nameplateTiltPivot);
-        mat4.rotateX(nameplateViewScratch, nameplateViewScratch, rotX);
-        mat4.rotateZ(nameplateViewScratch, nameplateViewScratch, rotZ);
-        vec3.negate(nameplateTiltPivot, nameplateTiltPivot);
-        mat4.translate(nameplateViewScratch, nameplateViewScratch, nameplateTiltPivot);
-        mat4.mul(nameplateClipScratch, camera.projectionMatrix, nameplateViewScratch);
-        clipFromWorld = nameplateClipScratch;
-      }
-    }
-  }
-  if (!clipFromWorld) {
-    return;
-  }
-  let closestId: number | null = null;
-  let closestDist = Infinity;
-  const activeIds = new Set<number>();
-  const positions = new Map<number, { x: number; y: number }>();
-  for (let i = 0; i < game.players.length; i += 1) {
-    const player = game.players[i];
-    if (player.id === localId) {
-      continue;
-    }
-    activeIds.add(player.id);
-    const renderState = ballStates[i];
-    if (!renderState?.visible) {
-      continue;
-    }
-    const screen = projectWorldToScreen(
-      renderState.pos,
-      rect,
-      clipFromWorld,
-      renderState.radius * NAMEPLATE_OFFSET_SCALE
-    );
-    if (!screen) {
-      continue;
-    }
-    positions.set(player.id, screen);
-    if (!spectator) {
-      const dx = screen.x - centerX;
-      const dy = screen.y - centerY;
-      const dist = (dx * dx) + (dy * dy);
-      if (dist < closestDist) {
-        closestDist = dist;
-        closestId = player.id;
-      }
-    }
-  }
-
-  for (const [playerId, entry] of nameplateEntries.entries()) {
-    if (!activeIds.has(playerId)) {
-      entry.el.remove();
-      nameplateEntries.delete(playerId);
-    }
-  }
-
-  for (const playerId of activeIds) {
-    const entry = getNameplateEntry(playerId);
-    const pos = positions.get(playerId) ?? null;
-    const shouldShow = !!pos && (spectator || playerId === closestId);
-    entry.el.classList.toggle('visible', shouldShow);
-    if (pos) {
-      updateNameplateContent(entry, playerId);
-      entry.el.style.left = `${pos.x}px`;
-      entry.el.style.top = `${pos.y}px`;
-    }
-  }
+  nameplates?.update(interpolationAlpha);
 }
 
 function profileFallbackForPlayer(playerId: number): PlayerProfile {
@@ -1590,6 +1671,19 @@ function createAvatarElement(profile: PlayerProfile, seed: number) {
   return avatar;
 }
 
+nameplates = new NameplateController({
+  game,
+  canvas,
+  overlay,
+  getRunning: () => running,
+  isNetplayEnabled: () => netplayEnabled,
+  getCamera: () => camera,
+  layer: nameplateLayer,
+  getProfile: (playerId) => lobbyProfiles.get(playerId) ?? profileFallbackForPlayer(playerId),
+  getPlayerDisplayName,
+  createAvatarElement,
+});
+
 function getLobbySelectedGameMode() {
   return normalizeMultiplayerGameMode(lobbyGameModeSelect?.value);
 }
@@ -1602,25 +1696,8 @@ function getLobbyRoomGameMode() {
   return normalizeMultiplayerGameMode(lobbyRoom?.meta?.gameMode ?? getLobbySelectedGameMode());
 }
 
-function getActiveLobbyPlayerCount() {
-  return game.players.filter((player) => !player.isSpectator && !player.pendingSpawn).length;
-}
-
 function getLobbyStartDisabledReason(isHost: boolean, mode: MultiplayerGameMode) {
-  if (!isHost) {
-    return 'Waiting for host...';
-  }
-  if (mode !== MULTIPLAYER_MODE_CHAINED) {
-    return '';
-  }
-  const activePlayers = getActiveLobbyPlayerCount();
-  if (activePlayers < 2) {
-    return 'Need at least 2 active players';
-  }
-  if (activePlayers > CHAINED_MAX_PLAYERS) {
-    return 'Chained Together supports up to 4 players';
-  }
-  return '';
+  return lobbyUiController?.getLobbyStartDisabledReason(isHost, mode) ?? '';
 }
 
 function buildRoomMeta(): RoomMeta | null {
@@ -1675,195 +1752,8 @@ function buildRoomMetaForCreation(): RoomMeta {
   };
 }
 
-function renderLobbyPlayerList(target: HTMLElement | null, isHost: boolean) {
-  if (!target) {
-    return;
-  }
-  target.innerHTML = '';
-  if (!lobbyRoom) {
-    return;
-  }
-  for (const player of game.players) {
-    const profile = lobbyProfiles.get(player.id) ?? profileFallbackForPlayer(player.id);
-    const row = document.createElement('div');
-    row.className = 'lobby-player';
-    const avatar = createAvatarElement(profile, player.id);
-    avatar.setAttribute('aria-hidden', 'true');
-    const info = document.createElement('div');
-    info.className = 'lobby-player-info';
-    const name = document.createElement('div');
-    name.className = 'lobby-player-name';
-    name.textContent = getPlayerDisplayName(player.id, profile);
-    const tags = document.createElement('span');
-    tags.className = 'lobby-player-tags';
-    const tagParts: string[] = [];
-    if (player.id === lobbyRoom.hostId) {
-      tagParts.push('Host');
-    }
-    if (player.id === game.localPlayerId) {
-      tagParts.push('You');
-    }
-    if (tagParts.length > 0) {
-      tags.textContent = ` (${tagParts.join(', ')})`;
-      name.appendChild(tags);
-    }
-    const sub = document.createElement('div');
-    sub.className = 'lobby-player-sub';
-    sub.textContent = `ID ${player.id}`;
-    info.append(name, sub);
-    row.append(avatar, info);
-    if (isHost && player.id !== lobbyRoom.hostId) {
-      const kickButton = document.createElement('button');
-      kickButton.type = 'button';
-      kickButton.className = 'ghost kick-button';
-      kickButton.textContent = 'Kick';
-      kickButton.addEventListener('click', () => {
-        void kickPlayerFromRoom(player.id);
-      });
-      row.append(kickButton);
-    }
-    target.appendChild(row);
-  }
-}
-
 function updateLobbyUi() {
-  const inLobby = !!(netplayEnabled && lobbyRoom);
-  multiplayerBrowser?.classList.toggle('hidden', inLobby);
-  multiplayerLobby?.classList.toggle('hidden', !inLobby);
-  multiplayerBackButton?.classList.toggle('hidden', inLobby);
-
-  if (!lobbyLeaveButton) {
-    return;
-  }
-  if (!inLobby || !lobbyRoom) {
-    lobbyLeaveButton.classList.add('hidden');
-    if (lobbyPlayerList) {
-      lobbyPlayerList.innerHTML = '';
-    }
-    if (ingamePlayerList) {
-      ingamePlayerList.innerHTML = '';
-    }
-    if (lobbyRoomInfo) {
-      lobbyRoomInfo.textContent = '';
-    }
-    if (lobbyRoomStatus) {
-      lobbyRoomStatus.textContent = '';
-    }
-    if (lobbyRoomNameInput) {
-      lobbyRoomNameInput.value = '';
-      lobbyRoomNameInput.disabled = true;
-    }
-    if (lobbyGameModeSelect) {
-      lobbyGameModeSelect.value = MULTIPLAYER_MODE_STANDARD;
-      lobbyGameModeSelect.disabled = true;
-    }
-    if (lobbyLockToggle) {
-      lobbyLockToggle.checked = false;
-      lobbyLockToggle.disabled = true;
-    }
-    if (lobbyChatPanel) {
-      lobbyChatPanel.classList.add('hidden');
-    }
-    if (lobbyStartButton) {
-      lobbyStartButton.classList.add('hidden');
-      lobbyStartButton.disabled = true;
-      lobbyStartButton.textContent = 'Start Match';
-    }
-    if (levelSelectOpenButton) {
-      levelSelectOpenButton.disabled = false;
-    }
-    updateLevelSelectUi();
-    return;
-  }
-
-  lobbyLeaveButton.classList.remove('hidden');
-  const roomLabel = formatRoomInfoLabel(lobbyRoom);
-  const statusLabel = lobbyRoom.meta?.status === 'in_game' ? 'In Game' : 'Waiting';
-  const playerCount = game.players.length;
-  const maxPlayers = lobbyRoom.settings?.maxPlayers ?? game.maxPlayers;
-  const isHost = netplayState?.role === 'host';
-  const gameMode = getLobbyRoomGameMode();
-  game.setMultiplayerGameMode(gameMode);
-  if (lobbyRoomInfo) {
-    lobbyRoomInfo.textContent = roomLabel;
-  }
-  if (lobbyRoomNameInput) {
-    const desiredName = lobbyRoom.meta?.roomName ?? '';
-    const isEditing = document.activeElement === lobbyRoomNameInput;
-    if (!isEditing && lobbyRoomNameInput.value !== desiredName) {
-      lobbyRoomNameInput.value = desiredName;
-    }
-    lobbyRoomNameInput.disabled = !isHost;
-  }
-  if (lobbyRoomStatus) {
-    lobbyRoomStatus.textContent = `${statusLabel} • ${playerCount}/${maxPlayers} players • ${formatMultiplayerGameModeLabel(gameMode)}`;
-  }
-
-  const inMatch = lobbyRoom.meta?.status === 'in_game' || !!netplayState?.currentCourse;
-  if (lobbyChatPanel) {
-    lobbyChatPanel.classList.toggle('hidden', inMatch);
-  }
-
-  renderLobbyPlayerList(lobbyPlayerList, isHost);
-  renderLobbyPlayerList(ingamePlayerList, isHost);
-
-  const meta = lobbyRoom.meta ?? buildRoomMeta();
-  if (meta && !lobbyRoom.meta) {
-    lobbyRoom.meta = meta;
-  }
-  if (lobbyStageInfo) {
-    if (meta) {
-      const sourceLabel = formatGameSourceLabel(meta.gameSource);
-      const courseLabel = meta.courseLabel ?? 'Unknown';
-      const stageLabel = meta.stageLabel ? ` • ${meta.stageLabel}` : '';
-      lobbyStageInfo.textContent = `${sourceLabel} • ${courseLabel}${stageLabel} • ${formatMultiplayerGameModeLabel(gameMode)}`;
-    } else {
-      lobbyStageInfo.textContent = 'Unknown';
-    }
-  }
-
-  if (lobbyGameModeSelect) {
-    lobbyGameModeSelect.value = gameMode;
-    lobbyGameModeSelect.disabled = !isHost;
-  }
-
-  if (lobbyMaxPlayersSelect) {
-    lobbyMaxPlayersSelect.value = String(maxPlayers);
-    for (const option of Array.from(lobbyMaxPlayersSelect.options)) {
-      const value = Number(option.value);
-      option.disabled = gameMode === MULTIPLAYER_MODE_CHAINED && Number.isFinite(value) && value > CHAINED_MAX_PLAYERS;
-    }
-  }
-  if (lobbyCollisionToggle) {
-    lobbyCollisionToggle.checked = !!(lobbyRoom.settings?.collisionEnabled ?? true);
-  }
-  if (lobbyLockToggle) {
-    lobbyLockToggle.checked = !!(lobbyRoom.settings?.locked ?? false);
-  }
-  if (lobbyMaxPlayersSelect) {
-    lobbyMaxPlayersSelect.disabled = !isHost;
-  }
-  if (lobbyCollisionToggle) {
-    lobbyCollisionToggle.disabled = !isHost;
-  }
-  if (lobbyLockToggle) {
-    lobbyLockToggle.disabled = !isHost;
-  }
-  if (lobbyStageButton) {
-    lobbyStageButton.disabled = !isHost;
-  }
-  if (lobbyStartButton) {
-    const startBlockedReason = getLobbyStartDisabledReason(!!isHost, gameMode);
-    lobbyStartButton.classList.remove('hidden');
-    lobbyStartButton.disabled = !!startBlockedReason;
-    lobbyStartButton.textContent = startBlockedReason || 'Start Match';
-  }
-  if (levelSelectOpenButton) {
-    levelSelectOpenButton.disabled = !isHost;
-  }
-  updateProfileUi();
-  updateChatUi();
-  updateLevelSelectUi();
+  lobbyUiController?.updateLobbyUi();
 }
 
 function setSettingsTab(tab: SettingsTab) {
@@ -1881,13 +1771,7 @@ function updateSettingsUi() {
 }
 
 function updateLevelSelectUi() {
-  const showLobbyStage = !!(netplayEnabled && lobbyRoom && netplayState?.role === 'host');
-  if (lobbyStageActions) {
-    lobbyStageActions.classList.toggle('hidden', !showLobbyStage);
-  }
-  if (lobbyStageChooseButton) {
-    lobbyStageChooseButton.disabled = !showLobbyStage;
-  }
+  lobbyUiController?.updateLevelSelectUi();
 }
 
 function getSmb1StageIdByIndex(index: number): number | null {
@@ -2028,62 +1912,11 @@ function broadcastRoomUpdate() {
 }
 
 function applyLobbySettingsFromInputs() {
-  if (!lobbyRoom || netplayState?.role !== 'host') {
-    return;
-  }
-  const mode = getLobbyRoomGameMode();
-  const currentPlayers = game.players.length;
-  const requestedRaw = lobbyMaxPlayersSelect ? Number(lobbyMaxPlayersSelect.value) : lobbyRoom.settings.maxPlayers;
-  const requestedMax = Number.isFinite(requestedRaw) ? requestedRaw : lobbyRoom.settings.maxPlayers;
-  const minPlayers = mode === MULTIPLAYER_MODE_CHAINED ? 2 : Math.max(2, currentPlayers);
-  const maxPlayersCap = mode === MULTIPLAYER_MODE_CHAINED ? CHAINED_MAX_PLAYERS : LOBBY_MAX_PLAYERS;
-  const nextMax = clampInt(requestedMax, minPlayers, maxPlayersCap);
-  const collisionEnabled = lobbyCollisionToggle ? !!lobbyCollisionToggle.checked : lobbyRoom.settings.collisionEnabled;
-  const locked = lobbyLockToggle ? !!lobbyLockToggle.checked : lobbyRoom.settings.locked;
-  lobbyRoom.settings = {
-    ...lobbyRoom.settings,
-    maxPlayers: nextMax,
-    collisionEnabled,
-    locked,
-  };
-  game.maxPlayers = nextMax;
-  game.playerCollisionEnabled = collisionEnabled;
-  game.setMultiplayerGameMode(mode);
-  if (netplayState) {
-    netplayState.currentGameMode = mode;
-  }
-  if (lobbyMaxPlayersSelect) {
-    lobbyMaxPlayersSelect.value = String(nextMax);
-  }
-  broadcastRoomUpdate();
-  sendLobbyHeartbeat(performance.now(), true);
-  updateLobbyUi();
+  lobbyState.applyLobbySettingsFromInputs();
 }
 
 function applyLobbyGameModeFromInputs() {
-  if (!lobbyRoom || netplayState?.role !== 'host') {
-    return;
-  }
-  const mode = getLobbySelectedGameMode();
-  const maxPlayersCap = mode === MULTIPLAYER_MODE_CHAINED ? CHAINED_MAX_PLAYERS : LOBBY_MAX_PLAYERS;
-  const nextMax = clampInt(Math.min(lobbyRoom.settings.maxPlayers, maxPlayersCap), 2, maxPlayersCap);
-  lobbyRoom.settings = {
-    ...lobbyRoom.settings,
-    maxPlayers: nextMax,
-  };
-  game.maxPlayers = nextMax;
-  game.setMultiplayerGameMode(mode);
-  if (netplayState) {
-    netplayState.currentGameMode = mode;
-  }
-  const baseMeta = buildRoomMeta() ?? lobbyRoom.meta ?? { status: 'lobby' };
-  lobbyRoom.meta = { ...baseMeta, gameMode: mode };
-  if (lobbyMaxPlayersSelect) {
-    lobbyMaxPlayersSelect.value = String(nextMax);
-  }
-  broadcastRoomUpdate();
-  sendLobbyHeartbeat(performance.now(), true);
-  updateLobbyUi();
+  lobbyState.applyLobbyGameModeFromInputs();
 }
 
 async function handleHostDisconnect() {
@@ -2107,36 +1940,11 @@ async function handleHostDisconnect() {
 }
 
 function applyLocalProfileToSession() {
-  if (!Number.isFinite(game.localPlayerId) || game.localPlayerId <= 0) {
-    return;
-  }
-  lobbyProfiles.set(game.localPlayerId, localProfile);
+  lobbyState.applyLocalProfileToSession();
 }
 
 function broadcastLocalProfile() {
-  if (!netplayState) {
-    return;
-  }
-  if (!Number.isFinite(game.localPlayerId) || game.localPlayerId <= 0) {
-    return;
-  }
-  const sanitized = sanitizeProfile(localProfile);
-  if (sanitized.name !== localProfile.name || sanitized.avatarData !== localProfile.avatarData) {
-    localProfile = sanitized;
-    saveLocalProfile(localProfile);
-    updateProfileUi();
-  } else {
-    localProfile = sanitized;
-  }
-  applyLocalProfileToSession();
-  const payload = { type: 'player_profile', playerId: game.localPlayerId, profile: localProfile } as const;
-  if (netplayState.role === 'host') {
-    hostRelay?.broadcast(payload);
-  } else if (netplayState.role === 'client') {
-    clientPeer?.send(payload);
-  }
-  lastProfileBroadcastMs = performance.now();
-  updateLobbyUi();
+  lobbyState.broadcastLocalProfile();
 }
 
 function updateProfileUi() {
@@ -2158,67 +1966,22 @@ function updateProfileUi() {
 }
 
 function scheduleProfileBroadcast() {
-  if (profileBroadcastTimer !== null) {
-    window.clearTimeout(profileBroadcastTimer);
-  }
-  const nowMs = performance.now();
-  const lastMs = lastProfileBroadcastMs ?? 0;
-  const cooldownRemaining = PROFILE_BROADCAST_COOLDOWN_MS - (nowMs - lastMs);
-  const waitMs = Math.max(300, cooldownRemaining);
-  profileBroadcastTimer = window.setTimeout(() => {
-    profileBroadcastTimer = null;
-    lastProfileBroadcastMs = performance.now();
-    broadcastLocalProfile();
-  }, waitMs);
+  lobbyState.scheduleProfileBroadcast();
 }
 
 function applyLobbyNameFromInput() {
-  if (!lobbyRoom || netplayState?.role !== 'host') {
-    return;
-  }
-  const sanitized = sanitizeLobbyName(lobbyRoomNameInput?.value ?? '');
-  if (lobbyRoomNameInput && (sanitized ?? '') !== lobbyRoomNameInput.value) {
-    lobbyRoomNameInput.value = sanitized ?? '';
-  }
-  const nextName = sanitized ?? undefined;
-  const baseMeta = buildRoomMeta() ?? lobbyRoom.meta ?? { status: 'lobby' };
-  if (baseMeta.roomName === nextName) {
-    return;
-  }
-  lobbyRoom.meta = { ...baseMeta, roomName: nextName };
-  lastLobbyNameUpdateMs = performance.now();
-  broadcastRoomUpdate();
-  sendLobbyHeartbeat(performance.now(), true);
-  updateLobbyUi();
+  lobbyState.applyLobbyNameFromInput();
 }
 
 function scheduleLobbyNameUpdate() {
-  if (lobbyNameUpdateTimer !== null) {
-    window.clearTimeout(lobbyNameUpdateTimer);
-  }
-  const nowMs = performance.now();
-  const lastMs = lastLobbyNameUpdateMs ?? 0;
-  const cooldownRemaining = LOBBY_NAME_UPDATE_COOLDOWN_MS - (nowMs - lastMs);
-  const waitMs = Math.max(300, cooldownRemaining);
-  lobbyNameUpdateTimer = window.setTimeout(() => {
-    lobbyNameUpdateTimer = null;
-    applyLobbyNameFromInput();
-  }, waitMs);
+  lobbyState.scheduleLobbyNameUpdate();
 }
 
 function applyLobbyStageSelection() {
-  if (!lobbyRoom || netplayState?.role !== 'host') {
-    return;
+  lobbyState.applyLobbyStageSelection();
+  if (lobbyRoom?.meta) {
+    lastRoomMetaKey = JSON.stringify(lobbyRoom.meta);
   }
-  const meta = buildRoomMeta();
-  if (!meta) {
-    return;
-  }
-  lobbyRoom.meta = meta;
-  lastRoomMetaKey = JSON.stringify(meta);
-  broadcastRoomUpdate();
-  sendLobbyHeartbeat(performance.now(), true);
-  updateLobbyUi();
 }
 
 function resetMatchState() {
@@ -2228,132 +1991,31 @@ function resetMatchState() {
     netplayState.currentGameMode = null;
     netplayState.awaitingSnapshot = false;
   }
-  leaderboardSession = null;
-  pendingSnapshot = null;
-  if (netplayEnabled) {
-    resetNetplayForStage();
-  }
+  matchFlow.resetMatchState();
 }
 
 function destroySingleplayerForNetplay() {
-  if (!running || netplayEnabled) {
-    return;
-  }
-  resetMatchState();
-  endActiveMatch();
-  setOverlayVisible(true);
+  matchFlow.destroySingleplayerForNetplay();
 }
 
 function endActiveMatch() {
-  if (!running) {
-    return;
-  }
-  game.pause();
-  running = false;
-  resumeButton.disabled = true;
-  if (hudStatus) {
-    hudStatus.textContent = '';
-  }
-  for (const entry of nameplateEntries.values()) {
-    entry.el.classList.remove('visible');
-  }
-  updateIngameChatVisibility();
+  matchFlow.endActiveMatch();
 }
 
 function endMatchToMenu() {
-  resetMatchState();
-  endActiveMatch();
-  setOverlayVisible(true);
-  setActiveMenu('main');
+  matchFlow.endMatchToMenu();
 }
 
 function endMatchToLobby() {
-  resetMatchState();
-  endActiveMatch();
-  setOverlayVisible(true);
-  setActiveMenu('multiplayer');
-  updateLobbyUi();
+  matchFlow.endMatchToLobby();
 }
 
 function leaveMatchToLobbyList() {
-  if (!netplayEnabled) {
-    endMatchToMenu();
-    return;
-  }
-  if (netplayState?.role === 'host' && lobbyRoom) {
-    const confirmed = window.confirm('Leaving will close this lobby for everyone. Leave anyway?');
-    if (!confirmed) {
-      return;
-    }
-  }
-  resetMatchState();
-  endActiveMatch();
-  setOverlayVisible(true);
-  setActiveMenu('multiplayer');
-  void leaveRoom({ skipConfirm: true });
+  void matchFlow.leaveMatchToLobbyList();
 }
 
 function handleCourseComplete() {
-  if (!running) {
-    return;
-  }
-  if (!netplayEnabled && leaderboardsClient && leaderboardSession?.active) {
-    const session = leaderboardSession;
-    const packAllowed = isPackAllowed(session.packId);
-    if (session.eligible && !session.hasSkipped && packAllowed) {
-      const totalFrames = session.courseTimerFrames + session.penaltyFrames;
-      const playerId = getLeaderboardPlayerId();
-      const displayName = localProfile?.name ?? 'Player';
-      const warpFlag = session.mode === 'challenge' && session.warpUsed ? 'warped' : 'warpless';
-      const courseReplay: CourseReplayData = {
-        version: 1,
-        gameSource: session.gameSource,
-        packId: session.packId ?? undefined,
-        course: {
-          mode: session.mode,
-          difficulty: session.courseConfig?.difficulty,
-          worldIndex: session.courseConfig?.worldIndex,
-          stageIndex: session.courseConfig?.stageIndex,
-        },
-        segments: session.segments,
-      };
-      void leaderboardsClient.submitCourse({
-        type: 'course',
-        playerId,
-        displayName,
-        gameSource: session.gameSource,
-        courseId: session.courseId,
-        mode: session.mode,
-        warpFlag,
-        value: Math.max(0, Math.trunc(totalFrames)),
-        packId: session.packId,
-        replay: courseReplay,
-        clientMeta: {
-          version: 1,
-          retries: session.retryCount,
-          penaltyFrames: session.penaltyFrames,
-        },
-      }).catch(() => {});
-    }
-    leaderboardSession = null;
-  }
-  if (netplayEnabled) {
-    if (netplayState?.role !== 'host') {
-      return;
-    }
-    endMatchToLobby();
-    if (lobbyRoom) {
-      const meta = buildRoomMeta();
-      if (meta) {
-        lobbyRoom.meta = meta;
-      }
-      broadcastRoomUpdate();
-      sendLobbyHeartbeat(performance.now(), true);
-    }
-    hostRelay?.broadcast({ type: 'match_end' });
-    return;
-  }
-  endMatchToMenu();
+  matchFlow.handleCourseComplete();
 }
 
 function openMenuOverlay(preferredMenu?: MenuPanel) {
@@ -2376,25 +2038,11 @@ if (leaderboardsOpenButton) {
 }
 
 function startLobbyHeartbeat(roomId: string) {
-  if (!lobbyClient) {
-    return;
-  }
-  if (lobbyHeartbeatTimer !== null) {
-    window.clearInterval(lobbyHeartbeatTimer);
-  }
-  lastLobbyHeartbeatMs = null;
-  lobbyHeartbeatTimer = window.setInterval(() => {
-    sendLobbyHeartbeat(performance.now(), false, roomId);
-  }, LOBBY_HEARTBEAT_INTERVAL_MS);
-  sendLobbyHeartbeat(performance.now(), true, roomId);
+  netplayConnectionState?.startLobbyHeartbeat(roomId);
 }
 
 function stopLobbyHeartbeat() {
-  if (lobbyHeartbeatTimer !== null) {
-    window.clearInterval(lobbyHeartbeatTimer);
-    lobbyHeartbeatTimer = null;
-  }
-  lastLobbyHeartbeatMs = null;
+  netplayConnectionState?.stopLobbyHeartbeat();
 }
 
 function resetLocalPlayersAfterNetplay() {
@@ -2410,111 +2058,27 @@ function resetLocalPlayersAfterNetplay() {
 }
 
 function clearLobbySignalRetry() {
-  if (lobbySignalRetryTimer !== null) {
-    window.clearTimeout(lobbySignalRetryTimer);
-    lobbySignalRetryTimer = null;
-  }
-  lobbySignalRetryMs = 1000;
+  netplayConnectionState?.clearLobbySignalRetry();
 }
 
 function scheduleLobbySignalReconnect() {
-  if (!lobbyClient || !lobbySignalShouldReconnect || !lobbySignalReconnectFn) {
-    return;
-  }
-  if (lobbySignalRetryTimer !== null) {
-    return;
-  }
-  const delay = lobbySignalRetryMs;
-  lobbySignalRetryMs = Math.min(lobbySignalRetryMs * 2, 15000);
-  lobbySignalRetryTimer = window.setTimeout(() => {
-    lobbySignalRetryTimer = null;
-    lobbySignalReconnectFn?.();
-  }, delay);
+  netplayConnectionState?.scheduleLobbySignalReconnect();
 }
 
 function resetNetplayConnections({ preserveLobby = false }: { preserveLobby?: boolean } = {}) {
-  lobbySignal?.close();
-  lobbySignal = null;
-  lobbySignalShouldReconnect = false;
-  lobbySignalReconnectFn = null;
-  clearLobbySignalRetry();
-  hostRelay?.closeAll();
-  hostRelay = null;
-  clientPeer?.close();
-  clientPeer = null;
-  netplayEnabled = false;
-  netplayState = null;
-  pendingSnapshot = null;
-  netplayAccumulator = 0;
-  game.netplayRttMs = null;
-  game.setInputFeed(null);
-  for (const player of game.players) {
-    game.setPlayerInputFeed(player.id, null);
-  }
-  game.allowCourseAdvance = true;
-  game.setMultiplayerGameMode(MULTIPLAYER_MODE_STANDARD);
-  stopLobbyHeartbeat();
-  if (!preserveLobby) {
-    lobbyRoom = null;
-    lobbySelfId = null;
-    lobbyPlayerToken = null;
-    lobbyHostToken = null;
-    lastLobbyHeartbeatMs = null;
-    lobbyProfiles.clear();
-    pendingAvatarByPlayer.clear();
-    profileUpdateThrottle.clear();
-    chatMessages = [];
-    chatRateLimitByPlayer.clear();
-    lastLocalChatSentMs = 0;
-    for (const entry of nameplateEntries.values()) {
-      entry.el.remove();
-    }
-    nameplateEntries.clear();
-    lastProfileBroadcastMs = null;
-    lastLobbyNameUpdateMs = null;
-    lastRoomMetaKey = null;
-    lastRoomPlayerCount = null;
-    resetLocalPlayersAfterNetplay();
-  }
-  pendingSpawnStageSeq.clear();
-  updateLobbyUi();
-  updateChatUi();
-  setIngameChatOpen(false);
+  netplayConnectionState?.resetNetplayConnections({ preserveLobby });
 }
 
 function shouldJoinAsSpectator() {
-  return running && !!game.stageRuntime && !game.loadingStage && game.stageTimerFrames > 0;
+  return netplayConnectionState?.shouldJoinAsSpectator() ?? false;
 }
 
 function markPlayerPendingSpawn(playerId: number, stageSeq: number) {
-  const player = game.players.find((entry) => entry.id === playerId);
-  if (!player) {
-    return;
-  }
-  player.pendingSpawn = true;
-  player.isSpectator = true;
-  pendingSpawnStageSeq.set(playerId, stageSeq);
-  if (player.id === game.localPlayerId) {
-    game.enterLocalSpectatorFreeFly();
-  }
+  netplayConnectionState?.markPlayerPendingSpawn(playerId, stageSeq);
 }
 
 function promotePendingSpawns(stageSeq: number) {
-  if (pendingSpawnStageSeq.size === 0) {
-    return;
-  }
-  for (const [playerId, joinStageSeq] of pendingSpawnStageSeq) {
-    if (joinStageSeq >= stageSeq) {
-      continue;
-    }
-    const player = game.players.find((entry) => entry.id === playerId);
-    if (player) {
-      player.pendingSpawn = false;
-      player.isSpectator = false;
-      player.freeFly = false;
-    }
-    pendingSpawnStageSeq.delete(playerId);
-  }
+  netplayConnectionState?.promotePendingSpawns(stageSeq);
 }
 
 function sendLobbyHeartbeat(
@@ -2555,177 +2119,23 @@ function sendLobbyHeartbeat(
 }
 
 function recordInputForFrame(frame: number, playerId: number, input: QuantizedInput) {
-  if (!netplayState) {
-    return false;
-  }
-  let frameInputs = netplayState.inputHistory.get(frame);
-  if (!frameInputs) {
-    frameInputs = new Map();
-    netplayState.inputHistory.set(frame, frameInputs);
-  }
-  const prev = frameInputs.get(playerId);
-  if (prev && quantizedEqual(prev, input)) {
-    return false;
-  }
-  frameInputs.set(playerId, input);
-  netplayState.lastInputs.set(playerId, input);
-  return true;
+  return netplaySimSync?.recordInputForFrame(frame, playerId, input) ?? false;
 }
 
 function buildInputsForFrame(frame: number) {
-  if (!netplayState) {
-    return new Map<number, QuantizedInput>();
-  }
-  let frameInputs = netplayState.inputHistory.get(frame);
-  if (!frameInputs) {
-    frameInputs = new Map();
-    netplayState.inputHistory.set(frame, frameInputs);
-  }
-  for (const player of game.players) {
-    if (!frameInputs.has(player.id)) {
-      const last = netplayState.lastInputs.get(player.id) ?? { x: 0, y: 0, buttons: 0 };
-      frameInputs.set(player.id, last);
-    }
-  }
-  return frameInputs;
+  return netplaySimSync?.buildInputsForFrame(frame) ?? new Map<number, QuantizedInput>();
 }
 
 function trimNetplayHistory(frame: number) {
-  if (!netplayState) {
-    return;
-  }
-  const minFrame = frame - netplayState.maxRollback;
-  for (const key of Array.from(netplayState.inputHistory.keys())) {
-    if (key < minFrame) {
-      netplayState.inputHistory.delete(key);
-    }
-  }
-  for (const key of Array.from(netplayState.hashHistory.keys())) {
-    if (key < minFrame) {
-      netplayState.hashHistory.delete(key);
-    }
-  }
-  for (const key of Array.from(netplayState.expectedHashes.keys())) {
-    if (key < minFrame) {
-      netplayState.expectedHashes.delete(key);
-    }
-  }
+  netplaySimSync?.trimNetplayHistory(frame);
 }
 
 function rollbackAndResim(startFrame: number) {
-  if (!netplayState) {
-    return false;
-  }
-  const perfStart = netplayPerf.enabled ? performance.now() : 0;
-  const state = netplayState;
-  const session = state.session;
-  const current = session.getFrame();
-  const rollbackFrame = Math.max(0, startFrame - 1);
-  if (!session.rollbackTo(rollbackFrame)) {
-    return false;
-  }
-  const resimFrames = current - rollbackFrame;
-  const prevSuppress = session.suppressVisuals;
-  session.suppressVisuals = true;
-  try {
-    for (let frame = rollbackFrame + 1; frame <= current; frame += 1) {
-      const inputs = buildInputsForFrame(frame);
-      session.advanceTo(frame, inputs);
-      let hash: number | undefined;
-      if (state.hashInterval > 0 && frame % state.hashInterval === 0) {
-        hash = getSimHash();
-        state.hashHistory.set(frame, hash);
-      }
-      if (state.role === 'host') {
-        const bundleInputs: Record<number, QuantizedInput> = {};
-        for (const [playerId, input] of inputs.entries()) {
-          bundleInputs[playerId] = input;
-        }
-        state.hostFrameBuffer.set(frame, {
-          type: 'frame',
-          stageSeq: state.stageSeq,
-          frame,
-          inputs: bundleInputs,
-        });
-      }
-      trimNetplayHistory(frame);
-    }
-  } finally {
-    session.suppressVisuals = prevSuppress;
-  }
-  if (netplayPerf.enabled) {
-    const dt = performance.now() - perfStart;
-    netplayPerf.rollbackMs += dt;
-    netplayPerf.rollbackFrames += resimFrames;
-    netplayPerf.rollbackCount += 1;
-  }
-  return true;
-}
-
-function resimFromSnapshot(snapshotFrame: number, targetFrame: number) {
-  if (!netplayState) {
-    return;
-  }
-  if (targetFrame <= snapshotFrame) {
-    return;
-  }
-  const perfStart = netplayPerf.enabled ? performance.now() : 0;
-  const state = netplayState;
-  const session = state.session;
-  const resimFrames = targetFrame - snapshotFrame;
-  const prevSuppress = session.suppressVisuals;
-  session.suppressVisuals = true;
-  try {
-    for (let frame = snapshotFrame + 1; frame <= targetFrame; frame += 1) {
-      const inputs = buildInputsForFrame(frame);
-      session.advanceTo(frame, inputs);
-      if (state.hashInterval > 0 && frame % state.hashInterval === 0) {
-        state.hashHistory.set(frame, getSimHash());
-      }
-      trimNetplayHistory(frame);
-    }
-  } finally {
-    session.suppressVisuals = prevSuppress;
-  }
-  if (netplayPerf.enabled) {
-    const dt = performance.now() - perfStart;
-    netplayPerf.resimMs += dt;
-    netplayPerf.resimFrames += resimFrames;
-    netplayPerf.resimCount += 1;
-  }
+  return netplaySimSync?.rollbackAndResim(startFrame) ?? false;
 }
 
 function tryApplyPendingSnapshot(stageId: number) {
-  if (!pendingSnapshot) {
-    return;
-  }
-  if (netplayState && pendingSnapshot.stageSeq !== undefined && pendingSnapshot.stageSeq !== netplayState.stageSeq) {
-    pendingSnapshot = null;
-    return;
-  }
-  if (pendingSnapshot.stageId !== undefined && pendingSnapshot.stageId !== stageId) {
-    return;
-  }
-  const state = netplayState;
-  const targetFrame = state?.session.getFrame() ?? game.simTick;
-  const snapshotFrame = pendingSnapshot.frame;
-  game.loadRollbackState(pendingSnapshot.state);
-  resetNetplaySession();
-  if (state) {
-    state.lastReceivedHostFrame = Math.max(state.lastReceivedHostFrame, snapshotFrame);
-    state.awaitingSnapshot = false;
-    state.hashHistory.clear();
-    for (const key of Array.from(state.expectedHashes.keys())) {
-      if (key <= snapshotFrame) {
-        state.expectedHashes.delete(key);
-      }
-    }
-  }
-  resimFromSnapshot(snapshotFrame, targetFrame);
-  if (state) {
-    state.lagBehindSinceMs = null;
-  }
-  pendingSnapshot = null;
+  netplaySimSync?.tryApplyPendingSnapshot(stageId);
 }
 
 const cameraEye = vec3.create();
@@ -2766,209 +2176,16 @@ function prewarmConfettiRenderer() {
   );
 }
 
-function queuePrefetch(paths: string[]) {
-  for (const path of paths) {
-    if (!path) {
-      continue;
-    }
-    void prefetchPackSlice(path);
-  }
-}
-
-function getStageAssetPathsSmb1(stageId: number, stageBasePath: string): string[] {
-  const stageInfo = STAGE_INFO_MAP.get(stageId as StageId);
-  if (!stageInfo) {
-    return [];
-  }
-  const stageIdStr = String(stageId).padStart(3, '0');
-  const stagedefPath = `${stageBasePath}/st${stageIdStr}/STAGE${stageIdStr}.lz`;
-  const stageGmaPath = `${stageBasePath}/st${stageIdStr}/st${stageIdStr}.gma`;
-  const stageTplPath = `${stageBasePath}/st${stageIdStr}/st${stageIdStr}.tpl`;
-  const commonGmaPath = `${stageBasePath}/init/common.gma`;
-  const commonTplPath = `${stageBasePath}/init/common.tpl`;
-  const commonNlPath = `${stageBasePath}/init/common_p.lz`;
-  const commonNlTplPath = `${stageBasePath}/init/common.lz`;
-  const bgName = stageInfo.bgInfo.fileName;
-  const bgGmaPath = `${stageBasePath}/bg/${bgName}.gma`;
-  const bgTplPath = `${stageBasePath}/bg/${bgName}.tpl`;
-  const isNaomi = isNaomiStage(stageId);
-  const stageNlObjPath = isNaomi ? `${stageBasePath}/st${stageIdStr}/st${stageIdStr}_p.lz` : '';
-  const stageNlTplPath = isNaomi ? `${stageBasePath}/st${stageIdStr}/st${stageIdStr}.lz` : '';
-  const paths = [
-    stagedefPath,
-    stageGmaPath,
-    stageTplPath,
-    commonGmaPath,
-    commonTplPath,
-    commonNlPath,
-    commonNlTplPath,
-    bgGmaPath,
-    bgTplPath,
-  ];
-  if (stageNlObjPath && stageNlTplPath) {
-    paths.push(stageNlObjPath, stageNlTplPath);
-  }
-  return paths;
-}
-
-function getStageAssetPathsSmb2(stageId: number, gameSource: GameSource, stageBasePath: string): string[] {
-  const stageIdStr = String(stageId).padStart(3, '0');
-  const stageInfo =
-    gameSource === GAME_SOURCES.MB2WS ? getMb2wsStageInfo(stageId) : getSmb2StageInfo(stageId);
-  const bgName = stageInfo?.bgInfo?.fileName ?? '';
-  const paths = [
-    `${stageBasePath}/st${stageIdStr}/STAGE${stageIdStr}.lz`,
-    `${stageBasePath}/st${stageIdStr}/st${stageIdStr}.gma`,
-    `${stageBasePath}/st${stageIdStr}/st${stageIdStr}.tpl`,
-    `${stageBasePath}/init/common.gma`,
-    `${stageBasePath}/init/common.tpl`,
-    `${stageBasePath}/init/common_p.lz`,
-    `${stageBasePath}/init/common.lz`,
-  ];
-  if (bgName) {
-    paths.push(`${stageBasePath}/bg/${bgName}.gma`, `${stageBasePath}/bg/${bgName}.tpl`);
-  }
-  return paths;
-}
-
-function preloadNextStages() {
-  const course = game.course;
-  if (!course?.getNextStageIds) {
-    return;
-  }
-  const nextStageIds = course.getNextStageIds();
-  if (!nextStageIds.length) {
-    return;
-  }
-  const stageBasePath = game.stageBasePath ?? getStageBasePath(activeGameSource);
-  const uniqueIds = new Set(nextStageIds.filter((id) => typeof id === 'number' && id > 0));
-  for (const stageId of uniqueIds) {
-    const paths =
-      activeGameSource === GAME_SOURCES.SMB1
-        ? getStageAssetPathsSmb1(stageId, stageBasePath)
-        : getStageAssetPathsSmb2(stageId, activeGameSource, stageBasePath);
-    if (paths.length > 0) {
-      queuePrefetch(paths);
-    }
-  }
-}
-
 async function handleStageLoaded(stageId: number) {
-  const token = ++stageLoadToken;
-  renderReady = false;
-  if (!swapChain || !gfxDevice) {
-    initGfx();
-  }
-
-  if (activeGameSource !== GAME_SOURCES.SMB1) {
-    const stage = game.stage;
-    const stageData = await loadRenderStageSmb2(stageId, stage, activeGameSource);
-    if (token !== stageLoadToken) {
-      return;
-    }
-
-    if (renderer) {
-      renderer.destroy(gfxDevice!);
-    }
-    renderer = new Renderer(gfxDevice!, stageData);
-    prewarmConfettiRenderer();
-    (window as typeof window & { smbStageInfo?: { stageId: number; gameSource: GameSource; bgFile: string } }).smbStageInfo = {
-      stageId,
-      gameSource: activeGameSource,
-      bgFile: stageData.stageInfo?.bgInfo?.fileName ?? '',
-    };
-    applyGameCamera();
-
-    running = true;
-    paused = false;
-    renderReady = true;
-    lastTime = performance.now();
-    updateMobileMenuButtonVisibility();
-    updateIngameChatVisibility();
-    maybeStartSmb2LikeStageFade();
-    markStageReady(stageId);
-    tryApplyPendingSnapshot(stageId);
-    const localPlayer = game.getLocalPlayer();
-    if (localPlayer?.pendingSpawn && localPlayer.isSpectator) {
-      game.enterLocalSpectatorFreeFly();
-    }
-    preloadNextStages();
-    if (leaderboardSession?.active) {
-      leaderboardSession.stageScoreStart = Math.max(0, Math.trunc(game.score ?? 0));
-    }
-    if (netplayEnabled && netplayState?.role === 'host' && lobbyRoom) {
-      const meta = buildRoomMeta();
-      if (meta) {
-        lobbyRoom.meta = meta;
-        broadcastRoomUpdate();
-        sendLobbyHeartbeat(performance.now(), true);
-      }
-    }
-    return;
-  }
-
-  const stageData = await loadRenderStage(stageId);
-  if (token !== stageLoadToken) {
-    return;
-  }
-
-  if (renderer) {
-    renderer.destroy(gfxDevice!);
-  }
-  renderer = new Renderer(gfxDevice!, stageData);
-  prewarmConfettiRenderer();
-  (window as typeof window & { smbStageInfo?: { stageId: number; gameSource: GameSource; bgFile: string } }).smbStageInfo = {
-    stageId,
-    gameSource: activeGameSource,
-    bgFile: stageData.stageInfo?.bgInfo?.fileName ?? '',
-  };
-  applyGameCamera();
-
-  running = true;
-  paused = false;
-  renderReady = true;
-  lastTime = performance.now();
-  updateMobileMenuButtonVisibility();
-  updateIngameChatVisibility();
-  maybeStartSmb2LikeStageFade();
-  markStageReady(stageId);
-  tryApplyPendingSnapshot(stageId);
-  const localPlayer = game.getLocalPlayer();
-  if (localPlayer?.pendingSpawn && localPlayer.isSpectator) {
-    game.enterLocalSpectatorFreeFly();
-  }
-  preloadNextStages();
-  if (leaderboardSession?.active) {
-    leaderboardSession.stageScoreStart = Math.max(0, Math.trunc(game.score ?? 0));
-  }
-  if (netplayEnabled && netplayState?.role === 'host' && lobbyRoom) {
-    const meta = buildRoomMeta();
-    if (meta) {
-      lobbyRoom.meta = meta;
-      broadcastRoomUpdate();
-      sendLobbyHeartbeat(performance.now(), true);
-    }
-  }
+  await stageFlow?.handleStageLoaded(stageId);
 }
 
 function getLeaderboardPlayerId(): string {
-  const key = 'smb_leaderboard_player_id';
-  const existing = localStorage.getItem(key);
-  if (existing) {
-    return existing;
-  }
-  const id = crypto.randomUUID();
-  localStorage.setItem(key, id);
-  return id;
+  return leaderboardSessionFlow.getLeaderboardPlayerId();
 }
 
 function getActivePackId(): string | null {
-  const pack = getActivePack();
-  if (!pack) {
-    return null;
-  }
-  const id = pack.manifest.id || pack.manifest.name;
-  return id ? String(id).slice(0, 64) : null;
+  return leaderboardSessionFlow.getActivePackId();
 }
 
 async function refreshLeaderboardAllowlist(force = false) {
@@ -2985,64 +2202,23 @@ async function refreshLeaderboardAllowlist(force = false) {
 }
 
 function isPackAllowed(packId: string | null): boolean {
-  if (!packId) {
-    return true;
-  }
-  return leaderboardAllowlist.includes(packId);
+  return leaderboardSessionFlow.isPackAllowed(packId);
 }
 
 function buildCourseId(gameSource: GameSource, config: any): string {
-  if (gameSource === GAME_SOURCES.SMB1) {
-    return String(config?.difficulty ?? 'beginner');
-  }
-  const mode = config?.mode === 'story' ? 'story' : 'challenge';
-  if (mode === 'story') {
-    return 'story';
-  }
-  return String(config?.difficulty ?? 'beginner');
+  return leaderboardSessionFlow.buildCourseId(gameSource, config);
 }
 
 function buildCourseMode(gameSource: GameSource, config: any): 'story' | 'challenge' | 'smb1' {
-  if (gameSource === GAME_SOURCES.SMB1) {
-    return 'smb1';
-  }
-  return config?.mode === 'story' ? 'story' : 'challenge';
+  return leaderboardSessionFlow.buildCourseMode(gameSource, config);
 }
 
 function isFullCourseRun(gameSource: GameSource, config: any): boolean {
-  if (gameSource === GAME_SOURCES.SMB1) {
-    const index = Number(config?.stageIndex ?? 0);
-    return index === 0;
-  }
-  const mode = config?.mode === 'story' ? 'story' : 'challenge';
-  if (mode === 'story') {
-    const worldIndex = Number(config?.worldIndex ?? 0);
-    const stageIndex = Number(config?.stageIndex ?? 0);
-    return worldIndex === 0 && stageIndex === 0;
-  }
-  const stageIndex = Number(config?.stageIndex ?? 0);
-  return stageIndex === 0;
+  return leaderboardSessionFlow.isFullCourseRun(gameSource, config);
 }
 
 function startLeaderboardSession(courseConfig: any) {
-  const packId = getActivePackId();
-  const eligible = isFullCourseRun(activeGameSource, courseConfig);
-  leaderboardSession = {
-    active: true,
-    eligible,
-    gameSource: activeGameSource,
-    packId,
-    courseId: buildCourseId(activeGameSource, courseConfig),
-    mode: buildCourseMode(activeGameSource, courseConfig),
-    courseConfig: courseConfig ?? {},
-    warpUsed: false,
-    courseTimerFrames: 0,
-    penaltyFrames: 0,
-    retryCount: 0,
-    stageScoreStart: game.score ?? 0,
-    segments: [],
-    hasSkipped: false,
-  };
+  leaderboardSessionFlow.startLeaderboardSession(courseConfig);
 }
 
 function handleStageGoal(info: {
@@ -3052,64 +2228,7 @@ function handleStageGoal(info: {
   score: number;
   isBonusStage: boolean;
 }) {
-  if (!leaderboardsClient || netplayEnabled || info.isBonusStage) {
-    return;
-  }
-  const packId = getActivePackId();
-  if (!isPackAllowed(packId)) {
-    return;
-  }
-  const goalType = (info.goalType ?? 'B') as 'B' | 'G' | 'R';
-  const playerId = getLeaderboardPlayerId();
-  const displayName = localProfile?.name ?? 'Player';
-  const stageScoreDelta = Math.max(0, Math.trunc(info.score - (leaderboardSession?.stageScoreStart ?? 0)));
-  const replay = game.exportReplay();
-  if (replay) {
-    void leaderboardsClient.submitStage({
-      type: 'stage',
-      playerId,
-      displayName,
-      gameSource: activeGameSource,
-      stageId: info.stageId,
-      goalType,
-      metric: 'time',
-      value: Math.max(0, Math.trunc(info.timerFrames)),
-      packId,
-      replay,
-      clientMeta: { version: 1 },
-    }).catch(() => {});
-    void leaderboardsClient.submitStage({
-      type: 'stage',
-      playerId,
-      displayName,
-      gameSource: activeGameSource,
-      stageId: info.stageId,
-      goalType,
-      metric: 'score',
-      value: stageScoreDelta,
-      packId,
-      replay,
-      clientMeta: { version: 1 },
-    }).catch(() => {});
-  }
-
-  if (leaderboardSession && leaderboardSession.active) {
-    leaderboardSession.courseTimerFrames += Math.max(0, Math.trunc(info.timerFrames));
-    if (leaderboardSession.mode === 'challenge' && (goalType === 'G' || goalType === 'R')) {
-      leaderboardSession.warpUsed = true;
-    }
-    if (replay) {
-      const segment: CourseReplaySegment = {
-        stageId: info.stageId,
-        inputs: replay.inputs,
-        inputStartTick: replay.inputStartTick ?? 0,
-        ticks: replay.ticks ?? replay.inputs.length,
-        endReason: 'goal',
-        goalType,
-      };
-      leaderboardSession.segments.push(segment);
-    }
-  }
+  leaderboardSessionFlow.handleStageGoal(info);
 }
 
 function handleStageFail(info: {
@@ -3119,27 +2238,7 @@ function handleStageFail(info: {
   score: number;
   isBonusStage: boolean;
 }) {
-  if (!leaderboardSession || !leaderboardSession.active || info.isBonusStage) {
-    return;
-  }
-  const replay = game.exportReplay();
-  if (replay) {
-    const segment: CourseReplaySegment = {
-      stageId: info.stageId,
-      inputs: replay.inputs,
-      inputStartTick: replay.inputStartTick ?? 0,
-      ticks: replay.ticks ?? replay.inputs.length,
-      endReason: info.reason,
-    };
-    leaderboardSession.segments.push(segment);
-  }
-  leaderboardSession.courseTimerFrames += Math.max(0, Math.trunc(info.timerFrames));
-  if (info.reason === 'skip') {
-    leaderboardSession.hasSkipped = true;
-    return;
-  }
-  leaderboardSession.retryCount += 1;
-  leaderboardSession.penaltyFrames += 60;
+  leaderboardSessionFlow.handleStageFail(info);
 }
 
 function updateSmb2ChallengeStages() {
@@ -3198,91 +2297,11 @@ async function startStage(
 }
 
 function requestSnapshot(reason: 'mismatch' | 'lag', frame?: number, force = false) {
-  if (!clientPeer || !netplayState) {
-    return;
-  }
-  const nowMs = performance.now();
-  const lastRequest = netplayState.lastSnapshotRequestTimeMs ?? 0;
-  const cooldownMs = reason === 'mismatch'
-    ? NETPLAY_SNAPSHOT_MISMATCH_COOLDOWN_MS
-    : NETPLAY_SNAPSHOT_COOLDOWN_MS;
-  const cooldownOk = netplayState.lastSnapshotRequestTimeMs === null
-    || (nowMs - lastRequest) >= cooldownMs;
-  if (netplayState.awaitingSnapshot && !force && !cooldownOk) {
-    return;
-  }
-  if (!cooldownOk) {
-    return;
-  }
-  netplayState.lastSnapshotRequestTimeMs = nowMs;
-  netplayState.awaitingSnapshot = true;
-  const targetFrame = frame ?? netplayState.session.getFrame();
-  clientPeer.send({
-    type: 'snapshot_request',
-    stageSeq: netplayState.stageSeq,
-    frame: targetFrame,
-    reason,
-  });
+  snapshotFlow?.requestSnapshot(reason, frame, force);
 }
 
 function hostApplyPendingRollback() {
-  if (!netplayState || netplayState.role !== 'host') {
-    return;
-  }
-  const state = netplayState;
-  const rollbackFrame = state.pendingHostRollbackFrame;
-  if (rollbackFrame === null) {
-    return;
-  }
-  const snapshotTargets = Array.from(state.pendingHostRollbackPlayers);
-  state.pendingHostRollbackFrame = null;
-  state.pendingHostRollbackPlayers.clear();
-  if (!rollbackAndResim(rollbackFrame)) {
-    for (const playerId of snapshotTargets) {
-      sendSnapshotToClient(playerId, rollbackFrame);
-    }
-    return;
-  }
-  state.pendingHostUpdates.add(rollbackFrame);
-}
-
-function applyIncomingProfile(
-  playerId: number,
-  incoming: PlayerProfile,
-  { broadcast }: { broadcast?: boolean } = {},
-) {
-  const sanitized = sanitizeProfile(incoming);
-  const baseProfile: PlayerProfile = { name: sanitized.name };
-  lobbyProfiles.set(playerId, baseProfile);
-  if (broadcast) {
-    hostRelay?.broadcast({ type: 'player_profile', playerId, profile: baseProfile });
-  }
-  updateLobbyUi();
-  if (!sanitized.avatarData) {
-    pendingAvatarByPlayer.delete(playerId);
-    return;
-  }
-  const avatarData = sanitized.avatarData;
-  pendingAvatarByPlayer.set(playerId, avatarData);
-  void getAvatarValidationCached(avatarData).then((ok) => {
-    if (!ok) {
-      if (pendingAvatarByPlayer.get(playerId) === avatarData) {
-        pendingAvatarByPlayer.delete(playerId);
-      }
-      return;
-    }
-    if (pendingAvatarByPlayer.get(playerId) !== avatarData) {
-      return;
-    }
-    pendingAvatarByPlayer.delete(playerId);
-    const current = lobbyProfiles.get(playerId);
-    const finalProfile: PlayerProfile = { name: current?.name ?? sanitized.name, avatarData };
-    lobbyProfiles.set(playerId, finalProfile);
-    if (broadcast) {
-      hostRelay?.broadcast({ type: 'player_profile', playerId, profile: finalProfile });
-    }
-    updateLobbyUi();
-  });
+  snapshotFlow?.hostApplyPendingRollback();
 }
 
 function cloneCourseConfig(config: any) {
@@ -3320,725 +2339,23 @@ function getHostCourseConfig() {
 }
 
 function handleHostMessage(msg: HostToClientMessage) {
-  if (msg.type === 'kick') {
-    suppressHostDisconnectUntil = performance.now() + 1500;
-    lobbySignalShouldReconnect = false;
-    lobbySignalReconnectFn = null;
-    clearLobbySignalRetry();
-    resetNetplayConnections();
-    game.pause();
-    setActiveMenu('multiplayer');
-    if (lobbyStatus) {
-      lobbyStatus.textContent = msg.reason ? `Lobby: ${msg.reason}` : 'Lobby: removed by host';
-    }
-    return;
-  }
-  const state = netplayState;
-  if (!state) {
-    return;
-  }
-  if (msg.type === 'pong') {
-    const sentAt = state.pendingPings.get(msg.id);
-    if (sentAt !== undefined) {
-      state.pendingPings.delete(msg.id);
-      const rtt = Math.max(0, performance.now() - sentAt);
-      state.rttMs = rtt;
-      game.netplayRttMs = rtt;
-    }
-    return;
-  }
-  const msgStageSeq = (msg as { stageSeq?: number }).stageSeq;
-  if (
-    msgStageSeq !== undefined
-    && msg.type !== 'start'
-    && msg.type !== 'player_join'
-    && msg.type !== 'player_leave'
-    && msgStageSeq !== state.stageSeq
-  ) {
-    return;
-  }
-  if (msg.type === 'stage_sync') {
-    if (state.currentStageId === null) {
-      state.currentStageId = msg.stageId;
-    }
-    if (state.currentStageId !== null && msg.stageId !== state.currentStageId) {
-      return;
-    }
-    state.awaitingStageSync = false;
-    state.lastReceivedHostFrame = msg.frame;
-    state.lastHostFrameTimeMs = performance.now();
-    state.awaitingSnapshot = false;
-    state.lagBehindSinceMs = null;
-    state.lastAckedLocalFrame = 0;
-    netplayAccumulator = 0;
-    if (msg.frame > state.session.getFrame()) {
-      requestSnapshot('lag', msg.frame, true);
-    }
-    return;
-  }
-  if (msg.type === 'frame') {
-    if (state.awaitingStageSync) {
-      return;
-    }
-    const frameMsg = msg as FrameBundleMessage;
-    const frame = coerceFrame(frameMsg.frame);
-    if (frame === null) {
-      return;
-    }
-    if (frameMsg.lastAck !== undefined) {
-      const ackFrame = coerceFrame(frameMsg.lastAck);
-      if (ackFrame !== null) {
-        state.lastAckedLocalFrame = Math.max(state.lastAckedLocalFrame, ackFrame);
-      }
-      for (const pendingFrame of Array.from(state.pendingLocalInputs.keys())) {
-        if (pendingFrame <= state.lastAckedLocalFrame) {
-          state.pendingLocalInputs.delete(pendingFrame);
-        }
-      }
-    }
-    state.lastReceivedHostFrame = Math.max(state.lastReceivedHostFrame, frame);
-    state.lastHostFrameTimeMs = performance.now();
-    let changed = false;
-    for (const [id, input] of Object.entries(frameMsg.inputs)) {
-      const playerId = Number(id);
-      if (state.role === 'client' && playerId === game.localPlayerId) {
-        continue;
-      }
-      const normalized = normalizeInput(input);
-      if (!normalized) {
-        continue;
-      }
-      if (recordInputForFrame(frame, playerId, normalized)) {
-        changed = true;
-      }
-    }
-    if (frameMsg.hash !== undefined && frameMsg.hashFrame !== undefined) {
-      const hashFrame = coerceFrame(frameMsg.hashFrame);
-      if (hashFrame !== null && Number.isFinite(frameMsg.hash)) {
-        state.expectedHashes.set(hashFrame, frameMsg.hash);
-        const localHash = state.hashHistory.get(hashFrame);
-        if (localHash !== undefined && localHash !== frameMsg.hash) {
-          requestSnapshot('mismatch', hashFrame);
-        }
-      }
-    }
-    const currentFrame = state.session.getFrame();
-    if (changed && frame <= currentFrame) {
-      if (!rollbackAndResim(frame)) {
-        requestSnapshot('lag');
-      }
-    }
-    if (state.lastReceivedHostFrame - currentFrame > state.maxRollback) {
-      requestSnapshot('lag');
-    }
-    return;
-  }
-  if (msg.type === 'snapshot') {
-    pendingSnapshot = msg;
-    if (netplayState) {
-      netplayState.lastReceivedHostFrame = Math.max(netplayState.lastReceivedHostFrame, msg.frame);
-      netplayState.lastHostFrameTimeMs = performance.now();
-    }
-    if (!msg.stageId || game.stage?.stageId === msg.stageId) {
-      tryApplyPendingSnapshot(game.stage?.stageId ?? 0);
-    }
-    return;
-  }
-  if (msg.type === 'player_join') {
-    game.addPlayer(msg.playerId, { spectator: msg.spectator });
-    const player = game.players.find((p) => p.id === msg.playerId);
-    if (player) {
-      player.isSpectator = msg.spectator;
-      if (msg.pendingSpawn || msg.spectator) {
-        markPlayerPendingSpawn(msg.playerId, msg.stageSeq ?? netplayState?.stageSeq ?? 0);
-      } else {
-        player.pendingSpawn = false;
-        pendingSpawnStageSeq.delete(msg.playerId);
-      }
-    }
-    if (!lobbyProfiles.has(msg.playerId)) {
-      lobbyProfiles.set(msg.playerId, profileFallbackForPlayer(msg.playerId));
-    }
-    updateLobbyUi();
-    return;
-  }
-  if (msg.type === 'player_leave') {
-    game.removePlayer(msg.playerId);
-    lobbyProfiles.delete(msg.playerId);
-    pendingAvatarByPlayer.delete(msg.playerId);
-    pendingSpawnStageSeq.delete(msg.playerId);
-    updateLobbyUi();
-    return;
-  }
-  if (msg.type === 'player_profile') {
-    applyIncomingProfile(msg.playerId, msg.profile);
-    return;
-  }
-  if (msg.type === 'chat') {
-    appendChatMessage(msg.playerId, msg.text);
-    return;
-  }
-  if (msg.type === 'match_end') {
-    endMatchToLobby();
-    return;
-  }
-  if (msg.type === 'room_update') {
-    const mode = getRoomGameMode(msg.room);
-    const cappedMaxPlayers = mode === MULTIPLAYER_MODE_CHAINED
-      ? Math.min(msg.room.settings.maxPlayers, CHAINED_MAX_PLAYERS)
-      : msg.room.settings.maxPlayers;
-    msg.room.settings.maxPlayers = cappedMaxPlayers;
-    game.maxPlayers = cappedMaxPlayers;
-    game.playerCollisionEnabled = msg.room.settings.collisionEnabled;
-    game.setMultiplayerGameMode(mode);
-    if (netplayState) {
-      netplayState.currentGameMode = mode;
-    }
-    lobbyRoom = msg.room;
-    updateLobbyUi();
-    return;
-  }
-  if (msg.type === 'start') {
-    if (netplayState) {
-      netplayState.stageSeq = msg.stageSeq;
-      netplayState.currentCourse = msg.course;
-      netplayState.currentGameSource = msg.gameSource;
-      netplayState.currentGameMode = normalizeMultiplayerGameMode(msg.gameMode);
-      netplayState.awaitingSnapshot = false;
-      netplayState.expectedHashes.clear();
-      netplayState.hashHistory.clear();
-    }
-    if (msg.lateJoin && Number.isFinite(game.localPlayerId) && game.localPlayerId > 0) {
-      markPlayerPendingSpawn(game.localPlayerId, msg.stageSeq);
-    }
-    promotePendingSpawns(msg.stageSeq);
-    pendingSnapshot = null;
-    activeGameSource = msg.gameSource;
-    game.setGameSource(activeGameSource);
-    game.setMultiplayerGameMode(normalizeMultiplayerGameMode(msg.gameMode));
-    game.stageBasePath = msg.stageBasePath ?? getStageBasePath(activeGameSource);
-    currentSmb2LikeMode = activeGameSource !== GAME_SOURCES.SMB1 && msg.course?.mode ? msg.course.mode : null;
-    void startStage(msg.course);
-  }
+  netplayMessageFlow?.handleHostMessage(msg);
 }
 
 function handleClientMessage(playerId: number, msg: ClientToHostMessage) {
-  const state = netplayState;
-  if (!state) {
-    return;
-  }
-  const msgStageSeq = (msg as { stageSeq?: number }).stageSeq;
-  if (msgStageSeq !== undefined && msgStageSeq !== state.stageSeq) {
-    return;
-  }
-  let clientState = state.clientStates.get(playerId);
-  if (!clientState) {
-    clientState = {
-      lastAckedHostFrame: -1,
-      lastAckedClientInput: -1,
-      lastSnapshotMs: null,
-      lastSnapshotRequestMs: null,
-    };
-    state.clientStates.set(playerId, clientState);
-  }
-  if (!game.players.some((player) => player.id === playerId)) {
-    if (game.players.length >= game.maxPlayers) {
-      state.clientStates.delete(playerId);
-      rejectHostConnection(playerId, 'Room is full');
-      return;
-    }
-    const joinAsSpectator = shouldJoinAsSpectator();
-    game.addPlayer(playerId, { spectator: joinAsSpectator });
-    if (joinAsSpectator) {
-      markPlayerPendingSpawn(playerId, state.stageSeq);
-    }
-    updateLobbyUi();
-  }
-  if (msg.type === 'input') {
-    const frame = coerceFrame(msg.frame);
-    const input = normalizeInput(msg.input);
-    if (frame === null || !input) {
-      return;
-    }
-    const player = game.players.find((entry) => entry.id === playerId);
-    const awaitingSpawn = !!player?.pendingSpawn || !!player?.isSpectator;
-    if (msg.lastAck !== undefined) {
-      const ackFrame = coerceFrame(msg.lastAck);
-      if (ackFrame !== null) {
-        clientState.lastAckedHostFrame = Math.max(
-          clientState.lastAckedHostFrame,
-          Math.min(ackFrame, state.session.getFrame()),
-        );
-      }
-    }
-    clientState.lastAckedClientInput = Math.max(clientState.lastAckedClientInput, frame);
-    if (awaitingSpawn) {
-      return;
-    }
-    const currentFrame = state.session.getFrame();
-    const minFrame = Math.max(0, currentFrame - Math.min(state.maxRollback, NETPLAY_MAX_INPUT_BEHIND));
-    const maxFrame = currentFrame + NETPLAY_MAX_INPUT_AHEAD;
-    if (frame < minFrame || frame > maxFrame) {
-      return;
-    }
-    if (frame <= currentFrame && (currentFrame - frame) > NETPLAY_HOST_MAX_INPUT_ROLLBACK) {
-      const nowMs = performance.now();
-      const lastSnap = clientState.lastSnapshotMs;
-      if (lastSnap === null || (nowMs - lastSnap) >= NETPLAY_HOST_SNAPSHOT_COOLDOWN_MS) {
-        clientState.lastSnapshotMs = nowMs;
-        sendSnapshotToClient(playerId, currentFrame);
-      }
-      return;
-    }
-    const changed = recordInputForFrame(frame, playerId, input);
-    if (changed && frame <= currentFrame) {
-      state.pendingHostRollbackFrame = state.pendingHostRollbackFrame === null
-        ? frame
-        : Math.min(state.pendingHostRollbackFrame, frame);
-      state.pendingHostRollbackPlayers.add(playerId);
-    }
-    return;
-  }
-  if (msg.type === 'ack') {
-    const frame = coerceFrame(msg.frame);
-    if (frame !== null) {
-      clientState.lastAckedHostFrame = Math.max(
-        clientState.lastAckedHostFrame,
-        Math.min(frame, state.session.getFrame()),
-      );
-    }
-    return;
-  }
-  if (msg.type === 'ping') {
-    hostRelay?.sendTo(playerId, { type: 'pong', id: msg.id });
-    return;
-  }
-  if (msg.type === 'stage_ready') {
-    if (state.currentStageId === null) {
-      state.currentStageId = msg.stageId;
-    }
-    if (state.currentStageId !== null && msg.stageId !== state.currentStageId) {
-      return;
-    }
-    state.readyPlayers.add(playerId);
-    if (!state.awaitingStageReady) {
-      sendStageSyncToClient(playerId);
-      return;
-    }
-    maybeSendStageSync();
-    return;
-  }
-  if (msg.type === 'snapshot_request') {
-    const nowMs = performance.now();
-    const lastRequest = clientState.lastSnapshotRequestMs ?? 0;
-    if (clientState.lastSnapshotRequestMs !== null
-      && (nowMs - lastRequest) < NETPLAY_SNAPSHOT_COOLDOWN_MS) {
-      return;
-    }
-    clientState.lastSnapshotRequestMs = nowMs;
-    const currentFrame = state.session.getFrame();
-    const frame = coerceFrame(msg.frame) ?? currentFrame;
-    const minFrame = Math.max(0, currentFrame - state.maxRollback);
-    const clampedFrame = Math.min(currentFrame, Math.max(minFrame, frame));
-    sendSnapshotToClient(playerId, clampedFrame);
-    return;
-  }
-  if (msg.type === 'player_profile') {
-    const nowMs = performance.now();
-    const lastMs = profileUpdateThrottle.get(playerId) ?? 0;
-    if ((nowMs - lastMs) < PROFILE_REMOTE_COOLDOWN_MS) {
-      return;
-    }
-    profileUpdateThrottle.set(playerId, nowMs);
-    applyIncomingProfile(playerId, msg.profile, { broadcast: true });
-    return;
-  }
-  if (msg.type === 'chat') {
-    const sanitized = sanitizeChatText(msg.text);
-    if (!sanitized) {
-      return;
-    }
-    const nowMs = performance.now();
-    const lastMs = chatRateLimitByPlayer.get(playerId) ?? 0;
-    if ((nowMs - lastMs) < CHAT_SEND_COOLDOWN_MS) {
-      return;
-    }
-    chatRateLimitByPlayer.set(playerId, nowMs);
-    appendChatMessage(playerId, sanitized);
-    hostRelay?.broadcast({ type: 'chat', playerId, text: sanitized });
-    return;
-  }
+  netplayMessageFlow?.handleClientMessage(playerId, msg);
 }
 
 function sendSnapshotToClient(playerId: number, frame?: number) {
-  if (!hostRelay || !netplayState) {
-    return;
-  }
-  const session = netplayState.session;
-  let snapshotFrame = frame ?? session.getFrame();
-  if (snapshotFrame > session.getFrame()) {
-    snapshotFrame = session.getFrame();
-  }
-  let snapshotState = session.getState(snapshotFrame);
-  if (!snapshotState) {
-    snapshotFrame = session.getFrame();
-    snapshotState = game.saveRollbackState();
-  }
-  if (!snapshotState) {
-    return;
-  }
-  hostRelay.sendTo(playerId, {
-    type: 'snapshot',
-    stageSeq: netplayState.stageSeq,
-    frame: snapshotFrame,
-    state: snapshotState,
-    stageId: game.stage?.stageId,
-    gameSource: game.gameSource,
-  });
-}
-
-function hostResendFrames(currentFrame: number) {
-  if (!hostRelay || !netplayState) {
-    return;
-  }
-  const pendingFrames = netplayState.pendingHostUpdates.size > 0
-    ? Array.from(netplayState.pendingHostUpdates).sort((a, b) => a - b)
-    : null;
-  for (const [playerId, clientState] of netplayState.clientStates.entries()) {
-    const start = Math.max(clientState.lastAckedHostFrame + 1, currentFrame - netplayState.maxResend + 1);
-    const framesToSend = new Set<number>();
-    if (pendingFrames) {
-      for (const frame of pendingFrames) {
-        framesToSend.add(frame);
-      }
-    }
-    for (let frame = start; frame <= currentFrame; frame += 1) {
-      framesToSend.add(frame);
-    }
-    const bundles: FrameBundleMessage[] = [];
-    for (const frame of Array.from(framesToSend).sort((a, b) => a - b)) {
-      const bundle = netplayState.hostFrameBuffer.get(frame);
-      if (!bundle) {
-        continue;
-      }
-      bundles.push(bundle);
-    }
-    if (bundles.length > 0) {
-      hostRelay.sendFrameBatch(playerId, clientState.lastAckedClientInput, bundles);
-    }
-  }
-  if (pendingFrames) {
-    netplayState.pendingHostUpdates.clear();
-  }
-}
-
-function hostMaybeSendSnapshots(nowMs: number) {
-  if (!hostRelay || !netplayState || netplayState.role !== 'host') {
-    return;
-  }
-  const state = netplayState;
-  const currentFrame = state.session.getFrame();
-  for (const [playerId, clientState] of state.clientStates.entries()) {
-    if (clientState.lastAckedHostFrame < 0) {
-      continue;
-    }
-    const behind = currentFrame - clientState.lastAckedHostFrame;
-    if (behind < NETPLAY_HOST_SNAPSHOT_BEHIND_FRAMES) {
-      continue;
-    }
-    const lastSnap = clientState.lastSnapshotMs;
-    if (lastSnap !== null && (nowMs - lastSnap) < NETPLAY_HOST_SNAPSHOT_COOLDOWN_MS) {
-      continue;
-    }
-    clientState.lastSnapshotMs = nowMs;
-    sendSnapshotToClient(playerId, currentFrame);
-  }
-}
-
-function clientSendInputBuffer(currentFrame: number) {
-  if (!clientPeer || !netplayState) {
-    return;
-  }
-  const start = netplayState.lastAckedLocalFrame + 1;
-  const end = currentFrame;
-  const minFrame = Math.max(start, end - netplayState.maxResend + 1);
-  const batchEntries: Array<{ frame: number; input: QuantizedInput }> = [];
-  for (let frame = minFrame; frame <= end; frame += 1) {
-    const input = netplayState.pendingLocalInputs.get(frame);
-    if (!input) {
-      continue;
-    }
-    batchEntries.push({ frame, input });
-  }
-  if (batchEntries.length > 0) {
-    clientPeer.sendInputBatch(netplayState.stageSeq, netplayState.lastReceivedHostFrame, batchEntries);
-  }
-  if (start > end) {
-    clientPeer.send({
-      type: 'ack',
-      stageSeq: netplayState.stageSeq,
-      playerId: game.localPlayerId,
-      frame: netplayState.lastReceivedHostFrame,
-    });
-  }
-}
-
-function getNetplayTargetFrame(state: NetplayState, currentFrame: number) {
-  if (state.role === 'client') {
-    return getEstimatedHostFrame(state) + getClientLeadFrames(state);
-  }
-  return currentFrame;
-}
-
-function netplayStep() {
-  if (!netplayState) {
-    return;
-  }
-  const state = netplayState;
-  const session = state.session;
-  const currentFrame = session.getFrame();
-  const targetFrame = getNetplayTargetFrame(state, currentFrame);
-  const drift = targetFrame - currentFrame;
-  if (state.role === 'client' && drift < -NETPLAY_CLIENT_AHEAD_SLACK) {
-    clientSendInputBuffer(currentFrame);
-    return;
-  }
-  const frame = session.getFrame() + 1;
-    const localInput = game.sampleLocalInput();
-    recordInputForFrame(frame, game.localPlayerId, localInput);
-    if (state.role === 'client') {
-      state.pendingLocalInputs.set(frame, localInput);
-    }
-    const inputs = buildInputsForFrame(frame);
-    session.advanceTo(frame, inputs);
-    let hash: number | undefined;
-    if (state.hashInterval > 0 && frame % state.hashInterval === 0) {
-      hash = getSimHash();
-      state.hashHistory.set(frame, hash);
-      const expected = state.expectedHashes.get(frame);
-      if (expected !== undefined && expected !== hash) {
-        requestSnapshot('mismatch', frame);
-      }
-    }
-  if (state.role === 'host') {
-    let hashFrame: number | null = null;
-    let authHash: number | undefined;
-    const authHashFrame = getAuthoritativeHashFrame(state);
-    if (authHashFrame !== null) {
-      const value = state.hashHistory.get(authHashFrame);
-      if (value !== undefined) {
-        hashFrame = authHashFrame;
-        authHash = value;
-        state.lastAuthHashFrameSent = authHashFrame;
-      }
-    }
-    const bundleInputs: Record<number, QuantizedInput> = {};
-    for (const [playerId, input] of inputs.entries()) {
-      bundleInputs[playerId] = input;
-    }
-    const bundle: FrameBundleMessage = {
-      type: 'frame',
-      stageSeq: state.stageSeq,
-      frame,
-      inputs: bundleInputs,
-    };
-    if (hashFrame !== null && authHash !== undefined) {
-      bundle.hashFrame = hashFrame;
-      bundle.hash = authHash;
-    }
-    state.hostFrameBuffer.set(frame, bundle);
-    const minFrame = frame - Math.max(state.maxRollback, state.maxResend);
-    for (const key of Array.from(state.hostFrameBuffer.keys())) {
-      if (key < minFrame) {
-        state.hostFrameBuffer.delete(key);
-      }
-    }
-  }
-  trimNetplayHistory(frame);
-  if (state.role === 'host') {
-    hostResendFrames(session.getFrame());
-  } else {
-    clientSendInputBuffer(session.getFrame());
-  }
+  snapshotFlow?.sendSnapshotToClient(playerId, frame);
 }
 
 function netplayTick(dtSeconds: number) {
-  if (!netplayState) {
-    return;
-  }
-  const perfStart = netplayPerf.enabled ? performance.now() : 0;
-  if (!game.stageRuntime || game.loadingStage) {
-    game.update(0);
-    recordNetplayPerf(perfStart, 0);
-    return;
-  }
-  const state = netplayState;
-  const nowMs = performance.now();
-  if (state.role === 'client' && state.awaitingStageSync) {
-    maybeResendStageReady(nowMs);
-    game.accumulator = 0;
-    recordNetplayPerf(perfStart, 0);
-    return;
-  }
-  if (state.role === 'host' && state.awaitingStageReady) {
-    maybeForceStageSync(nowMs);
-    if (state.awaitingStageReady) {
-      game.accumulator = 0;
-      recordNetplayPerf(perfStart, 0);
-      return;
-    }
-  }
-  if (state.role === 'host') {
-    hostApplyPendingRollback();
-  }
-  if (netplayAccumulator < 0) {
-    netplayAccumulator = 0;
-  }
-  const session = state.session;
-  const currentFrame = session.getFrame();
-  const targetFrame = getNetplayTargetFrame(state, currentFrame);
-  const simFrame = currentFrame + (netplayAccumulator / game.fixedStep);
-  const drift = targetFrame - simFrame;
-  const introSync = game.introTimerFrames > 0;
-  if (state.role === 'client') {
-    if (clientPeer && nowMs - state.lastPingTimeMs >= NETPLAY_PING_INTERVAL_MS) {
-      const pingId = (state.pingSeq += 1);
-      state.pendingPings.set(pingId, nowMs);
-      state.lastPingTimeMs = nowMs;
-      clientPeer.send({ type: 'ping', id: pingId });
-    }
-    const hostAge = state.lastHostFrameTimeMs === null ? null : nowMs - state.lastHostFrameTimeMs;
-    const lastRequest = state.lastSnapshotRequestTimeMs ?? 0;
-    const canRequest = state.lastSnapshotRequestTimeMs === null
-      || (nowMs - lastRequest) >= NETPLAY_SNAPSHOT_COOLDOWN_MS;
-    if (hostAge !== null && hostAge >= NETPLAY_HOST_STALL_MS && canRequest) {
-      requestSnapshot('lag', state.lastReceivedHostFrame, true);
-    }
-    if (drift > NETPLAY_LAG_FUSE_FRAMES) {
-      if (state.lagBehindSinceMs === null) {
-        state.lagBehindSinceMs = nowMs;
-      }
-      const timeBehind = nowMs - state.lagBehindSinceMs;
-      if (timeBehind >= NETPLAY_LAG_FUSE_MS && canRequest) {
-        requestSnapshot('lag', state.lastReceivedHostFrame, true);
-      }
-    } else {
-      state.lagBehindSinceMs = null;
-    }
-  }
-  if (state.role === 'client' && drift < -NETPLAY_CLIENT_AHEAD_SLACK) {
-    clientSendInputBuffer(currentFrame);
-    recordNetplayPerf(perfStart, 0);
-    return;
-  }
-  let rateScale = 1;
-  if (state.role === 'client') {
-    const driftRate = introSync ? NETPLAY_SYNC_DRIFT_RATE : NETPLAY_CLIENT_DRIFT_RATE;
-    const desired = 1 + drift * driftRate;
-    const minRate = introSync ? NETPLAY_SYNC_RATE_MIN : NETPLAY_CLIENT_RATE_MIN;
-    const maxRate = introSync ? NETPLAY_SYNC_RATE_MAX : NETPLAY_CLIENT_RATE_MAX;
-    rateScale = clamp(desired, minRate, maxRate);
-  }
-  netplayAccumulator = Math.min(
-    netplayAccumulator + dtSeconds * rateScale,
-    game.fixedStep * NETPLAY_MAX_FRAME_DELTA,
-  );
-  let ticks = Math.floor(netplayAccumulator / game.fixedStep);
-  const forceTick = introSync ? NETPLAY_SYNC_FORCE_TICK : NETPLAY_DRIFT_FORCE_TICK;
-  if (ticks <= 0 && drift > forceTick) {
-    ticks = 1;
-  }
-  const extraTick = introSync ? NETPLAY_SYNC_EXTRA_TICKS : NETPLAY_DRIFT_EXTRA_TICKS;
-  if (drift > extraTick) {
-    const maxTicks = introSync ? NETPLAY_SYNC_MAX_TICKS : 3;
-    const add = introSync ? 2 : 1;
-    ticks = Math.min(maxTicks, Math.max(1, ticks + add));
-  }
-  for (let i = 0; i < ticks; i += 1) {
-    netplayStep();
-    netplayAccumulator -= game.fixedStep;
-  }
-  if (netplayAccumulator < 0) {
-    netplayAccumulator = 0;
-  }
-  if (state.role === 'host') {
-    hostMaybeSendSnapshots(nowMs);
-  }
-  game.accumulator = Math.max(0, Math.min(game.fixedStep, netplayAccumulator));
-  recordNetplayPerf(perfStart, ticks);
+  netplayRuntime?.netplayTick(dtSeconds);
 }
 
 function updateNetplayDebugOverlay(nowMs: number) {
-  if (!netplayEnabled || !netplayState) {
-    game.netplayDebugLines = null;
-    game.netplayWarning = null;
-    netplayDebugOverlay.hide();
-    return;
-  }
-  const state = netplayState;
-  const localPlayer = game.getLocalPlayer?.() ?? null;
-  let warning: string | null = null;
-  if (state.role === 'client') {
-    const hostAge = state.lastHostFrameTimeMs === null ? null : nowMs - state.lastHostFrameTimeMs;
-    if (hostAge !== null && hostAge > NETPLAY_HOST_STALL_MS) {
-      warning = `NET: host frames stale ${(hostAge / 1000).toFixed(1)}s`;
-    } else if (state.awaitingStageSync) {
-      warning = 'NET: awaiting stage sync';
-    }
-  }
-  if (!warning && localPlayer) {
-    if (localPlayer.isSpectator) {
-      warning = 'NET: local spectator';
-    } else if (localPlayer.pendingSpawn) {
-      warning = 'NET: local pending spawn';
-    }
-  }
-  game.netplayWarning = warning;
-
-  if (!isNetplayDebugEnabled()) {
-    game.netplayDebugLines = null;
-    if (!warning) {
-      netplayDebugOverlay.hide();
-      return;
-    }
-    netplayDebugOverlay.show(warning, []);
-    return;
-  }
-
-  const sessionFrame = state.session.getFrame();
-  const simFrame = sessionFrame + (netplayAccumulator / game.fixedStep);
-  const targetFrame = getNetplayTargetFrame(state, sessionFrame);
-  const drift = targetFrame - simFrame;
-  const lines: string[] = [];
-  lines.push(`net ${state.role} id=${game.localPlayerId}`);
-  lines.push(`stage=${state.currentStageId ?? game.stage?.stageId ?? 0} seq=${state.stageSeq}`);
-  lines.push(`frame=${sessionFrame} host=${state.lastReceivedHostFrame} ack=${state.lastAckedLocalFrame}`);
-  lines.push(`drift=${drift.toFixed(2)} acc=${netplayAccumulator.toFixed(3)}`);
-  lines.push(`sync=${state.awaitingStageSync ? 1 : 0} ready=${state.awaitingStageReady ? 1 : 0} snap=${state.awaitingSnapshot ? 1 : 0}`);
-  if (state.role === 'client') {
-    const chanState = clientPeer?.getChannelState?.() ?? 'none';
-    const hostAge = state.lastHostFrameTimeMs === null ? 'n/a' : `${((nowMs - state.lastHostFrameTimeMs) / 1000).toFixed(1)}s`;
-    lines.push(`peer=${chanState} hostAge=${hostAge}`);
-  } else {
-    const peers = hostRelay?.getChannelStates?.() ?? [];
-    const peerText = peers.length
-      ? peers.map((peer) => `${peer.playerId}:${peer.readyState}`).join(' ')
-      : 'none';
-    lines.push(`peers=${peerText}`);
-    if (state.clientStates.size > 0) {
-      const currentFrame = state.session.getFrame();
-      const behind = Array.from(state.clientStates.entries())
-        .map(([playerId, clientState]) => `${playerId}:${currentFrame - clientState.lastAckedHostFrame}`)
-        .join(' ');
-      lines.push(`behind=${behind}`);
-    }
-  }
-  if (localPlayer) {
-    lines.push(`local spec=${localPlayer.isSpectator ? 1 : 0} spawn=${localPlayer.pendingSpawn ? 1 : 0} state=${localPlayer.ball?.state ?? 0}`);
-  }
-  lines.push(`intro=${game.introTimerFrames} timeover=${game.timeoverTimerFrames}`);
-  game.netplayDebugLines = lines;
-  netplayDebugOverlay.show(warning, lines);
+  netplayRuntime?.updateNetplayDebugOverlay(nowMs);
 }
 
 async function refreshLobbyList() {

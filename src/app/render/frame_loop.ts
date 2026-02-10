@@ -8,7 +8,7 @@ import type { createSwapChainForWebGL2 } from '../../noclip/gfx/platform/GfxPlat
 
 const RENDER_FRAME_MS = 1000 / 60;
 
-function resizeCanvasToDisplaySize(canvasElem: HTMLCanvasElement) {
+export function resizeCanvasToDisplaySize(canvasElem: HTMLCanvasElement) {
   const dpr = window.devicePixelRatio || 1;
   const viewport = window.visualViewport;
   const cssWidth = viewport?.width || canvasElem.clientWidth || window.innerWidth;
