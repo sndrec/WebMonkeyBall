@@ -185,6 +185,36 @@ const bonusWaveSurfaceScratch = {
   point: { x: 0, y: 0, z: 0 },
   normal: { x: 0, y: 1, z: 0 },
 };
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+export const stageCollisionPerf = {
+  enabled: false,
+  logEvery: 120,
+  callCount: 0,
+  totalMs: 0,
+  tfMs: 0,
+  seesawMs: 0,
+  gridLookupMs: 0,
+  triFaceMs: 0,
+  triEdgeMs: 0,
+  triVertMs: 0,
+  primitiveMs: 0,
+  animGroups: 0,
+  cellHits: 0,
+  triangles: 0,
+  cones: 0,
+  spheres: 0,
+  cylinders: 0,
+  goals: 0,
+  lastTotalMs: 0,
+  lastTfMs: 0,
+  lastSeesawMs: 0,
+  lastGridLookupMs: 0,
+  lastTriFaceMs: 0,
+  lastTriEdgeMs: 0,
+  lastTriVertMs: 0,
+  lastPrimitiveMs: 0,
+};
 
 function resetSwitchProbeBall(ball) {
   switchProbeBall.flags = 0;
@@ -1804,45 +1834,184 @@ export function collideBallWithBonusWave(ball, stageRuntime) {
 }
 
 export function collideBallWithStage(ball, stage, animGroups) {
+  const perf = stageCollisionPerf;
+  const perfEnabled = perf.enabled;
+  const totalStart = perfEnabled ? nowMs() : 0;
+  let tfMs = 0;
+  let seesawMs = 0;
+  let gridLookupMs = 0;
+  let triFaceMs = 0;
+  let triEdgeMs = 0;
+  let triVertMs = 0;
+  let primitiveMs = 0;
+  let animGroupsVisited = 0;
+  let cellHits = 0;
+  let trianglesTested = 0;
+  let conesTested = 0;
+  let spheresTested = 0;
+  let cylindersTested = 0;
+  let goalsTested = 0;
   for (let animGroupId = 0; animGroupId < stage.animGroupCount; animGroupId += 1) {
+    if (perfEnabled) {
+      animGroupsVisited += 1;
+    }
     const stageAg = stage.animGroups[animGroupId];
     if (animGroupId !== ball.animGroupId) {
+      const t = perfEnabled ? nowMs() : 0;
       tfPhysballToAnimGroupSpace(ball, animGroupId, animGroups);
+      if (perfEnabled) {
+        tfMs += nowMs() - t;
+      }
     }
 
     const seesawState = animGroups[animGroupId]?.seesawState;
     if (seesawState && stage.format !== 'smb2') {
+      const t = perfEnabled ? nowMs() : 0;
       applySeesawCollision(ball, seesawState);
+      if (perfEnabled) {
+        seesawMs += nowMs() - t;
+      }
     }
 
+    const lookupStart = perfEnabled ? nowMs() : 0;
     const cellTris = coligridLookup(stageAg, ball.pos.x, ball.pos.z);
+    if (perfEnabled) {
+      gridLookupMs += nowMs() - lookupStart;
+    }
     if (cellTris) {
+      if (perfEnabled) {
+        cellHits += 1;
+        trianglesTested += cellTris.length;
+      }
+      let t = perfEnabled ? nowMs() : 0;
       for (const triIndex of cellTris) {
         collideBallWithTriFace(ball, stageAg.triangles[triIndex]);
+      }
+      if (perfEnabled) {
+        triFaceMs += nowMs() - t;
+        t = nowMs();
       }
       for (const triIndex of cellTris) {
         collideBallWithTriEdges(ball, stageAg.triangles[triIndex]);
       }
+      if (perfEnabled) {
+        triEdgeMs += nowMs() - t;
+        t = nowMs();
+      }
       for (const triIndex of cellTris) {
         collideBallWithTriVerts(ball, stageAg.triangles[triIndex]);
       }
+      if (perfEnabled) {
+        triVertMs += nowMs() - t;
+      }
     }
 
+    const primitiveStart = perfEnabled ? nowMs() : 0;
     for (const cone of stageAg.coliCones) {
+      if (perfEnabled) {
+        conesTested += 1;
+      }
       collideBallWithCone(ball, cone);
     }
     for (const sphere of stageAg.coliSpheres) {
+      if (perfEnabled) {
+        spheresTested += 1;
+      }
       collideBallWithSphere(ball, sphere);
     }
     for (const cylinder of stageAg.coliCylinders) {
+      if (perfEnabled) {
+        cylindersTested += 1;
+      }
       collideBallWithCylinder(ball, cylinder);
     }
     for (const goal of stageAg.goals) {
+      if (perfEnabled) {
+        goalsTested += 1;
+      }
       collideBallWithGoal(ball, goal);
+    }
+    if (perfEnabled) {
+      primitiveMs += nowMs() - primitiveStart;
     }
   }
 
   if (ball.animGroupId !== 0) {
+    const t = perfEnabled ? nowMs() : 0;
     tfPhysballToAnimGroupSpace(ball, 0, animGroups);
+    if (perfEnabled) {
+      tfMs += nowMs() - t;
+    }
+  }
+
+  if (perfEnabled) {
+    const totalMs = nowMs() - totalStart;
+    perf.lastTotalMs = totalMs;
+    perf.lastTfMs = tfMs;
+    perf.lastSeesawMs = seesawMs;
+    perf.lastGridLookupMs = gridLookupMs;
+    perf.lastTriFaceMs = triFaceMs;
+    perf.lastTriEdgeMs = triEdgeMs;
+    perf.lastTriVertMs = triVertMs;
+    perf.lastPrimitiveMs = primitiveMs;
+    perf.totalMs += totalMs;
+    perf.tfMs += tfMs;
+    perf.seesawMs += seesawMs;
+    perf.gridLookupMs += gridLookupMs;
+    perf.triFaceMs += triFaceMs;
+    perf.triEdgeMs += triEdgeMs;
+    perf.triVertMs += triVertMs;
+    perf.primitiveMs += primitiveMs;
+    perf.animGroups += animGroupsVisited;
+    perf.cellHits += cellHits;
+    perf.triangles += trianglesTested;
+    perf.cones += conesTested;
+    perf.spheres += spheresTested;
+    perf.cylinders += cylindersTested;
+    perf.goals += goalsTested;
+    perf.callCount += 1;
+
+    if (perf.callCount >= perf.logEvery) {
+      const count = Math.max(1, perf.callCount);
+      console.log(
+        "[perf] stage-coli-breakdown avg total=%sms tf=%sms seesaw=%sms grid=%sms face=%sms edge=%sms vert=%sms prim=%sms over=%d",
+        (perf.totalMs / count).toFixed(3),
+        (perf.tfMs / count).toFixed(3),
+        (perf.seesawMs / count).toFixed(3),
+        (perf.gridLookupMs / count).toFixed(3),
+        (perf.triFaceMs / count).toFixed(3),
+        (perf.triEdgeMs / count).toFixed(3),
+        (perf.triVertMs / count).toFixed(3),
+        (perf.primitiveMs / count).toFixed(3),
+        perf.callCount,
+      );
+      console.log(
+        "[perf] stage-coli-work avg groups=%s cellHits=%s tris=%s cones=%s spheres=%s cylinders=%s goals=%s over=%d",
+        (perf.animGroups / count).toFixed(1),
+        (perf.cellHits / count).toFixed(1),
+        (perf.triangles / count).toFixed(1),
+        (perf.cones / count).toFixed(1),
+        (perf.spheres / count).toFixed(1),
+        (perf.cylinders / count).toFixed(1),
+        (perf.goals / count).toFixed(1),
+        perf.callCount,
+      );
+      perf.callCount = 0;
+      perf.totalMs = 0;
+      perf.tfMs = 0;
+      perf.seesawMs = 0;
+      perf.gridLookupMs = 0;
+      perf.triFaceMs = 0;
+      perf.triEdgeMs = 0;
+      perf.triVertMs = 0;
+      perf.primitiveMs = 0;
+      perf.animGroups = 0;
+      perf.cellHits = 0;
+      perf.triangles = 0;
+      perf.cones = 0;
+      perf.spheres = 0;
+      perf.cylinders = 0;
+      perf.goals = 0;
+    }
   }
 }

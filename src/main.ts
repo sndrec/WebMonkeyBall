@@ -80,6 +80,8 @@ import { PackLoader } from './app/packs/pack_loader.js';
 import { PackSelectionController } from './app/packs/pack_selection.js';
 import { ReplayController } from './app/replay/controller.js';
 import { CourseSelectionController } from './app/gameplay/course_selection.js';
+import { stageCollisionPerf } from './collision.js';
+import { stepBallPerf } from './physics.js';
 import type { MatchFlowController } from './app/gameplay/match_flow.js';
 import type { MatchStartFlowController } from './app/gameplay/start_flow.js';
 import { initRendererGfx, prewarmConfettiRenderer as prewarmConfettiRenderResources, type ViewerInputState } from './app/render/boot.js';
@@ -351,8 +353,9 @@ export function runMainApp() {
   let camera: Camera | null = null;
   let viewerInput: ViewerInputState | null = null;
   
-  const perfEnabled = true;
-  const perfBreakdownEnabled = true;
+  const perfEnabled = false;
+  const perfBreakdownEnabled = false;
+  const collisionPerfEnabled = true;
   const perfLogEvery = 120;
   const audio = new AudioManager();
   const game = new Game({
@@ -392,8 +395,20 @@ export function runMainApp() {
   game.rollbackPerf.logEvery = perfLogEvery;
   game.simBreakdownPerf.enabled = perfBreakdownEnabled;
   game.simBreakdownPerf.logEvery = perfLogEvery;
+  stageCollisionPerf.enabled = collisionPerfEnabled;
+  stageCollisionPerf.logEvery = perfLogEvery;
+  stepBallPerf.enabled = collisionPerfEnabled;
+  stepBallPerf.logEvery = perfLogEvery;
+  if (game.stageRuntime?.advancePerf) {
+    game.stageRuntime.advancePerf.enabled = perfBreakdownEnabled;
+    game.stageRuntime.advancePerf.logEvery = perfLogEvery;
+  }
   if (perfBreakdownEnabled) {
     console.log(`[perf] sim-breakdown enabled (logEvery=${perfLogEvery})`);
+  }
+  if (collisionPerfEnabled) {
+    console.log(`[perf] stage-coli-breakdown enabled (logEvery=${perfLogEvery})`);
+    console.log(`[perf] ball-step-breakdown enabled (logEvery=${perfLogEvery})`);
   }
   
   const hudRenderer = new HudRenderer(hudCanvas);

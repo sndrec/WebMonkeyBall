@@ -2946,6 +2946,8 @@ export class GameCore {
       this.stage = stage;
       this.stageAttempts = isRestart ? this.stageAttempts + 1 : 1;
       this.stageRuntime = new StageRuntime(stage, undefined, this.stageRulesetId ?? undefined);
+      this.stageRuntime.advancePerf.enabled = this.simBreakdownPerf.enabled;
+      this.stageRuntime.advancePerf.logEvery = this.simBreakdownPerf.logEvery;
       this.simTick = 0;
       this.inputFeedIndex = 0;
       this.inputStartTick = 0;
@@ -4457,6 +4459,24 @@ export class GameCore {
         this.simBreakdownPerf.goalCheckMs = 0;
         this.simBreakdownPerf.cameraMs = 0;
         this.simBreakdownPerf.bananaCollectMs = 0;
+        const stageAdvancePerf = this.stageRuntime?.advancePerf;
+        if (stageAdvancePerf?.enabled && stageAdvancePerf.tickCount > 0) {
+          const stageCount = Math.max(1, stageAdvancePerf.tickCount);
+          const avgAnim = stageAdvancePerf.animMs / stageCount;
+          const avgSwitches = stageAdvancePerf.switchesMs / stageCount;
+          const avgObjects = stageAdvancePerf.objectsMs / stageCount;
+          console.log(
+            "[perf] stage-breakdown avg anim=%sms switches=%sms objects=%sms over=%d",
+            avgAnim.toFixed(3),
+            avgSwitches.toFixed(3),
+            avgObjects.toFixed(3),
+            stageAdvancePerf.tickCount,
+          );
+          stageAdvancePerf.tickCount = 0;
+          stageAdvancePerf.animMs = 0;
+          stageAdvancePerf.switchesMs = 0;
+          stageAdvancePerf.objectsMs = 0;
+        }
       }
       if (this.rollbackPerf.enabled && this.rollbackPerf.saveCount >= this.rollbackPerf.logEvery) {
         const avgSave = this.rollbackPerf.saveMs / Math.max(1, this.rollbackPerf.saveCount);

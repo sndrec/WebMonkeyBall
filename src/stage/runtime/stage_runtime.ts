@@ -109,6 +109,17 @@ export class StageRuntime {
     this.animBasePrevTransform = new Float32Array(12);
     this.goalHoldOpen = false;
     this.switchesEnabled = true;
+    this.advancePerf = {
+      enabled: false,
+      logEvery: 120,
+      tickCount: 0,
+      animMs: 0,
+      switchesMs: 0,
+      objectsMs: 0,
+      lastAnimMs: 0,
+      lastSwitchesMs: 0,
+      lastObjectsMs: 0,
+    };
     this.simRng = new DeterministicRng(seed);
     this.visualRng = new DeterministicRng((seed ^ 0x9e3779b9) >>> 0);
     this.initAnimGroups();
@@ -279,17 +290,44 @@ export class StageRuntime {
     if (paused) {
       return;
     }
+    const perf = this.advancePerf;
+    const perfEnabled = !!perf?.enabled;
     if (animTimerOverride !== null) {
       this.timerFrames = animTimerOverride;
     } else {
       this.timerFrames += frameDelta;
     }
+    let t = perfEnabled ? performance.now() : 0;
     this.updateAnimGroups(this.timerFrames / 60, frameDelta, smb2LoadInFrames);
+    if (perfEnabled) {
+      const dt = performance.now() - t;
+      perf.lastAnimMs = dt;
+      perf.animMs += dt;
+      t = performance.now();
+    }
     if (this.format === 'smb2') {
       this.updateSwitchesSmb2();
+      if (perfEnabled) {
+        const dt = performance.now() - t;
+        perf.lastSwitchesMs = dt;
+        perf.switchesMs += dt;
+        t = performance.now();
+      }
+    } else if (perfEnabled) {
+      perf.lastSwitchesMs = 0;
     }
     if (world) {
       this.updateObjects(world, ball, camera, includeVisuals);
+      if (perfEnabled) {
+        const dt = performance.now() - t;
+        perf.lastObjectsMs = dt;
+        perf.objectsMs += dt;
+      }
+    } else if (perfEnabled) {
+      perf.lastObjectsMs = 0;
+    }
+    if (perfEnabled) {
+      perf.tickCount += 1;
     }
   }
 
