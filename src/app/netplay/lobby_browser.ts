@@ -41,7 +41,7 @@ export class LobbyBrowserController {
     this.deps = deps;
   }
 
-  async refreshLobbyList(joinRoom: (roomId: string) => Promise<void>) {
+  async refreshLobbyList() {
     const { lobbyClient, lobbyList, lobbyStatus, multiplayerOnlineCount } = this.deps;
     if (!lobbyClient || !lobbyList || !lobbyStatus) {
       return;
@@ -86,7 +86,7 @@ export class LobbyBrowserController {
           join.disabled = true;
         }
         join.addEventListener('click', async () => {
-          await joinRoom(room.roomId);
+          await this.joinRoom(room.roomId);
         });
         item.append(info, join);
         lobbyList.appendChild(item);
