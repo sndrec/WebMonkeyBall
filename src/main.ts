@@ -352,6 +352,8 @@ export function runMainApp() {
   let viewerInput: ViewerInputState | null = null;
   
   const perfEnabled = true;
+  const perfBreakdownEnabled = true;
+  const perfLogEvery = 120;
   const audio = new AudioManager();
   const game = new Game({
     audio,
@@ -386,6 +388,13 @@ export function runMainApp() {
   game.init();
   game.simPerf.enabled = perfEnabled;
   game.rollbackPerf.enabled = perfEnabled;
+  game.simPerf.logEvery = perfLogEvery;
+  game.rollbackPerf.logEvery = perfLogEvery;
+  game.simBreakdownPerf.enabled = perfBreakdownEnabled;
+  game.simBreakdownPerf.logEvery = perfLogEvery;
+  if (perfBreakdownEnabled) {
+    console.log(`[perf] sim-breakdown enabled (logEvery=${perfLogEvery})`);
+  }
   
   const hudRenderer = new HudRenderer(hudCanvas);
   void hudRenderer.load();

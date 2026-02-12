@@ -158,6 +158,33 @@ const switchProbeBall = {
   friction: 0,
   animGroupId: 0,
 };
+const physballDeltaScratch = { x: 0, y: 0, z: 0 };
+const lineStartScratch = { x: 0, y: 0, z: 0 };
+const lineEndScratch = { x: 0, y: 0, z: 0 };
+const linePlanePointScratch = { x: 0, y: 0, z: 0 };
+const jamabarBallPosScratch = { x: 0, y: 0, z: 0 };
+const circleTmpVecScratch = { x: 0, y: 0, z: 0 };
+const circleBallPosScratch = { x: 0, y: 0, z: 0 };
+const circlePlaneScratch = {
+  point: { x: 0, y: 0, z: 0 },
+  normal: { x: 0, y: 0, z: 0 },
+};
+const circlePlanePointScratch = { x: 0, y: 0, z: 0 };
+const sphereTmpVecScratch = { x: 0, y: 0, z: 0 };
+const spherePlaneScratch = {
+  point: { x: 0, y: 0, z: 0 },
+  normal: { x: 0, y: 0, z: 0 },
+};
+const coneTmpVecScratch = { x: 0, y: 0, z: 0 };
+const coneBallPosScratch = { x: 0, y: 0, z: 0 };
+const conePlaneScratch = {
+  point: { x: 0, y: 0, z: 0 },
+  normal: { x: 0, y: 0, z: 0 },
+};
+const bonusWaveSurfaceScratch = {
+  point: { x: 0, y: 0, z: 0 },
+  normal: { x: 0, y: 1, z: 0 },
+};
 
 function resetSwitchProbeBall(ball) {
   switchProbeBall.flags = 0;
@@ -237,7 +264,7 @@ const JAMABAR_COLI_RECTS = [
 ];
 
 export function tfPhysballToAnimGroupSpace(physBall, animGroupId, animGroups) {
-  const delta = { x: 0, y: 0, z: 0 };
+  const delta = physballDeltaScratch;
   if (physBall.animGroupId > 0) {
     const group = animGroups[physBall.animGroupId];
     delta.x = physBall.pos.x - physBall.prevPos.x;
@@ -367,9 +394,15 @@ function tfBallToWorld(ball) {
 }
 
 export function testLineIntersectsRect(lineStart, lineEnd, rect) {
-  const start = { x: lineStart.x, y: lineStart.y, z: lineStart.z };
-  const end = { x: lineEnd.x, y: lineEnd.y, z: lineEnd.z };
-  const planePoint = { x: 0, y: 0, z: 0 };
+  const start = lineStartScratch;
+  start.x = lineStart.x;
+  start.y = lineStart.y;
+  start.z = lineStart.z;
+  const end = lineEndScratch;
+  end.x = lineEnd.x;
+  end.y = lineEnd.y;
+  end.z = lineEnd.z;
+  const planePoint = linePlanePointScratch;
 
   stack.fromTranslate(rect.pos);
   stack.rotateZ(rect.rot.z);
@@ -604,16 +637,20 @@ export function bonusWaveSurfaceAt(x, z, timerFrames) {
   const amplitude = BONUS_WAVE_AMPLITUDE_BASE + BONUS_WAVE_AMPLITUDE_SLOPE * dist;
   const angle = Math.trunc(BONUS_WAVE_ANGLE_SPEED * (timerFrames - BONUS_WAVE_START_FRAME)
     + BONUS_WAVE_ANGLE_SCALE * dist);
+  const surface = bonusWaveSurfaceScratch;
+  surface.point.x = x;
+  surface.point.z = z;
+  surface.normal.x = 0;
+  surface.normal.y = 1;
+  surface.normal.z = 0;
 
   if (angle > 0) {
-    return {
-      point: { x, y: 0, z },
-      normal: { x: 0, y: 1, z: 0 },
-    };
+    surface.point.y = 0;
+    return surface;
   }
 
   const y = sinS16(angle) * amplitude;
-  const normal = { x: 0, y: 1, z: 0 };
+  const normal = surface.normal;
   const lenSq = sumSq2(x, z);
   if (lenSq > FLT_EPSILON) {
     const scale = -(cosS16(angle) * amplitude) * rsqrt(lenSq);
@@ -628,10 +665,8 @@ export function bonusWaveSurfaceAt(x, z, timerFrames) {
     }
   }
 
-  return {
-    point: { x, y, z },
-    normal,
-  };
+  surface.point.y = y;
+  return surface;
 }
 
 function collideBallWithTriFace(ball, tri) {
@@ -1044,7 +1079,7 @@ function collideBallWithRect(ball, rect) {
 }
 
 function collideBallWithJamabar(ball, jamabar) {
-  const ballPos = { x: 0, y: 0, z: 0 };
+  const ballPos = jamabarBallPosScratch;
 
   stack.fromTranslate(jamabar.pos);
   stack.rotateX(jamabar.rot.x);
@@ -1169,11 +1204,10 @@ function collideBallWithCylinder(ball, cylinder) {
 }
 
 function collideBallWithCircle(ball, circle) {
-  const tmpVec = {
-    x: ball.pos.x - circle.pos.x,
-    y: ball.pos.y - circle.pos.y,
-    z: ball.pos.z - circle.pos.z,
-  };
+  const tmpVec = circleTmpVecScratch;
+  tmpVec.x = ball.pos.x - circle.pos.x;
+  tmpVec.y = ball.pos.y - circle.pos.y;
+  tmpVec.z = ball.pos.z - circle.pos.z;
   const distSq = sumSq3(tmpVec.x, tmpVec.y, tmpVec.z);
   const radiusSum = ball.radius + circle.radius;
   if (distSq > radiusSum * radiusSum) {
@@ -1184,15 +1218,18 @@ function collideBallWithCircle(ball, circle) {
   stack.rotateZ(circle.rot.z);
   stack.rotateY(circle.rot.y);
   stack.rotateX(circle.rot.x);
-  const ballPosCircle = { x: 0, y: 0, z: 0 };
+  const ballPosCircle = circleBallPosScratch;
   stack.rigidInvTfPoint(ball.pos, ballPosCircle);
 
   const dist2d = sumSq2(ballPosCircle.x, ballPosCircle.z);
   if (dist2d < circle.radius * circle.radius) {
-    const plane = {
-      point: { x: 0, y: 0, z: 0 },
-      normal: { x: 0, y: 1, z: 0 },
-    };
+    const plane = circlePlaneScratch;
+    plane.point.x = 0;
+    plane.point.y = 0;
+    plane.point.z = 0;
+    plane.normal.x = 0;
+    plane.normal.y = 1;
+    plane.normal.z = 0;
     stack.getTranslateAlt(plane.point);
     stack.tfVec(plane.normal, plane.normal);
     collideBallWithPlane(ball, plane);
@@ -1202,21 +1239,23 @@ function collideBallWithCircle(ball, circle) {
   const radiusSumSq = radiusSum * radiusSum;
   if (dist2d < radiusSumSq && dist2d > FLT_EPSILON) {
     const temp = circle.radius * rsqrt(dist2d);
-    const planePoint = {
-      x: ballPosCircle.x * temp,
-      y: 0,
-      z: ballPosCircle.z * temp,
-    };
+    const planePoint = circlePlanePointScratch;
+    planePoint.x = ballPosCircle.x * temp;
+    planePoint.y = 0;
+    planePoint.z = ballPosCircle.z * temp;
     tmpVec.x = ballPosCircle.x - planePoint.x;
     tmpVec.y = ballPosCircle.y - planePoint.y;
     tmpVec.z = ballPosCircle.z - planePoint.z;
     const distSq2 = sumSq3(tmpVec.x, tmpVec.y, tmpVec.z);
     if (distSq2 > FLT_EPSILON) {
       const invLen = rsqrt(distSq2);
-      const plane = {
-        point: planePoint,
-        normal: { x: tmpVec.x * invLen, y: tmpVec.y * invLen, z: tmpVec.z * invLen },
-      };
+      const plane = circlePlaneScratch;
+      plane.point.x = planePoint.x;
+      plane.point.y = planePoint.y;
+      plane.point.z = planePoint.z;
+      plane.normal.x = tmpVec.x * invLen;
+      plane.normal.y = tmpVec.y * invLen;
+      plane.normal.z = tmpVec.z * invLen;
       stack.tfPoint(plane.point, plane.point);
       stack.tfVec(plane.normal, plane.normal);
       collideBallWithPlane(ball, plane);
@@ -1225,11 +1264,10 @@ function collideBallWithCircle(ball, circle) {
 }
 
 function collideBallWithSphere(ball, sphere) {
-  const tmpVec = {
-    x: ball.pos.x - sphere.pos.x,
-    y: ball.pos.y - sphere.pos.y,
-    z: ball.pos.z - sphere.pos.z,
-  };
+  const tmpVec = sphereTmpVecScratch;
+  tmpVec.x = ball.pos.x - sphere.pos.x;
+  tmpVec.y = ball.pos.y - sphere.pos.y;
+  tmpVec.z = ball.pos.z - sphere.pos.z;
   const distSq = sumSq3(tmpVec.x, tmpVec.y, tmpVec.z);
   const radiusSum = sphere.radius + ball.radius;
   if (distSq > radiusSum * radiusSum || distSq <= FLT_EPSILON) {
@@ -1241,23 +1279,21 @@ function collideBallWithSphere(ball, sphere) {
   tmpVec.y *= invDist;
   tmpVec.z *= invDist;
 
-  const plane = {
-    point: {
-      x: sphere.pos.x + tmpVec.x * sphere.radius,
-      y: sphere.pos.y + tmpVec.y * sphere.radius,
-      z: sphere.pos.z + tmpVec.z * sphere.radius,
-    },
-    normal: { x: tmpVec.x, y: tmpVec.y, z: tmpVec.z },
-  };
+  const plane = spherePlaneScratch;
+  plane.point.x = sphere.pos.x + tmpVec.x * sphere.radius;
+  plane.point.y = sphere.pos.y + tmpVec.y * sphere.radius;
+  plane.point.z = sphere.pos.z + tmpVec.z * sphere.radius;
+  plane.normal.x = tmpVec.x;
+  plane.normal.y = tmpVec.y;
+  plane.normal.z = tmpVec.z;
   collideBallWithPlane(ball, plane);
 }
 
 function collideBallWithCone(ball, cone) {
-  const tmpVec = {
-    x: ball.pos.x - cone.pos.x,
-    y: ball.pos.y - cone.pos.y,
-    z: ball.pos.z - cone.pos.z,
-  };
+  const tmpVec = coneTmpVecScratch;
+  tmpVec.x = ball.pos.x - cone.pos.x;
+  tmpVec.y = ball.pos.y - cone.pos.y;
+  tmpVec.z = ball.pos.z - cone.pos.z;
   const distSq = sumSq3(tmpVec.x, tmpVec.y, tmpVec.z);
   const maxScale = cone.scale.x > cone.scale.y ? cone.scale.x : cone.scale.y;
   const cullRadius = maxScale + ball.radius;
@@ -1269,7 +1305,7 @@ function collideBallWithCone(ball, cone) {
   stack.rotateZ(cone.rot.z);
   stack.rotateY(cone.rot.y);
   stack.rotateX(cone.rot.x);
-  const ballPosCone = { x: 0, y: 0, z: 0 };
+  const ballPosCone = coneBallPosScratch;
   stack.rigidInvTfPoint(ball.pos, ballPosCone);
   if (ballPosCone.y < -ball.radius || ballPosCone.y > cone.scale.y + ball.radius) {
     return;
@@ -1287,10 +1323,13 @@ function collideBallWithCone(ball, cone) {
   stack.rigidInvTfPoint(ball.pos, tmpVec);
 
   if (tmpVec.x < 0.0) {
-    const plane = {
-      point: { x: 0, y: 0, z: 0 },
-      normal: { x: tmpVec.x, y: tmpVec.y, z: tmpVec.z },
-    };
+    const plane = conePlaneScratch;
+    plane.point.x = 0;
+    plane.point.y = 0;
+    plane.point.z = 0;
+    plane.normal.x = tmpVec.x;
+    plane.normal.y = tmpVec.y;
+    plane.normal.z = tmpVec.z;
     stack.getTranslateAlt(plane.point);
     const lenSq = sumSq3(tmpVec.x, tmpVec.y, tmpVec.z);
     if (lenSq <= FLT_EPSILON) {
@@ -1307,10 +1346,13 @@ function collideBallWithCone(ball, cone) {
     if (tmpVec.x > ball.radius + baseRadius) {
       return;
     }
-    const plane = {
-      point: { x: 0, y: 0, z: 0 },
-      normal: { x: 0, y: 1, z: 0 },
-    };
+    const plane = conePlaneScratch;
+    plane.point.x = 0;
+    plane.point.y = 0;
+    plane.point.z = 0;
+    plane.normal.x = 0;
+    plane.normal.y = 1;
+    plane.normal.z = 0;
     stack.getTranslateAlt(plane.point);
     stack.tfVec(plane.normal, plane.normal);
     collideBallWithPlane(ball, plane);

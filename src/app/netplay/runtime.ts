@@ -45,7 +45,11 @@ type RuntimeDeps = {
   getAuthoritativeHashFrame: (state: any) => number | null;
   getEstimatedHostFrame: (state: any) => number;
   getClientLeadFrames: (state: any) => number;
-  recordNetplayPerf: (startMs: number, simTicks?: number) => void;
+  recordNetplayPerf: (
+    startMs: number,
+    simTicks?: number,
+    breakdown?: { preMs?: number; hostRollbackApplyMs?: number; stepMs?: number; postMs?: number },
+  ) => void;
   isNetplayDebugEnabled: () => boolean;
   netplayDebugOverlay: { show: (warning: string | null, lines: string[]) => void; hide: () => void };
   constants: RuntimeConstants;
@@ -83,22 +87,30 @@ export class NetplayRuntimeController {
     }
     const pendingFrames = state.pendingHostUpdates.size > 0
       ? Array.from(state.pendingHostUpdates).sort((a, b) => a - b)
-      : null;
+      : [];
     for (const [playerId, clientState] of state.clientStates.entries()) {
       const ackedHostFrame = Math.min(clientState.lastAckedHostFrame, currentFrame);
       const start = Math.max(ackedHostFrame + 1, currentFrame - state.maxResend + 1);
-      const framesToSend = new Set<number>();
-      if (pendingFrames) {
-        for (const frame of pendingFrames) {
-          framesToSend.add(frame);
-        }
-      }
-      for (let frame = start; frame <= currentFrame; frame += 1) {
-        framesToSend.add(frame);
-      }
       const bundles: FrameBundleMessage[] = [];
-      for (const frame of Array.from(framesToSend).sort((a, b) => a - b)) {
-        const bundle = state.hostFrameBuffer.get(frame);
+      let pendingIdx = 0;
+      let frame = start;
+      while (pendingIdx < pendingFrames.length || frame <= currentFrame) {
+        let nextFrame: number;
+        if (pendingIdx >= pendingFrames.length) {
+          nextFrame = frame;
+          frame += 1;
+        } else if (frame > currentFrame || pendingFrames[pendingIdx] < frame) {
+          nextFrame = pendingFrames[pendingIdx];
+          pendingIdx += 1;
+        } else if (pendingFrames[pendingIdx] === frame) {
+          nextFrame = frame;
+          pendingIdx += 1;
+          frame += 1;
+        } else {
+          nextFrame = frame;
+          frame += 1;
+        }
+        const bundle = state.hostFrameBuffer.get(nextFrame);
         if (!bundle) {
           continue;
         }
@@ -108,7 +120,7 @@ export class NetplayRuntimeController {
         hostRelay.sendFrameBatch(playerId, clientState.lastAckedClientInput, bundles);
       }
     }
-    if (pendingFrames) {
+    if (pendingFrames.length > 0) {
       state.pendingHostUpdates.clear();
     }
   }
@@ -226,7 +238,7 @@ export class NetplayRuntimeController {
       }
       state.hostFrameBuffer.set(frame, bundle);
       const minFrame = frame - Math.max(state.maxRollback, state.maxResend);
-      for (const key of Array.from(state.hostFrameBuffer.keys())) {
+      for (const key of state.hostFrameBuffer.keys()) {
         if (key < minFrame) {
           state.hostFrameBuffer.delete(key);
         }
@@ -246,28 +258,38 @@ export class NetplayRuntimeController {
       return;
     }
     const perfStart = performance.now();
+    let preMs = 0;
+    let hostRollbackApplyMs = 0;
+    let stepMs = 0;
+    let postMs = 0;
+    const preStart = perfStart;
     if (!this.deps.game.stageRuntime || this.deps.game.loadingStage) {
       this.deps.game.update(0);
-      this.deps.recordNetplayPerf(perfStart, 0);
+      preMs = Math.max(0, performance.now() - preStart);
+      this.deps.recordNetplayPerf(perfStart, 0, { preMs, hostRollbackApplyMs, stepMs, postMs });
       return;
     }
     const nowMs = performance.now();
     if (state.role === 'client' && state.awaitingStageSync) {
       this.deps.maybeResendStageReady(nowMs);
       this.deps.game.accumulator = 0;
-      this.deps.recordNetplayPerf(perfStart, 0);
+      preMs = Math.max(0, performance.now() - preStart);
+      this.deps.recordNetplayPerf(perfStart, 0, { preMs, hostRollbackApplyMs, stepMs, postMs });
       return;
     }
     if (state.role === 'host' && state.awaitingStageReady) {
       this.deps.maybeForceStageSync(nowMs);
       if (state.awaitingStageReady) {
         this.deps.game.accumulator = 0;
-        this.deps.recordNetplayPerf(perfStart, 0);
+        preMs = Math.max(0, performance.now() - preStart);
+        this.deps.recordNetplayPerf(perfStart, 0, { preMs, hostRollbackApplyMs, stepMs, postMs });
         return;
       }
     }
     if (state.role === 'host') {
+      const hostRollbackStart = performance.now();
       this.deps.hostApplyPendingRollback();
+      hostRollbackApplyMs += performance.now() - hostRollbackStart;
     }
     let netplayAccumulator = this.deps.getNetplayAccumulator();
     if (netplayAccumulator < 0) {
@@ -308,7 +330,8 @@ export class NetplayRuntimeController {
     }
     if (state.role === 'client' && drift < -this.deps.constants.clientAheadSlack) {
       this.clientSendInputBuffer(currentFrame);
-      this.deps.recordNetplayPerf(perfStart, 0);
+      preMs = Math.max(0, performance.now() - preStart - hostRollbackApplyMs);
+      this.deps.recordNetplayPerf(perfStart, 0, { preMs, hostRollbackApplyMs, stepMs, postMs });
       return;
     }
     let rateScale = 1;
@@ -334,19 +357,24 @@ export class NetplayRuntimeController {
       const add = introSync ? 2 : 1;
       ticks = Math.min(maxTicks, Math.max(1, ticks + add));
     }
+    preMs = Math.max(0, performance.now() - preStart - hostRollbackApplyMs);
+    const stepStart = performance.now();
     for (let i = 0; i < ticks; i += 1) {
       this.netplayStep();
       netplayAccumulator -= this.deps.game.fixedStep;
     }
+    stepMs = performance.now() - stepStart;
     if (netplayAccumulator < 0) {
       netplayAccumulator = 0;
     }
+    const postStart = performance.now();
     this.deps.setNetplayAccumulator(netplayAccumulator);
     if (state.role === 'host') {
       this.hostMaybeSendSnapshots(nowMs);
     }
     this.deps.game.accumulator = Math.max(0, Math.min(this.deps.game.fixedStep, netplayAccumulator));
-    this.deps.recordNetplayPerf(perfStart, ticks);
+    postMs = performance.now() - postStart;
+    this.deps.recordNetplayPerf(perfStart, ticks, { preMs, hostRollbackApplyMs, stepMs, postMs });
   }
 
   updateNetplayDebugOverlay(nowMs: number) {
@@ -408,12 +436,12 @@ export class NetplayRuntimeController {
       lines.push(`peers=${peerText}`);
       if (state.clientStates.size > 0) {
         const currentFrame = state.session.getFrame();
-        const behind = Array.from(state.clientStates.entries())
-          .map(([playerId, clientState]: [number, any]) => {
-            const ackedHostFrame = Math.min(clientState.lastAckedHostFrame, currentFrame);
-            return `${playerId}:${currentFrame - ackedHostFrame}`;
-          })
-          .join(' ');
+        const behindParts: string[] = [];
+        for (const [playerId, clientState] of state.clientStates.entries()) {
+          const ackedHostFrame = Math.min(clientState.lastAckedHostFrame, currentFrame);
+          behindParts.push(`${playerId}:${currentFrame - ackedHostFrame}`);
+        }
+        const behind = behindParts.join(' ');
         lines.push(`behind=${behind}`);
       }
     }

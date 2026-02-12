@@ -69,6 +69,45 @@ const wormholeMatA = mat4.create();
 const wormholeMatB = mat4.create();
 const wormholeMatC = mat4.create();
 const wormholeMat3 = mat3.create();
+const wormholeTfScratch = mat4.create();
+const wormholeDestPosScratch = { x: 0, y: 0, z: 0 };
+const wormholeTriggerScratch = {
+  pos: { x: 0, y: WORMHOLE_TRIGGER_OFFSET_Y, z: 0 },
+  rot: { x: 0, y: 0, z: 0 },
+  width: WORMHOLE_TRIGGER_WIDTH,
+  height: WORMHOLE_TRIGGER_HEIGHT,
+};
+const goalTriggerScratch = {
+  pos: { x: 0, y: 1, z: 0 },
+  rot: { x: 0, y: 0, z: 0 },
+  width: 2,
+  height: 2,
+};
+const apeForwardScratch = { x: 0, y: 0, z: -1 };
+const apeBasis64 = { x: 0, y: 0, z: 0 };
+const apeBasis58 = { x: 0, y: 0, z: 0 };
+const apeBasis4C = { x: 0, y: 0, z: 0 };
+const apeBasis40 = { x: 0, y: 0, z: 0 };
+const apeBasis34 = { x: 0, y: 0, z: 0 };
+const apeBasis28 = { x: 0, y: 0, z: 0 };
+const apeBasis1C = { x: 0, y: 0, z: 0 };
+const apeBaseTmpQuat = { x: 0, y: 0, z: 0, w: 1 };
+const apeBaseUpA = { x: 0, y: 1, z: 0 };
+const apeBaseUpB = { x: 0, y: 1, z: 0 };
+const apeBaseQuat = { x: 0, y: 0, z: 0, w: 1 };
+const apeBaseCross = { x: 0, y: 1, z: 0 };
+const unitVecX = { x: 1, y: 0, z: 0 };
+const unitVecY = { x: 0, y: 1, z: 0 };
+const unitVecZ = { x: 0, y: 0, z: 1 };
+const apeForwardSmb1 = { x: -1, y: 0, z: 0 };
+const apeForwardSmb2 = { x: 0, y: 0, z: -1 };
+const apeVelDir = { x: 0, y: 0, z: 0 };
+const apeVelAxis = { x: 0, y: 0, z: 0 };
+const apeVelQuat = { x: 0, y: 0, z: 0, w: 1 };
+const apeSpinMtx = new Float32Array(12);
+const apeSpinDir = { x: 0, y: 0, z: 0 };
+const apeSpinQuat = { x: 0, y: 0, z: 0, w: 1 };
+const apeSpinUp = { x: 0, y: 1, z: 0 };
 const seesawBall = {
   pos: { x: 0, y: 0, z: 0 },
   prevPos: { x: 0, y: 0, z: 0 },
@@ -354,7 +393,10 @@ function updateBallCameraSteerYaw(ball, stageFormat) {
   if (stageFormat === 'smb2') {
     // SMB2 g_ball_ape_rotation uses ape->chara_rotation transformed -Z as the orientation source.
     stack.fromQuat(ball.apeQuat);
-    const apeForward = { x: 0, y: 0, z: -1 };
+    const apeForward = apeForwardScratch;
+    apeForward.x = 0;
+    apeForward.y = 0;
+    apeForward.z = -1;
     stack.tfVec(apeForward, apeForward);
     const apeYaw = toS16(atan2S16(apeForward.x, apeForward.z) - 0x8000);
 
@@ -394,19 +436,19 @@ function setApeQuatFromYaw(ball, yaw) {
 }
 
 function updateBallApeBasis(ball) {
-  const sp64 = { x: 0, y: 0, z: 0 };
-  const sp58 = { x: 0, y: 0, z: 0 };
-  const sp4C = { x: 0, y: 0, z: 0 };
-  const sp40 = { x: 0, y: 0, z: 0 };
-  const sp34 = { x: 0, y: 0, z: 0 };
-  const sp28 = { x: 0, y: 0, z: 0 };
-  const sp1C = { x: 0, y: 0, z: 0 };
+  const sp64 = apeBasis64;
+  const sp58 = apeBasis58;
+  const sp4C = apeBasis4C;
+  const sp40 = apeBasis40;
+  const sp34 = apeBasis34;
+  const sp28 = apeBasis28;
+  const sp1C = apeBasis1C;
 
   stack.fromMtx(ball.transform);
   ball.unkC4 = vecLen(ball.unkB8);
-  stack.tfVec({ x: 0, y: 1, z: 0 }, sp58);
-  stack.tfVec({ x: 1, y: 0, z: 0 }, sp40);
-  stack.tfVec({ x: 0, y: 0, z: 1 }, sp28);
+  stack.tfVec(unitVecY, sp58);
+  stack.tfVec(unitVecX, sp40);
+  stack.tfVec(unitVecZ, sp28);
   sp1C.x = 0;
   sp1C.y = -ball.currRadius;
   sp1C.z = 0;
@@ -415,9 +457,9 @@ function updateBallApeBasis(ball) {
   stack.fromMtx(ball.prevTransform);
   stack.tfVec(sp1C, ball.unkB8);
   ball.unkB8.y += ball.currRadius;
-  stack.tfVec({ x: 0, y: 1, z: 0 }, sp64);
-  stack.tfVec({ x: 1, y: 0, z: 0 }, sp4C);
-  stack.tfVec({ x: 0, y: 0, z: 1 }, sp34);
+  stack.tfVec(unitVecY, sp64);
+  stack.tfVec(unitVecX, sp4C);
+  stack.tfVec(unitVecZ, sp34);
 
   let f31 = vecDotNormalized(sp64, sp58);
   let f1 = vecDotNormalized(sp4C, sp40);
@@ -452,7 +494,11 @@ function updateBallApeBasis(ball) {
 }
 
 function updateApeBaseOrientation(ball) {
-  const tmpQuat = { x: ball.unkA8.x, y: ball.unkA8.y, z: ball.unkA8.z, w: ball.unkA8.w };
+  const tmpQuat = apeBaseTmpQuat;
+  tmpQuat.x = ball.unkA8.x;
+  tmpQuat.y = ball.unkA8.y;
+  tmpQuat.z = ball.unkA8.z;
+  tmpQuat.w = ball.unkA8.w;
   tmpQuat.w /= 0.65;
   tmpQuat.x *= 0.65;
   tmpQuat.y *= 0.65;
@@ -483,13 +529,26 @@ function updateApeBaseOrientation(ball) {
   }
 
   stack.toMtx(stack.mtxB);
-  const sp48 = { x: 0, y: 1, z: 0 };
+  const sp48 = apeBaseUpA;
+  sp48.x = 0;
+  sp48.y = 1;
+  sp48.z = 0;
   stack.rigidInvTfVec(sp48, sp48);
-  const sp3C = { x: 0, y: 1, z: 0 };
+  const sp3C = apeBaseUpB;
+  sp3C.x = 0;
+  sp3C.y = 1;
+  sp3C.z = 0;
   const f1 = 1.0 - vecDotNormalized(sp48, sp3C);
-  const quat = { x: 0, y: 0, z: 0, w: 1 };
+  const quat = apeBaseQuat;
+  quat.x = 0;
+  quat.y = 0;
+  quat.z = 0;
+  quat.w = 1;
   if (f1 > 0.01) {
-    const sp30 = { x: 0, y: 1, z: 0 };
+    const sp30 = apeBaseCross;
+    sp30.x = 0;
+    sp30.y = 1;
+    sp30.z = 0;
     if (f1 > 1.999) {
       sp48.x = 1;
       sp48.y = 0;
@@ -499,7 +558,7 @@ function updateApeBaseOrientation(ball) {
     }
     quatFromAxisAngle(sp48, 0x38e, quat);
   } else {
-    quatFromDirs(quat, { x: 0, y: 1, z: 0 }, sp48);
+    quatFromDirs(quat, unitVecY, sp48);
   }
 
   quatNormalize(quat);
@@ -510,7 +569,10 @@ function updateApeBaseOrientation(ball) {
 }
 
 function updateApeFromVelocity(ball, stageFormat = 'smb1') {
-  const sp4C = { x: ball.vel.x, y: 0, z: ball.vel.z };
+  const sp4C = apeVelDir;
+  sp4C.x = ball.vel.x;
+  sp4C.y = 0;
+  sp4C.z = ball.vel.z;
   if (vecLen(sp4C) < 0.00027777777) {
     return 0;
   }
@@ -519,10 +581,17 @@ function updateApeFromVelocity(ball, stageFormat = 'smb1') {
   stack.rigidInvTfVec(sp4C, sp4C);
 
   const isSmb2 = stageFormat === 'smb2';
-  const forwardBasis = isSmb2 ? { x: 0, y: 0, z: -1 } : { x: -1, y: 0, z: 0 };
-  const sp40 = { x: 0, y: 0, z: 0 };
+  const forwardBasis = isSmb2 ? apeForwardSmb2 : apeForwardSmb1;
+  const sp40 = apeVelAxis;
+  sp40.x = 0;
+  sp40.y = 0;
+  sp40.z = 0;
   let var1 = isSmb2 ? sp4C.z : sp4C.x;
-  const quat = { x: 0, y: 0, z: 0, w: 1 };
+  const quat = apeVelQuat;
+  quat.x = 0;
+  quat.y = 0;
+  quat.z = 0;
+  quat.w = 1;
   if (var1 > -0.992) {
     var1 = 1.0 - var1;
     if (var1 > 9.99999993922529e-09) {
@@ -547,21 +616,31 @@ function updateApeFromVelocity(ball, stageFormat = 'smb1') {
 }
 
 function updateApeSpinCompensation(stageFormat = 'smb1') {
-  const tmp = new Float32Array(12);
+  const tmp = apeSpinMtx;
   stack.toMtx(tmp);
-  const sp24 = { x: 0, y: 0, z: 0 };
+  const sp24 = apeSpinDir;
+  sp24.x = 0;
+  sp24.y = 0;
+  sp24.z = 0;
   if (stageFormat === 'smb2') {
-    stack.tfVec({ x: 0, y: 0, z: -1 }, sp24);
+    stack.tfVec(apeForwardSmb2, sp24);
   } else {
-    stack.tfVec({ x: -1, y: 0, z: 0 }, sp24);
+    stack.tfVec(apeForwardSmb1, sp24);
   }
-  const quat = { x: 0, y: 0, z: 0, w: 1 };
+  const quat = apeSpinQuat;
+  quat.x = 0;
+  quat.y = 0;
+  quat.z = 0;
+  quat.w = 1;
   if (sp24.y < 0.99) {
-    const sp18 = { x: 0, y: 1, z: 0 };
+    const sp18 = apeSpinUp;
+    sp18.x = 0;
+    sp18.y = 1;
+    sp18.z = 0;
     vecCross(sp24, sp18, sp24);
     quatFromAxisAngle(sp24, 0x38e, quat);
   } else {
-    quatFromDirs(quat, sp24, { x: 0, y: 1, z: 0 });
+    quatFromDirs(quat, sp24, apeSpinUp);
   }
   stack.fromQuat(quat);
   stack.normalizeBasis();
@@ -936,9 +1015,12 @@ function computeWormholeTransform(stageRuntime, srcWormhole, destWormhole, outMa
 }
 
 function teleportBallToWormhole(ball, stageRuntime, srcWormhole, destWormhole) {
-  const wormholeTf = mat4.create();
+  const wormholeTf = wormholeTfScratch;
   if (!computeWormholeTransform(stageRuntime, srcWormhole, destWormhole, wormholeTf)) {
-    const destPos = { x: destWormhole.pos.x, y: destWormhole.pos.y, z: destWormhole.pos.z };
+    const destPos = wormholeDestPosScratch;
+    destPos.x = destWormhole.pos.x;
+    destPos.y = destWormhole.pos.y;
+    destPos.z = destWormhole.pos.z;
     const animGroupIndex = destWormhole.animGroupIndex ?? 0;
     if (animGroupIndex > 0) {
       stack.fromMtx(stageRuntime.animGroups[animGroupIndex].transform);
@@ -982,7 +1064,10 @@ function teleportBallToWormhole(ball, stageRuntime, srcWormhole, destWormhole) {
 
   updateBallTransform(ball);
   ball.prevTransform.set(ball.transform);
-  ball.wormholeTransform = wormholeTf;
+  if (!ball.wormholeTransform) {
+    ball.wormholeTransform = mat4.create();
+  }
+  ball.wormholeTransform.set(wormholeTf);
 }
 
 function checkBallEnteredWormhole(ball, stageRuntime) {
@@ -992,23 +1077,41 @@ function checkBallEnteredWormhole(ball, stageRuntime) {
   initPhysBallFromBall(ball, physBall, stage.format);
   for (let animGroupId = 0; animGroupId < stage.animGroupCount; animGroupId += 1) {
     const stageAg = stage.animGroups[animGroupId];
+    const groupWormholes = stageAg.wormholes ?? [];
     const stageWormholes = animGroupId === 0 ? (stage.wormholes ?? []) : [];
-    const wormholes = stageWormholes.length
-      ? (stageAg.wormholes ?? []).concat(stageWormholes)
-      : (stageAg.wormholes ?? []);
-    if (!wormholes.length) {
+    if (!groupWormholes.length && !stageWormholes.length) {
       continue;
     }
     if (animGroupId !== physBall.animGroupId) {
       tfPhysballToAnimGroupSpace(physBall, animGroupId, animGroups);
     }
-    for (const wormhole of wormholes) {
-      const trigger = {
-        pos: { x: 0, y: WORMHOLE_TRIGGER_OFFSET_Y, z: 0 },
-        rot: { x: wormhole.rot.x, y: wormhole.rot.y, z: wormhole.rot.z },
-        width: WORMHOLE_TRIGGER_WIDTH,
-        height: WORMHOLE_TRIGGER_HEIGHT,
-      };
+    const trigger = wormholeTriggerScratch;
+    for (const wormhole of groupWormholes) {
+      trigger.pos.x = 0;
+      trigger.pos.y = WORMHOLE_TRIGGER_OFFSET_Y;
+      trigger.pos.z = 0;
+      trigger.rot.x = wormhole.rot.x;
+      trigger.rot.y = wormhole.rot.y;
+      trigger.rot.z = wormhole.rot.z;
+      stack.fromTranslate(wormhole.pos);
+      stack.rotateZ(wormhole.rot.z);
+      stack.rotateY(wormhole.rot.y);
+      stack.rotateX(wormhole.rot.x);
+      stack.tfPoint(trigger.pos, trigger.pos);
+      if (testLineIntersectsRect(physBall.pos, physBall.prevPos, trigger)) {
+        return { wormhole };
+      }
+    }
+    if (stageWormholes.length === 0) {
+      continue;
+    }
+    for (const wormhole of stageWormholes) {
+      trigger.pos.x = 0;
+      trigger.pos.y = WORMHOLE_TRIGGER_OFFSET_Y;
+      trigger.pos.z = 0;
+      trigger.rot.x = wormhole.rot.x;
+      trigger.rot.y = wormhole.rot.y;
+      trigger.rot.z = wormhole.rot.z;
       stack.fromTranslate(wormhole.pos);
       stack.rotateZ(wormhole.rot.z);
       stack.rotateY(wormhole.rot.y);
@@ -1038,12 +1141,13 @@ export function checkBallEnteredGoal(ball, stageRuntime) {
         tfPhysballToAnimGroupSpace(physBall, animGroupId, animGroups);
       }
       for (const goal of stageAg.goals) {
-        const trigger = {
-          pos: { x: 0, y: 1, z: 0 },
-          rot: { x: goal.rot.x, y: goal.rot.y, z: goal.rot.z },
-          width: 2,
-          height: 2,
-        };
+        const trigger = goalTriggerScratch;
+        trigger.pos.x = 0;
+        trigger.pos.y = 1;
+        trigger.pos.z = 0;
+        trigger.rot.x = goal.rot.x;
+        trigger.rot.y = goal.rot.y;
+        trigger.rot.z = goal.rot.z;
         stack.fromTranslate(goal.pos);
         stack.rotateZ(goal.rot.z);
         stack.rotateY(goal.rot.y);

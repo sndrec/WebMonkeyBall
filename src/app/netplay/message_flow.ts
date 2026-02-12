@@ -172,7 +172,7 @@ export class NetplayMessageFlowController {
         if (ackFrame !== null) {
           state.lastAckedLocalFrame = Math.max(state.lastAckedLocalFrame, ackFrame);
         }
-        for (const pendingFrame of Array.from(state.pendingLocalInputs.keys())) {
+        for (const pendingFrame of state.pendingLocalInputs.keys()) {
           if (pendingFrame <= state.lastAckedLocalFrame) {
             state.pendingLocalInputs.delete(pendingFrame);
           }

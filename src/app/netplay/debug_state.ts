@@ -13,6 +13,10 @@ type NetplayPerfState = {
   resimMs: number;
   resimFrames: number;
   resimCount: number;
+  preMs: number;
+  hostRollbackApplyMs: number;
+  stepMs: number;
+  postMs: number;
 };
 
 type NetplayDebugOptions = {
@@ -35,6 +39,10 @@ export function createNetplayDebugState(options: NetplayDebugOptions) {
     resimMs: 0,
     resimFrames: 0,
     resimCount: 0,
+    preMs: 0,
+    hostRollbackApplyMs: 0,
+    stepMs: 0,
+    postMs: 0,
   };
 
   function logNetplayPerf(nowMs: number) {
@@ -47,15 +55,32 @@ export function createNetplayDebugState(options: NetplayDebugOptions) {
     const avgTick = netplayPerf.tickMs / Math.max(1, netplayPerf.tickCount);
     const avgRollback = netplayPerf.rollbackMs / Math.max(1, netplayPerf.rollbackCount);
     const avgResim = netplayPerf.resimMs / Math.max(1, netplayPerf.resimCount);
+    const rollbackPerFrame = netplayPerf.rollbackMs / Math.max(1, netplayPerf.rollbackFrames);
+    const resimPerFrame = netplayPerf.resimMs / Math.max(1, netplayPerf.resimFrames);
     console.log(
-      '[perf] netplay tick avg=%sms over=%d simTicks=%d rollback avg=%sms frames=%d resim avg=%sms frames=%d',
+      '[perf] netplay tick avg=%sms over=%d simTicks=%d rollback avg=%sms frames=%d perFrame=%sms resim avg=%sms frames=%d perFrame=%sms',
       avgTick.toFixed(3),
       netplayPerf.tickCount,
       netplayPerf.simTicks,
       avgRollback.toFixed(3),
       netplayPerf.rollbackFrames,
+      rollbackPerFrame.toFixed(3),
       avgResim.toFixed(3),
       netplayPerf.resimFrames,
+      resimPerFrame.toFixed(3),
+    );
+    const avgPre = netplayPerf.preMs / Math.max(1, netplayPerf.tickCount);
+    const avgHostRollbackApply = netplayPerf.hostRollbackApplyMs / Math.max(1, netplayPerf.tickCount);
+    const avgStep = netplayPerf.stepMs / Math.max(1, netplayPerf.tickCount);
+    const avgPost = netplayPerf.postMs / Math.max(1, netplayPerf.tickCount);
+    const stepPerSimTick = netplayPerf.stepMs / Math.max(1, netplayPerf.simTicks);
+    console.log(
+      '[perf] netplay-breakdown avg pre=%sms hostRb=%sms step=%sms post=%sms stepPerTick=%sms',
+      avgPre.toFixed(3),
+      avgHostRollbackApply.toFixed(3),
+      avgStep.toFixed(3),
+      avgPost.toFixed(3),
+      stepPerSimTick.toFixed(3),
     );
     if (options.game.rollbackPerf.enabled) {
       const avgSave = options.game.rollbackPerf.saveMs / Math.max(1, options.game.rollbackPerf.saveCount);
@@ -88,9 +113,17 @@ export function createNetplayDebugState(options: NetplayDebugOptions) {
     netplayPerf.resimMs = 0;
     netplayPerf.resimFrames = 0;
     netplayPerf.resimCount = 0;
+    netplayPerf.preMs = 0;
+    netplayPerf.hostRollbackApplyMs = 0;
+    netplayPerf.stepMs = 0;
+    netplayPerf.postMs = 0;
   }
 
-  function recordNetplayPerf(startMs: number, simTicks = 0) {
+  function recordNetplayPerf(
+    startMs: number,
+    simTicks = 0,
+    breakdown?: { preMs?: number; hostRollbackApplyMs?: number; stepMs?: number; postMs?: number },
+  ) {
     if (!netplayPerf.enabled) {
       return;
     }
@@ -98,6 +131,10 @@ export function createNetplayDebugState(options: NetplayDebugOptions) {
     netplayPerf.tickMs += nowMs - startMs;
     netplayPerf.tickCount += 1;
     netplayPerf.simTicks += simTicks;
+    netplayPerf.preMs += breakdown?.preMs ?? 0;
+    netplayPerf.hostRollbackApplyMs += breakdown?.hostRollbackApplyMs ?? 0;
+    netplayPerf.stepMs += breakdown?.stepMs ?? 0;
+    netplayPerf.postMs += breakdown?.postMs ?? 0;
     logNetplayPerf(nowMs);
   }
 

@@ -258,6 +258,7 @@ function updateEffectGlow(
 }
 
 export function updateBallEffects(effects: BallEffect[], gravity: Vec3, stageRuntime: any, rng: any): void {
+  let removed = 0;
   for (let i = effects.length - 1; i >= 0; i -= 1) {
     const effect = effects[i];
     effect.prevPos.x = effect.pos.x;
@@ -269,8 +270,11 @@ export function updateBallEffects(effects: BallEffect[], gravity: Vec3, stageRun
     effect.age += 1;
     effect.life -= 1;
     if (effect.life <= 0) {
-      effects.splice(i, 1);
+      removed += 1;
       continue;
+    }
+    if (removed > 0) {
+      effects[i + removed] = effect;
     }
 
     if (effect.kind === 'levitate') {
@@ -359,6 +363,10 @@ export function updateBallEffects(effects: BallEffect[], gravity: Vec3, stageRun
     } else {
       effect.alpha = 1;
     }
+  }
+  if (removed > 0) {
+    effects.copyWithin(0, removed);
+    effects.length -= removed;
   }
 }
 

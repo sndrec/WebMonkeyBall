@@ -316,7 +316,7 @@ export class Course {
     const goalTypes = ['B', 'G', 'R'];
     for (const goalType of goalTypes) {
       const warpDistance = getWarpDistance(entry, goalType);
-      const nextIndex = this.stageIndex + 1 + warpDistance;
+      const nextIndex = this.stageIndex + warpDistance;
       if (nextIndex >= 0 && nextIndex < this.stageList.length) {
         ids.add(this.stageList[nextIndex].id);
       }
@@ -351,7 +351,7 @@ export class Course {
     }
     const goalType = info.goalType ?? 'B';
     const warpDistance = getWarpDistance(entry, goalType);
-    const nextIndex = this.stageIndex + 1 + warpDistance;
+    const nextIndex = this.stageIndex + warpDistance;
     if (nextIndex < 0 || nextIndex >= this.stageList.length) {
       return false;
     }

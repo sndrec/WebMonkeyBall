@@ -2333,6 +2333,10 @@ function createConfettiParticle(modelIndex, pos, vel, rotX, rotY, rotZ, scale, l
   };
 }
 
+const confettiDirScratch = { x: 0, y: 1, z: 0 };
+const confettiGroundDirScratch = { x: 0, y: 1, z: 0 };
+const confettiRotVecScratch = { x: 0, y: 0, z: 0 };
+
 function spawnGoalBagConfetti(stageRuntime, bag, ball, rng) {
   const animGroup = stageRuntime.animGroups[bag.animGroupId];
   const stack = stageRuntime.matrixStack;
@@ -2396,6 +2400,7 @@ function spawnGoalBagConfetti(stageRuntime, bag, ball, rng) {
 function updateConfetti(stageRuntime, gravity) {
   const stack = stageRuntime.matrixStack;
   const confetti = stageRuntime.confetti;
+  let removed = 0;
   for (let i = confetti.length - 1; i >= 0; i -= 1) {
     const frag = confetti[i];
     frag.prevPos.x = frag.pos.x;
@@ -2406,15 +2411,21 @@ function updateConfetti(stageRuntime, gravity) {
     frag.prevRotZ = frag.rotZ;
     frag.life -= 1;
     if (frag.life <= 0) {
-      confetti.splice(i, 1);
+      removed += 1;
       continue;
+    }
+    if (removed > 0) {
+      confetti[i + removed] = frag;
     }
 
     frag.vel.x += gravity.x * CONFETTI_GRAVITY_SCALE;
     frag.vel.y += gravity.y * CONFETTI_GRAVITY_SCALE;
     frag.vel.z += gravity.z * CONFETTI_GRAVITY_SCALE;
 
-    const dir = { x: 0, y: 1, z: 0 };
+    const dir = confettiDirScratch;
+    dir.x = 0;
+    dir.y = 1;
+    dir.z = 0;
     stack.fromIdentity();
     stack.rotateY(frag.rotY);
     stack.rotateX(frag.rotX);
@@ -2480,7 +2491,10 @@ function updateConfetti(stageRuntime, gravity) {
       let nx = frag.groundNormal.x;
       let ny = frag.groundNormal.y;
       let nz = frag.groundNormal.z;
-      const groundDir = { x: 0, y: 1, z: 0 };
+      const groundDir = confettiGroundDirScratch;
+      groundDir.x = 0;
+      groundDir.y = 1;
+      groundDir.z = 0;
       stack.fromIdentity();
       stack.rotateY(frag.rotY);
       stack.rotateX(frag.rotX);
@@ -2522,7 +2536,10 @@ function updateConfetti(stageRuntime, gravity) {
         vecNormalizeLen(groundDir);
         const prevRotX = frag.rotX;
         const prevRotZ = frag.rotZ;
-        const rotVec = { x: groundDir.x, y: groundDir.y, z: groundDir.z };
+        const rotVec = confettiRotVecScratch;
+        rotVec.x = groundDir.x;
+        rotVec.y = groundDir.y;
+        rotVec.z = groundDir.z;
         stack.fromRotateY(-frag.rotY);
         stack.rotateX(0);
         stack.tfVec(rotVec, rotVec);
@@ -2533,5 +2550,9 @@ function updateConfetti(stageRuntime, gravity) {
         frag.rotVelZ = (frag.rotVelZ >> 2) + ((frag.rotZ - prevRotZ) >> 2);
       }
     }
+  }
+  if (removed > 0) {
+    confetti.copyWithin(0, removed);
+    confetti.length -= removed;
   }
 }

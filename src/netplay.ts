@@ -531,7 +531,7 @@ export class HostRelay {
   broadcast(msg: HostToClientMessage) {
     const payload = JSON.stringify(msg);
     const preferFast = isFastMessage(msg);
-    for (const playerId of Array.from(this.channels.keys())) {
+    for (const playerId of this.channels.keys()) {
       this.sendPayload(playerId, payload, preferFast);
     }
   }

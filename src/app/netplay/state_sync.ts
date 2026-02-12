@@ -308,7 +308,7 @@ export class NetplayStateSyncController {
     if (!this.deps.game.stageRuntime || !this.deps.game.world) {
       return 0;
     }
-    const players = [...this.deps.game.players].sort((a, b) => a.id - b.id);
+    const players = this.deps.game.getPlayersSortedCached();
     const balls = players.map((player) => player.ball);
     const worlds = [this.deps.game.world, ...players.map((player) => player.world)];
     const baseHash = hashSimState(balls, worlds, this.deps.game.stageRuntime);

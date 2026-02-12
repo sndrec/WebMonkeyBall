@@ -65,27 +65,23 @@ export class NetplaySimulationSyncController {
     return frameInputs;
   }
 
+  private trimFrameMap(map: Map<number, unknown>, minFrame: number) {
+    for (const key of map.keys()) {
+      if (key < minFrame) {
+        map.delete(key);
+      }
+    }
+  }
+
   trimNetplayHistory(frame: number) {
     const state = this.deps.getNetplayState();
     if (!state) {
       return;
     }
     const minFrame = frame - state.maxRollback;
-    for (const key of Array.from(state.inputHistory.keys())) {
-      if (key < minFrame) {
-        state.inputHistory.delete(key);
-      }
-    }
-    for (const key of Array.from(state.hashHistory.keys())) {
-      if (key < minFrame) {
-        state.hashHistory.delete(key);
-      }
-    }
-    for (const key of Array.from(state.expectedHashes.keys())) {
-      if (key < minFrame) {
-        state.expectedHashes.delete(key);
-      }
-    }
+    this.trimFrameMap(state.inputHistory, minFrame);
+    this.trimFrameMap(state.hashHistory, minFrame);
+    this.trimFrameMap(state.expectedHashes, minFrame);
   }
 
   rollbackAndResim(startFrame: number) {
@@ -192,7 +188,7 @@ export class NetplaySimulationSyncController {
       state.lastReceivedHostFrame = Math.max(state.lastReceivedHostFrame, snapshotFrame);
       state.awaitingSnapshot = false;
       state.hashHistory.clear();
-      for (const key of Array.from(state.expectedHashes.keys())) {
+      for (const key of state.expectedHashes.keys()) {
         if (key <= snapshotFrame) {
           state.expectedHashes.delete(key);
         }
