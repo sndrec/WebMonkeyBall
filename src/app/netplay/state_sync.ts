@@ -165,6 +165,13 @@ export class NetplayStateSyncController {
     state.stageReadyTimeoutMs = null;
     state.lastAckedLocalFrame = -1;
     state.lastReceivedHostFrame = this.deps.game.simTick;
+    state.hostFrameBuffer.clear();
+    for (const clientState of state.clientStates.values()) {
+      clientState.lastAckedHostFrame = -1;
+      clientState.lastAckedClientInput = -1;
+      clientState.lastSnapshotMs = null;
+      clientState.lastSnapshotRequestMs = null;
+    }
     state.session.prime(this.deps.game.simTick);
     this.deps.setNetplayAccumulator(0);
   }

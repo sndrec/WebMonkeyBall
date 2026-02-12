@@ -85,7 +85,8 @@ export class NetplayRuntimeController {
       ? Array.from(state.pendingHostUpdates).sort((a, b) => a - b)
       : null;
     for (const [playerId, clientState] of state.clientStates.entries()) {
-      const start = Math.max(clientState.lastAckedHostFrame + 1, currentFrame - state.maxResend + 1);
+      const ackedHostFrame = Math.min(clientState.lastAckedHostFrame, currentFrame);
+      const start = Math.max(ackedHostFrame + 1, currentFrame - state.maxResend + 1);
       const framesToSend = new Set<number>();
       if (pendingFrames) {
         for (const frame of pendingFrames) {
@@ -120,10 +121,11 @@ export class NetplayRuntimeController {
     }
     const currentFrame = state.session.getFrame();
     for (const [playerId, clientState] of state.clientStates.entries()) {
-      if (clientState.lastAckedHostFrame < 0) {
+      const ackedHostFrame = Math.min(clientState.lastAckedHostFrame, currentFrame);
+      if (ackedHostFrame < 0) {
         continue;
       }
-      const behind = currentFrame - clientState.lastAckedHostFrame;
+      const behind = currentFrame - ackedHostFrame;
       if (behind < this.deps.constants.hostSnapshotBehindFrames) {
         continue;
       }
@@ -407,7 +409,10 @@ export class NetplayRuntimeController {
       if (state.clientStates.size > 0) {
         const currentFrame = state.session.getFrame();
         const behind = Array.from(state.clientStates.entries())
-          .map(([playerId, clientState]: [number, any]) => `${playerId}:${currentFrame - clientState.lastAckedHostFrame}`)
+          .map(([playerId, clientState]: [number, any]) => {
+            const ackedHostFrame = Math.min(clientState.lastAckedHostFrame, currentFrame);
+            return `${playerId}:${currentFrame - ackedHostFrame}`;
+          })
           .join(' ');
         lines.push(`behind=${behind}`);
       }

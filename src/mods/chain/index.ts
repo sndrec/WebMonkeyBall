@@ -445,6 +445,104 @@ function applyChainLeashCorrection(ballA: any, ballB: any) {
   ballB.vel.z -= nz * velCorr;
 }
 
+function solveChainSegmentConstraint(nodeA: ChainNodeState, nodeB: ChainNodeState, segmentRestLen: number) {
+  const dx = nodeB.pos.x - nodeA.pos.x;
+  const dy = nodeB.pos.y - nodeA.pos.y;
+  const dz = nodeB.pos.z - nodeA.pos.z;
+  const distSq = (dx * dx) + (dy * dy) + (dz * dz);
+  if (distSq <= 1e-8) {
+    return;
+  }
+  const dist = sqrt(distSq);
+  const diff = (dist - segmentRestLen) / dist;
+  const half = diff * 0.5;
+  nodeA.pos.x += dx * half;
+  nodeA.pos.y += dy * half;
+  nodeA.pos.z += dz * half;
+  nodeB.pos.x -= dx * half;
+  nodeB.pos.y -= dy * half;
+  nodeB.pos.z -= dz * half;
+}
+
+function solveChainSegmentConstraints(nodes: ChainNodeState[], segmentRestLen: number, reverse = false) {
+  if (!reverse) {
+    for (let i = 0; i < nodes.length - 1; i += 1) {
+      solveChainSegmentConstraint(nodes[i], nodes[i + 1], segmentRestLen);
+    }
+    return;
+  }
+  for (let i = nodes.length - 2; i >= 0; i -= 1) {
+    solveChainSegmentConstraint(nodes[i], nodes[i + 1], segmentRestLen);
+  }
+}
+
+function collideChainInteriorNodes(
+  state: ChainState,
+  game: any,
+  link: ChainLinkState,
+  stageFormat: string,
+  reverse = false,
+) {
+  if (!reverse) {
+    for (let i = 1; i < link.nodes.length - 1; i += 1) {
+      applyChainNodeCollision(state, game, link.nodes[i], stageFormat);
+    }
+    return;
+  }
+  for (let i = link.nodes.length - 2; i >= 1; i -= 1) {
+    applyChainNodeCollision(state, game, link.nodes[i], stageFormat);
+  }
+}
+
+function vec3Length(v: Vec3): number {
+  return sqrt((v.x * v.x) + (v.y * v.y) + (v.z * v.z));
+}
+
+function scaleVec3(v: Vec3, scale: number): Vec3 {
+  return { x: v.x * scale, y: v.y * scale, z: v.z * scale };
+}
+
+function equalizeLinkEndpointTransfers(
+  transferA: Vec3 | null,
+  transferB: Vec3 | null,
+): { transferA: Vec3 | null; transferB: Vec3 | null } {
+  if (!transferA || !transferB) {
+    return { transferA, transferB };
+  }
+  const lenA = vec3Length(transferA);
+  const lenB = vec3Length(transferB);
+  if (lenA <= 1e-6 || lenB <= 1e-6) {
+    return { transferA, transferB };
+  }
+  const targetLen = (lenA + lenB) * 0.5;
+  return {
+    transferA: scaleVec3(transferA, targetLen / lenA),
+    transferB: scaleVec3(transferB, targetLen / lenB),
+  };
+}
+
+function anchorLinkEndpoints(
+  link: ChainLinkState,
+  playerA: any,
+  playerB: any,
+  snap: number,
+  transferToBall = false,
+  reverseOrder = false,
+) {
+  const first = link.nodes[0];
+  const last = link.nodes[link.nodes.length - 1];
+  let transferA: Vec3 | null = null;
+  let transferB: Vec3 | null = null;
+  if (!reverseOrder) {
+    transferA = anchorChainEndpointToBallSurface(first, link.nodes[1], playerA.ball, snap, transferToBall);
+    transferB = anchorChainEndpointToBallSurface(last, link.nodes[link.nodes.length - 2], playerB.ball, snap, transferToBall);
+  } else {
+    transferB = anchorChainEndpointToBallSurface(last, link.nodes[link.nodes.length - 2], playerB.ball, snap, transferToBall);
+    transferA = anchorChainEndpointToBallSurface(first, link.nodes[1], playerA.ball, snap, transferToBall);
+  }
+  return { first, last, transferA, transferB };
+}
+
 function simulateChainedTogether(game: any, state: ChainState, players: any[]) {
   if (!isChainedTogetherMode(game) || !game.stage || !game.stageRuntime) {
     return;
@@ -489,35 +587,12 @@ function simulateChainedTogether(game: any, state: ChainState, players: any[]) {
         if (!playerA || !playerB) {
           continue;
         }
-        const first = link.nodes[0];
-        const last = link.nodes[link.nodes.length - 1];
-        anchorChainEndpointToBallSurface(first, link.nodes[1], playerA.ball, CHAIN_ENDPOINT_SNAP);
-        anchorChainEndpointToBallSurface(last, link.nodes[link.nodes.length - 2], playerB.ball, CHAIN_ENDPOINT_SNAP);
-
-        for (let i = 0; i < link.nodes.length - 1; i += 1) {
-          const nodeA = link.nodes[i];
-          const nodeB = link.nodes[i + 1];
-          const dx = nodeB.pos.x - nodeA.pos.x;
-          const dy = nodeB.pos.y - nodeA.pos.y;
-          const dz = nodeB.pos.z - nodeA.pos.z;
-          const distSq = (dx * dx) + (dy * dy) + (dz * dz);
-          if (distSq <= 1e-8) {
-            continue;
-          }
-          const dist = sqrt(distSq);
-          const diff = (dist - segmentRestLen) / dist;
-          const half = diff * 0.5;
-          nodeA.pos.x += dx * half;
-          nodeA.pos.y += dy * half;
-          nodeA.pos.z += dz * half;
-          nodeB.pos.x -= dx * half;
-          nodeB.pos.y -= dy * half;
-          nodeB.pos.z -= dz * half;
-        }
-
-        for (let i = 1; i < link.nodes.length - 1; i += 1) {
-          applyChainNodeCollision(state, game, link.nodes[i], stageFormat);
-        }
+        const reverseEndpoints = ((substep + iter) & 1) === 1;
+        anchorLinkEndpoints(link, playerA, playerB, CHAIN_ENDPOINT_SNAP, false, reverseEndpoints);
+        // Solve constraints in both directions to avoid persistent endpoint-order bias.
+        solveChainSegmentConstraints(link.nodes, segmentRestLen, false);
+        solveChainSegmentConstraints(link.nodes, segmentRestLen, true);
+        collideChainInteriorNodes(state, game, link, stageFormat, (iter & 1) === 1);
       }
     }
 
@@ -539,29 +614,29 @@ function simulateChainedTogether(game: any, state: ChainState, players: any[]) {
       if (!playerA || !playerB) {
         continue;
       }
-      const first = link.nodes[0];
-      const last = link.nodes[link.nodes.length - 1];
-      const transferA = anchorChainEndpointToBallSurface(first, link.nodes[1], playerA.ball, CHAIN_ENDPOINT_SNAP, true);
-      const transferB = anchorChainEndpointToBallSurface(
-        last,
-        link.nodes[link.nodes.length - 2],
-        playerB.ball,
+      const reverseEndpoints = (substep & 1) === 1;
+      const { first, last, transferA, transferB } = anchorLinkEndpoints(
+        link,
+        playerA,
+        playerB,
         CHAIN_ENDPOINT_SNAP,
         true,
+        reverseEndpoints,
       );
-      if (transferA) {
+      const balancedTransfers = equalizeLinkEndpointTransfers(transferA, transferB);
+      if (balancedTransfers.transferA) {
         const pending = pendingBallTransfers.get(playerA.id) ?? { x: 0, y: 0, z: 0, endpoints: [] };
-        pending.x += transferA.x;
-        pending.y += transferA.y;
-        pending.z += transferA.z;
+        pending.x += balancedTransfers.transferA.x;
+        pending.y += balancedTransfers.transferA.y;
+        pending.z += balancedTransfers.transferA.z;
         pending.endpoints.push(first);
         pendingBallTransfers.set(playerA.id, pending);
       }
-      if (transferB) {
+      if (balancedTransfers.transferB) {
         const pending = pendingBallTransfers.get(playerB.id) ?? { x: 0, y: 0, z: 0, endpoints: [] };
-        pending.x += transferB.x;
-        pending.y += transferB.y;
-        pending.z += transferB.z;
+        pending.x += balancedTransfers.transferB.x;
+        pending.y += balancedTransfers.transferB.y;
+        pending.z += balancedTransfers.transferB.z;
         pending.endpoints.push(last);
         pendingBallTransfers.set(playerB.id, pending);
       }
