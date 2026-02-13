@@ -1,4 +1,5 @@
 import type { GamemodeId, ModId, PackId, ParserId, RulesetId } from '../shared/ids.js';
+import type { ModRenderPrimitive } from './render_primitives.js';
 
 export type ModHooks = {
   onStageLoad?: (ctx: {
@@ -37,6 +38,7 @@ export type ModHooks = {
   }) => boolean | void;
   onRingoutComplete?: (ctx: { game: unknown; isBonusStage: boolean }) => boolean | void;
   onAppendEffectRender?: (ctx: { game: unknown; effects: unknown[]; alpha: number }) => void;
+  onAppendRenderPrimitives?: (ctx: { game: unknown; primitives: ModRenderPrimitive[]; alpha: number }) => void;
   onBeforeSimTick?: (ctx: { game: unknown; tick: number }) => void;
   onAfterSimTick?: (ctx: { game: unknown; tick: number }) => void;
   onBallUpdate?: (ctx: { game: unknown; playerId: number; ball: unknown }) => void;

@@ -49,6 +49,7 @@ import { getRulesetById } from '../rules/index.js';
 import type { SessionController } from '../session/session_controller.js';
 import { createSessionController } from '../session/index.js';
 import type { ModHooks } from '../mods/mod_types.js';
+import type { ModRenderPrimitive } from '../mods/render_primitives.js';
 import type {
   BananaRenderState,
   ConfettiRenderState,
@@ -357,6 +358,7 @@ export class GameCore {
   public renderGoalTapes: GoalTapeRenderState[] | null;
   public renderConfetti: ConfettiRenderState[] | null;
   public renderEffects: EffectRenderState[] | null;
+  public renderModPrimitives: ModRenderPrimitive[] | null;
   public renderJamabars: JamabarRenderState[] | null;
   public renderSwitches: SwitchRenderState[] | null;
   public renderStageTilt: StageTiltRenderState | null;
@@ -533,6 +535,7 @@ export class GameCore {
     this.renderGoalTapes = null;
     this.renderConfetti = null;
     this.renderEffects = null;
+    this.renderModPrimitives = null;
     this.renderJamabars = null;
     this.renderSwitches = null;
     this.renderStageTilt = null;
@@ -2724,6 +2727,23 @@ export class GameCore {
       }
     }
     return this.renderEffects;
+  }
+
+  getModRenderPrimitiveState(alpha = 1): ModRenderPrimitive[] | null {
+    const hasModPrimitives = this.modHooks.some((hooks) => !!hooks.onAppendRenderPrimitives);
+    if (!hasModPrimitives) {
+      this.renderModPrimitives = null;
+      return null;
+    }
+    if (!this.renderModPrimitives) {
+      this.renderModPrimitives = [];
+    }
+    this.renderModPrimitives.length = 0;
+    this.emitModHook('onAppendRenderPrimitives', { game: this, primitives: this.renderModPrimitives, alpha });
+    if (this.renderModPrimitives.length === 0) {
+      return null;
+    }
+    return this.renderModPrimitives;
   }
 
   getSwitchRenderState(alpha = 1): SwitchRenderState[] | null {

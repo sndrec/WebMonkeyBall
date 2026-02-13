@@ -18,6 +18,7 @@ import {
 } from './gx/gx_render.js';
 import { MirrorMode, StageData, World } from './SuperMonkeyBall/World.js';
 import { StageId } from './SuperMonkeyBall/StageInfo.js';
+import type { ModRenderPrimitive } from '../mods/render_primitives.js';
 
 // TODO(complexplane): Put somewhere else
 export type RenderContext = {
@@ -120,6 +121,8 @@ export type EffectRenderState = {
   textureName?: string;
 };
 
+export type ModRenderPrimitiveState = ModRenderPrimitive;
+
 export type SwitchRenderState = {
   animGroupId: number;
   pos: { x: number; y: number; z: number };
@@ -146,6 +149,7 @@ export type GameplaySyncState = {
   goalTapes?: GoalTapeRenderState[] | null;
   confetti?: ConfettiRenderState[] | null;
   effects?: EffectRenderState[] | null;
+  modPrimitives?: ModRenderPrimitiveState[] | null;
   switches?: SwitchRenderState[] | null;
   stageTilt?: StageTiltRenderState | null;
 };
@@ -601,6 +605,9 @@ export class Renderer {
     }
     if (state.effects !== undefined) {
       this.world.setEffects(state.effects ?? null);
+    }
+    if (state.modPrimitives !== undefined) {
+      this.world.setModPrimitives(state.modPrimitives ?? null);
     }
     if (state.switches !== undefined) {
       this.world.setSwitches(state.switches ?? null);

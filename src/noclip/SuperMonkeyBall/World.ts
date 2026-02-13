@@ -44,6 +44,7 @@ import type {
     ConfettiRenderState,
     EffectRenderState,
     JamabarRenderState,
+    ModRenderPrimitiveState,
     GoalBagRenderState,
     GoalTapeRenderState,
     StageTiltRenderState,
@@ -695,6 +696,7 @@ export class World {
     private goalTapesByGroup: GoalTapeRenderState[][] = [];
     private confetti: ConfettiRenderState[] | null = null;
     private effects: EffectRenderState[] | null = null;
+    private modPrimitives: ModRenderPrimitiveState[] | null = null;
     private switches: SwitchRenderState[] | null = null;
     private switchesByGroup: SwitchRenderState[][] = [];
     private stageTilt: StageTiltRenderState | null = null;
@@ -734,6 +736,9 @@ export class World {
     private streakDefaultTexture = new GXTextureMapping();
     private streakTextureSources = new Map<string, TextureInputGX>();
     private streakTextureMappings = new Map<string, GXTextureMapping>();
+    private streakExternalTextureLoading = new Set<string>();
+    private streakExternalTextureFailed = new Set<string>();
+    private streakExternalTextureOwned = new Set<string>();
     private lastStreakLogTime = -1;
     private streakHistory = new Map<number, { older: vec3; prev: vec3; lastUpdate: number }>();
     private prevViewFromWorld = mat4.create();
@@ -741,6 +746,38 @@ export class World {
     private hasPrevViewFromWorld = false;
     private streakMegaState = makeMegaState(
         setAttachmentStateSimple({ depthWrite: false, cullMode: GfxCullMode.None }, {
+            blendMode: GfxBlendMode.Add,
+            blendSrcFactor: GfxBlendFactor.SrcAlpha,
+            blendDstFactor: GfxBlendFactor.One,
+            channelWriteMask: GfxChannelWriteMask.RGBA,
+        })
+    );
+    private ribbonAlphaMegaState = makeMegaState(
+        setAttachmentStateSimple({ depthWrite: false, cullMode: GfxCullMode.None }, {
+            blendMode: GfxBlendMode.Add,
+            blendSrcFactor: GfxBlendFactor.SrcAlpha,
+            blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+            channelWriteMask: GfxChannelWriteMask.RGBA,
+        })
+    );
+    private ribbonAddMegaState = makeMegaState(
+        setAttachmentStateSimple({ depthWrite: false, cullMode: GfxCullMode.None }, {
+            blendMode: GfxBlendMode.Add,
+            blendSrcFactor: GfxBlendFactor.SrcAlpha,
+            blendDstFactor: GfxBlendFactor.One,
+            channelWriteMask: GfxChannelWriteMask.RGBA,
+        })
+    );
+    private ribbonAlphaNoDepthMegaState = makeMegaState(
+        setAttachmentStateSimple({ depthWrite: false, depthCompare: GfxCompareMode.Always, cullMode: GfxCullMode.None }, {
+            blendMode: GfxBlendMode.Add,
+            blendSrcFactor: GfxBlendFactor.SrcAlpha,
+            blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
+            channelWriteMask: GfxChannelWriteMask.RGBA,
+        })
+    );
+    private ribbonAddNoDepthMegaState = makeMegaState(
+        setAttachmentStateSimple({ depthWrite: false, depthCompare: GfxCompareMode.Always, cullMode: GfxCullMode.None }, {
             blendMode: GfxBlendMode.Add,
             blendSrcFactor: GfxBlendFactor.SrcAlpha,
             blendDstFactor: GfxBlendFactor.One,
@@ -1416,6 +1453,7 @@ export class World {
         }
         this.drawProjectedShadow(stageCtx, viewFromWorldTilted);
         this.drawConfetti(stageCtx, viewFromWorldTilted);
+        this.drawModPrimitives(stageCtx, viewFromWorldTilted);
         if (!ctx.mirrorCapture) {
             this.drawEffects(stageCtx, viewFromWorldTilted, viewFromWorldPrev);
         }
@@ -1629,6 +1667,10 @@ export class World {
         this.effects = effects;
     }
 
+    public setModPrimitives(primitives: ModRenderPrimitiveState[] | null): void {
+        this.modPrimitives = primitives;
+    }
+
     public setSwitches(switches: SwitchRenderState[] | null): void {
         this.switches = switches;
     }
@@ -1649,6 +1691,76 @@ export class World {
         }
     }
 
+    private isExternalStreakTextureName(textureName: string): boolean {
+        return textureName.includes("/")
+            || textureName.includes("\\")
+            || textureName.startsWith("data:")
+            || /\.(png|jpe?g|webp|gif|bmp)$/i.test(textureName);
+    }
+
+    private createExternalStreakTextureMapping(textureName: string): GXTextureMapping {
+        const mapping = new GXTextureMapping();
+        mapping.gfxTexture = this.streakDefaultTexture.gfxTexture;
+        mapping.gfxSampler = this.streakDefaultTexture.gfxSampler;
+        mapping.width = this.streakDefaultTexture.width;
+        mapping.height = this.streakDefaultTexture.height;
+        this.streakTextureMappings.set(textureName, mapping);
+        if (this.streakExternalTextureLoading.has(textureName) || this.streakExternalTextureFailed.has(textureName)) {
+            return mapping;
+        }
+        if (typeof Image === "undefined") {
+            this.streakExternalTextureFailed.add(textureName);
+            console.warn("[streak] Image not available; skipping texture load", textureName);
+            return mapping;
+        }
+        if (typeof document === "undefined") {
+            this.streakExternalTextureFailed.add(textureName);
+            console.warn("[streak] document not available; skipping texture load", textureName);
+            return mapping;
+        }
+        this.streakExternalTextureLoading.add(textureName);
+        const img = new Image();
+        img.onload = () => {
+            this.streakExternalTextureLoading.delete(textureName);
+            const width = img.naturalWidth || img.width;
+            const height = img.naturalHeight || img.height;
+            if (!width || !height) {
+                this.streakExternalTextureFailed.add(textureName);
+                return;
+            }
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) {
+                this.streakExternalTextureFailed.add(textureName);
+                return;
+            }
+            ctx.clearRect(0, 0, width, height);
+            ctx.drawImage(img, 0, 0, width, height);
+            const tex = this.renderCache.device.createTexture(makeTextureDescriptor2D(GfxFormat.U8_RGBA_NORM, width, height, 1));
+            const imageData = ctx.getImageData(0, 0, width, height);
+            const pixels = new Uint8Array(imageData.data.buffer, imageData.data.byteOffset, imageData.data.byteLength);
+            this.renderCache.device.uploadTextureData(tex, 0, [pixels]);
+            if (mapping.gfxTexture && mapping.gfxTexture !== this.streakDefaultTexture.gfxTexture && this.streakExternalTextureOwned.has(textureName)) {
+                this.renderCache.device.destroyTexture(mapping.gfxTexture);
+            }
+            mapping.gfxTexture = tex;
+            mapping.gfxSampler = this.streakDefaultTexture.gfxSampler;
+            mapping.width = width;
+            mapping.height = height;
+            mapping.flipY = false;
+            this.streakExternalTextureOwned.add(textureName);
+        };
+        img.onerror = () => {
+            this.streakExternalTextureLoading.delete(textureName);
+            this.streakExternalTextureFailed.add(textureName);
+            console.warn("[streak] failed to load texture", textureName);
+        };
+        img.src = textureName;
+        return mapping;
+    }
+
     private getStreakTextureMapping(textureName?: string): GXTextureMapping {
         if (!textureName) {
             return this.streakDefaultTexture;
@@ -1659,6 +1771,9 @@ export class World {
         }
         const tex = this.streakTextureSources.get(textureName);
         if (!tex) {
+            if (this.isExternalStreakTextureName(textureName)) {
+                return this.createExternalStreakTextureMapping(textureName);
+            }
             return this.streakDefaultTexture;
         }
         const mapping = new GXTextureMapping();
@@ -1750,6 +1865,345 @@ export class World {
                 mat4.scale(rp.viewFromModel, rp.viewFromModel, [frag.scale, frag.scale, frag.scale]);
             }
             model.prepareToRender(ctx, rp);
+        }
+    }
+
+    private drawModPrimitives(ctx: RenderContext, viewFromWorld: mat4): void {
+        if (!this.modPrimitives || this.modPrimitives.length === 0) {
+            return;
+        }
+        const viewX: number[] = [];
+        const viewY: number[] = [];
+        const viewZ: number[] = [];
+        const sideX: number[] = [];
+        const sideY: number[] = [];
+        const sideZ: number[] = [];
+        const uCoords: number[] = [];
+        const writeVertex = (
+            view: DataView,
+            baseOffset: number,
+            x: number,
+            y: number,
+            z: number,
+            r: number,
+            g: number,
+            b: number,
+            a: number,
+            u: number,
+            v: number,
+        ): void => {
+            view.setFloat32(baseOffset + 0, x, true);
+            view.setFloat32(baseOffset + 4, y, true);
+            view.setFloat32(baseOffset + 8, z, true);
+            view.setUint8(baseOffset + 12, r);
+            view.setUint8(baseOffset + 13, g);
+            view.setUint8(baseOffset + 14, b);
+            view.setUint8(baseOffset + 15, a);
+            view.setFloat32(baseOffset + 16, u, true);
+            view.setFloat32(baseOffset + 20, v, true);
+        };
+        const getRibbonMegaState = (additiveBlend: boolean, depthTest: boolean) => {
+            if (additiveBlend) {
+                return depthTest ? this.ribbonAddMegaState : this.ribbonAddNoDepthMegaState;
+            }
+            return depthTest ? this.ribbonAlphaMegaState : this.ribbonAlphaNoDepthMegaState;
+        };
+        const clamp01 = (value: number, fallback: number): number => {
+            if (!Number.isFinite(value)) {
+                return fallback;
+            }
+            return Math.min(1, Math.max(0, value));
+        };
+
+        for (const primitive of this.modPrimitives) {
+            if (primitive.kind !== "ribbon") {
+                continue;
+            }
+            const points = primitive.points;
+            if (!points || points.length < 2) {
+                continue;
+            }
+            if (!Number.isFinite(primitive.width)) {
+                continue;
+            }
+            const width = Math.abs(primitive.width);
+            if (!(width > 1e-4)) {
+                continue;
+            }
+            const alpha = clamp01(primitive.alpha, 1);
+            if (alpha <= 0) {
+                continue;
+            }
+            const baseR = clamp01(primitive.colorR ?? 1, 1);
+            const baseG = clamp01(primitive.colorG ?? 1, 1);
+            const baseB = clamp01(primitive.colorB ?? 1, 1);
+            const r = Math.round(baseR * 255);
+            const g = Math.round(baseG * 255);
+            const b = Math.round(baseB * 255);
+            const a = Math.round(alpha * 255);
+            if (a <= 0) {
+                continue;
+            }
+            const uScaleRaw = primitive.uScale ?? 1;
+            const uScale = Number.isFinite(uScaleRaw) ? uScaleRaw : 1;
+
+            viewX.length = points.length;
+            viewY.length = points.length;
+            viewZ.length = points.length;
+            sideX.length = points.length;
+            sideY.length = points.length;
+            sideZ.length = points.length;
+            uCoords.length = points.length;
+            let totalLen = 0;
+            let centerX = 0;
+            let centerY = 0;
+            let centerZ = 0;
+            for (let i = 0; i < points.length; i += 1) {
+                const point = points[i];
+                scratchVec3a[0] = point.x;
+                scratchVec3a[1] = point.y;
+                scratchVec3a[2] = point.z;
+                transformVec3Mat4w1(scratchVec3b, viewFromWorld, scratchVec3a);
+                viewX[i] = scratchVec3b[0];
+                viewY[i] = scratchVec3b[1];
+                viewZ[i] = scratchVec3b[2];
+                centerX += scratchVec3b[0];
+                centerY += scratchVec3b[1];
+                centerZ += scratchVec3b[2];
+                if (i > 0) {
+                    const prev = points[i - 1];
+                    const dx = point.x - prev.x;
+                    const dy = point.y - prev.y;
+                    const dz = point.z - prev.z;
+                    totalLen += Math.hypot(dx, dy, dz);
+                }
+                uCoords[i] = totalLen;
+            }
+            const invLen = totalLen > 1e-5 ? 1 / totalLen : 0;
+            for (let i = 0; i < uCoords.length; i += 1) {
+                uCoords[i] = uCoords[i] * invLen * uScale;
+            }
+
+            let prevTangentX = 0;
+            let prevTangentY = 1;
+            let prevTangentZ = 0;
+            let prevSideX = 1;
+            let prevSideY = 0;
+            let prevSideZ = 0;
+            let hasPrevSide = false;
+            const last = points.length - 1;
+            for (let i = 0; i < points.length; i += 1) {
+                const prevIdx = i > 0 ? i - 1 : i;
+                const nextIdx = i < last ? i + 1 : i;
+                let tangentX = viewX[nextIdx] - viewX[prevIdx];
+                let tangentY = viewY[nextIdx] - viewY[prevIdx];
+                let tangentZ = viewZ[nextIdx] - viewZ[prevIdx];
+                const tangentLen = Math.hypot(tangentX, tangentY, tangentZ);
+                if (tangentLen > 1e-5) {
+                    const invTangentLen = 1 / tangentLen;
+                    tangentX *= invTangentLen;
+                    tangentY *= invTangentLen;
+                    tangentZ *= invTangentLen;
+                    prevTangentX = tangentX;
+                    prevTangentY = tangentY;
+                    prevTangentZ = tangentZ;
+                } else {
+                    tangentX = prevTangentX;
+                    tangentY = prevTangentY;
+                    tangentZ = prevTangentZ;
+                }
+
+                let toCamX = -viewX[i];
+                let toCamY = -viewY[i];
+                let toCamZ = -viewZ[i];
+                const toCamLen = Math.hypot(toCamX, toCamY, toCamZ);
+                if (toCamLen > 1e-5) {
+                    const invToCamLen = 1 / toCamLen;
+                    toCamX *= invToCamLen;
+                    toCamY *= invToCamLen;
+                    toCamZ *= invToCamLen;
+                } else {
+                    toCamX = 0;
+                    toCamY = 0;
+                    toCamZ = 1;
+                }
+
+                let outSideX = (tangentY * toCamZ) - (tangentZ * toCamY);
+                let outSideY = (tangentZ * toCamX) - (tangentX * toCamZ);
+                let outSideZ = (tangentX * toCamY) - (tangentY * toCamX);
+                let outSideLen = Math.hypot(outSideX, outSideY, outSideZ);
+                if (outSideLen <= 1e-5 && hasPrevSide) {
+                    outSideX = prevSideX;
+                    outSideY = prevSideY;
+                    outSideZ = prevSideZ;
+                    outSideLen = 1;
+                }
+                if (outSideLen <= 1e-5) {
+                    outSideX = -tangentZ;
+                    outSideY = 0;
+                    outSideZ = tangentX;
+                    outSideLen = Math.hypot(outSideX, outSideY, outSideZ);
+                }
+                if (outSideLen <= 1e-5) {
+                    outSideX = 1;
+                    outSideY = 0;
+                    outSideZ = 0;
+                    outSideLen = 1;
+                }
+                const invSideLen = 1 / outSideLen;
+                outSideX *= invSideLen;
+                outSideY *= invSideLen;
+                outSideZ *= invSideLen;
+                if (hasPrevSide) {
+                    const dot = (outSideX * prevSideX) + (outSideY * prevSideY) + (outSideZ * prevSideZ);
+                    if (dot < 0) {
+                        outSideX = -outSideX;
+                        outSideY = -outSideY;
+                        outSideZ = -outSideZ;
+                    }
+                }
+                sideX[i] = outSideX;
+                sideY[i] = outSideY;
+                sideZ[i] = outSideZ;
+                prevSideX = outSideX;
+                prevSideY = outSideY;
+                prevSideZ = outSideZ;
+                hasPrevSide = true;
+            }
+
+            const halfWidth = width * 0.5;
+            const segmentCount = points.length - 1;
+            const vertexCount = segmentCount * 6;
+            const vertexData = new ArrayBuffer(STREAK_VERTEX_SIZE * vertexCount);
+            const view = new DataView(vertexData);
+            let baseOffset = 0;
+            for (let i = 0; i < segmentCount; i += 1) {
+                const next = i + 1;
+                const offsetX0 = sideX[i] * halfWidth;
+                const offsetY0 = sideY[i] * halfWidth;
+                const offsetZ0 = sideZ[i] * halfWidth;
+                const offsetX1 = sideX[next] * halfWidth;
+                const offsetY1 = sideY[next] * halfWidth;
+                const offsetZ1 = sideZ[next] * halfWidth;
+                const u0 = uCoords[i];
+                const u1 = uCoords[next];
+                const x0l = viewX[i] + offsetX0;
+                const y0l = viewY[i] + offsetY0;
+                const z0l = viewZ[i] + offsetZ0;
+                const x0r = viewX[i] - offsetX0;
+                const y0r = viewY[i] - offsetY0;
+                const z0r = viewZ[i] - offsetZ0;
+                const x1l = viewX[next] + offsetX1;
+                const y1l = viewY[next] + offsetY1;
+                const z1l = viewZ[next] + offsetZ1;
+                const x1r = viewX[next] - offsetX1;
+                const y1r = viewY[next] - offsetY1;
+                const z1r = viewZ[next] - offsetZ1;
+                // Triangle 1
+                writeVertex(
+                    view,
+                    baseOffset,
+                    x0l,
+                    y0l,
+                    z0l,
+                    r,
+                    g,
+                    b,
+                    a,
+                    u0,
+                    0,
+                );
+                baseOffset += STREAK_VERTEX_SIZE;
+                writeVertex(
+                    view,
+                    baseOffset,
+                    x0r,
+                    y0r,
+                    z0r,
+                    r,
+                    g,
+                    b,
+                    a,
+                    u0,
+                    1,
+                );
+                baseOffset += STREAK_VERTEX_SIZE;
+                writeVertex(
+                    view,
+                    baseOffset,
+                    x1l,
+                    y1l,
+                    z1l,
+                    r,
+                    g,
+                    b,
+                    a,
+                    u1,
+                    0,
+                );
+                baseOffset += STREAK_VERTEX_SIZE;
+                // Triangle 2
+                writeVertex(
+                    view,
+                    baseOffset,
+                    x1l,
+                    y1l,
+                    z1l,
+                    r,
+                    g,
+                    b,
+                    a,
+                    u1,
+                    0,
+                );
+                baseOffset += STREAK_VERTEX_SIZE;
+                writeVertex(
+                    view,
+                    baseOffset,
+                    x0r,
+                    y0r,
+                    z0r,
+                    r,
+                    g,
+                    b,
+                    a,
+                    u0,
+                    1,
+                );
+                baseOffset += STREAK_VERTEX_SIZE;
+                writeVertex(
+                    view,
+                    baseOffset,
+                    x1r,
+                    y1r,
+                    z1r,
+                    r,
+                    g,
+                    b,
+                    a,
+                    u1,
+                    1,
+                );
+                baseOffset += STREAK_VERTEX_SIZE;
+            }
+
+            const vbuf = ctx.renderInstManager.gfxRenderCache.dynamicBufferCache.allocateData(
+                GfxBufferUsage.Vertex,
+                new Uint8Array(vertexData),
+            );
+            const renderInst = ctx.renderInstManager.newRenderInst();
+            renderInst.setBindingLayouts(gxBindingLayouts);
+            fillSceneParamsDataOnTemplate(renderInst, ctx.viewerInput, 0, this.worldState.time.getAnimTimeFrames());
+            renderInst.setGfxProgram(this.streakProgram);
+            renderInst.setPrimitiveTopology(GfxPrimitiveTopology.Triangles);
+            renderInst.setMegaStateFlags(getRibbonMegaState(primitive.additiveBlend === true, primitive.depthTest !== false));
+            renderInst.setVertexInput(this.streakInputLayout, [vbuf], null);
+            renderInst.setDrawCount(vertexCount);
+            renderInst.setSamplerBindingsFromTextureMappings([this.getStreakTextureMapping(primitive.textureName)]);
+            renderInst.setAllowSkippingIfPipelineNotReady(false);
+            const invPoints = 1 / points.length;
+            renderInst.sortKey = -Math.hypot(centerX * invPoints, centerY * invPoints, centerZ * invPoints);
+            ctx.translucentInstList.submitRenderInst(renderInst);
         }
     }
 
@@ -2243,6 +2697,14 @@ export class World {
         this.goalTapeModel?.destroy(device);
         this.shadowTextureCache.destroy(device);
         this.nlTextureCache?.destroy(device);
+        for (const [name, mapping] of this.streakTextureMappings.entries()) {
+            if (!this.streakExternalTextureOwned.has(name)) {
+                continue;
+            }
+            if (mapping.gfxTexture && mapping.gfxTexture !== this.streakDefaultTexture.gfxTexture) {
+                device.destroyTexture(mapping.gfxTexture);
+            }
+        }
         if (this.streakDefaultTexture.gfxTexture) {
             device.destroyTexture(this.streakDefaultTexture.gfxTexture);
         }

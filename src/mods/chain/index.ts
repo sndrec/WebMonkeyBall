@@ -30,7 +30,7 @@ const CHAIN_NODE_RADIUS = 0.25;
 const CHAIN_NODE_DAMPING = 0.992;
 const CHAIN_NODE_GRAVITY = 0.0035;
 const CHAIN_SUBSTEPS = 2;
-const CHAIN_CONSTRAINT_ITERS = 6;
+const CHAIN_CONSTRAINT_ITERS = 2;
 const CHAIN_LEASH_CORRECTION = 0.0;
 const CHAIN_LEASH_MAX_STEP = 0.15;
 const CHAIN_LEASH_VEL_BLEND = 0.2;
@@ -42,7 +42,8 @@ const CHAIN_ENDPOINT_SEGMENT_MAX_STEP = 0.12;
 const CHAIN_ENDPOINT_POS_BLEND = 0.5;
 const CHAIN_ENDPOINT_PREV_BLEND = 0.9;
 const CHAIN_ENDPOINT_VEL_BLEND = 0.1;
-const CHAIN_EFFECT_ID_MASK = 0x80000000;
+const CHAIN_RIBBON_WIDTH = 0.1;
+const CHAIN_RIBBON_TEXTURE = 'src/mods/chain/chain.png';
 
 const GOAL_SEQUENCE_FRAMES = 330;
 const GOAL_SKIP_TOTAL_FRAMES = 210;
@@ -332,11 +333,6 @@ function applyChainBallTransfer(ball: any, transfer: Vec3, endpoints: ChainNodeS
     endpoint.prevPos.y += posY * CHAIN_ENDPOINT_PREV_BLEND;
     endpoint.prevPos.z += posZ * CHAIN_ENDPOINT_PREV_BLEND;
   }
-}
-
-function getChainEffectId(link: ChainLinkState, segmentIndex: number) {
-  const base = (Math.imul(link.id, 31) + segmentIndex) >>> 0;
-  return (CHAIN_EFFECT_ID_MASK | (base & 0x7fffffff)) >>> 0;
 }
 
 function syncChainTopology(game: any, state: ChainState, players: any[], forceRebuild = false) {
@@ -913,7 +909,7 @@ function buildChainHooks(): ModHooks {
       }
       return true;
     },
-    onAppendEffectRender: ({ game, effects, alpha }) => {
+    onAppendRenderPrimitives: ({ game, primitives, alpha }) => {
       if (!isChainedTogetherMode(game)) {
         return;
       }
@@ -922,32 +918,31 @@ function buildChainHooks(): ModHooks {
         return;
       }
       for (const link of state.links) {
-        for (let i = 0; i < link.nodes.length - 1; i += 1) {
-          const nodeA = link.nodes[i];
-          const nodeB = link.nodes[i + 1];
-          const from = {
-            x: nodeA.prevPos.x + ((nodeA.pos.x - nodeA.prevPos.x) * alpha),
-            y: nodeA.prevPos.y + ((nodeA.pos.y - nodeA.prevPos.y) * alpha),
-            z: nodeA.prevPos.z + ((nodeA.pos.z - nodeA.prevPos.z) * alpha),
-          };
-          const to = {
-            x: nodeB.prevPos.x + ((nodeB.pos.x - nodeB.prevPos.x) * alpha),
-            y: nodeB.prevPos.y + ((nodeB.pos.y - nodeB.prevPos.y) * alpha),
-            z: nodeB.prevPos.z + ((nodeB.pos.z - nodeB.prevPos.z) * alpha),
-          };
-          effects.push({
-            kind: 'streak',
-            id: getChainEffectId(link, i),
-            pos: to,
-            prevPos: from,
-            scale: 1.5,
-            alpha: 0.85,
-            lifeRatio: 1,
-            colorR: 0.82,
-            colorG: 0.82,
-            colorB: 0.86,
-          });
+        if (link.nodes.length < 2) {
+          continue;
         }
+        const points = new Array(link.nodes.length);
+        for (let i = 0; i < link.nodes.length; i += 1) {
+          const node = link.nodes[i];
+          points[i] = {
+            x: node.prevPos.x + ((node.pos.x - node.prevPos.x) * alpha),
+            y: node.prevPos.y + ((node.pos.y - node.prevPos.y) * alpha),
+            z: node.prevPos.z + ((node.pos.z - node.prevPos.z) * alpha),
+          };
+        }
+        primitives.push({
+          kind: 'ribbon',
+          id: link.id >>> 0,
+          points,
+          width: CHAIN_RIBBON_WIDTH,
+          alpha: 0.92,
+          colorR: 0.78,
+          colorG: 0.79,
+          colorB: 0.82,
+          textureName: CHAIN_RIBBON_TEXTURE,
+          depthTest: true,
+          additiveBlend: false,
+        });
       }
     },
   };

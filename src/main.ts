@@ -500,6 +500,7 @@ export function runMainApp() {
     goalTapes: null,
     confetti: null,
     effects: null,
+    modPrimitives: null,
     switches: null,
     stageTilt: null,
   };

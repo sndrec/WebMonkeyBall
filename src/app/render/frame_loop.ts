@@ -135,6 +135,7 @@ export function startRenderLoop(deps: FrameLoopDeps) {
     deps.syncState.goalTapes = deps.game.getGoalTapeRenderState(interpolationAlpha);
     deps.syncState.confetti = deps.game.getConfettiRenderState(interpolationAlpha);
     deps.syncState.effects = deps.game.getEffectRenderState(interpolationAlpha);
+    deps.syncState.modPrimitives = deps.game.getModRenderPrimitiveState(interpolationAlpha);
     deps.syncState.switches = deps.game.getSwitchRenderState(interpolationAlpha);
     deps.syncState.stageTilt = deps.game.getStageTiltRenderState(interpolationAlpha);
     renderer.syncGameplayState(deps.syncState);
