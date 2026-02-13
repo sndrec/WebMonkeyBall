@@ -330,6 +330,56 @@ void main() {
     return renderCache.createProgramSimple(program);
 }
 
+function createStreakCutoutProgram(renderCache: GfxRenderCache): GfxProgram {
+    const vert = `
+${GfxShaderLibrary.MatrixLibrary}
+
+precision highp float;
+
+layout(std140) uniform ub_SceneParams {
+    Mat4x4 u_Projection;
+    vec4 u_Misc0;
+};
+
+layout(location = 0) in vec3 a_Position;
+layout(location = 1) in vec4 a_Color;
+layout(location = 2) in vec2 a_TexCoord;
+
+out vec4 v_Color;
+out vec2 v_TexCoord;
+
+void main() {
+    mat4 proj = UnpackMatrix(u_Projection);
+    gl_Position = proj * vec4(a_Position, 1.0);
+    v_Color = a_Color;
+    v_TexCoord = a_TexCoord;
+}
+`;
+
+    const frag = `
+precision mediump float;
+
+uniform sampler2D u_Texture;
+
+in vec4 v_Color;
+in vec2 v_TexCoord;
+
+out vec4 o_Color;
+
+void main() {
+    vec4 tex = texture(u_Texture, v_TexCoord);
+    vec4 color = v_Color * tex;
+    if (color.a <= 0.45) {
+        discard;
+    }
+    o_Color = vec4(color.rgb, 1.0);
+}
+`;
+
+    const program = preprocessProgram_GLSL(renderCache.device.queryVendorInfo(), vert, frag);
+    return renderCache.createProgramSimple(program);
+}
+
 function createMirrorFlatProgram(renderCache: GfxRenderCache): GfxProgram {
     const vert = `
 ${GfxShaderLibrary.MatrixLibrary}
@@ -732,6 +782,7 @@ export class World {
         })
     );
     private streakProgram!: GfxProgram;
+    private streakCutoutProgram!: GfxProgram;
     private streakInputLayout!: GfxInputLayout;
     private streakDefaultTexture = new GXTextureMapping();
     private streakTextureSources = new Map<string, TextureInputGX>();
@@ -781,6 +832,14 @@ export class World {
             blendMode: GfxBlendMode.Add,
             blendSrcFactor: GfxBlendFactor.SrcAlpha,
             blendDstFactor: GfxBlendFactor.One,
+            channelWriteMask: GfxChannelWriteMask.RGBA,
+        })
+    );
+    private ribbonCutoutMegaState = makeMegaState(
+        setAttachmentStateSimple({ depthWrite: true, cullMode: GfxCullMode.None }, {
+            blendMode: GfxBlendMode.Add,
+            blendSrcFactor: GfxBlendFactor.One,
+            blendDstFactor: GfxBlendFactor.Zero,
             channelWriteMask: GfxChannelWriteMask.RGBA,
         })
     );
@@ -1153,6 +1212,7 @@ export class World {
         this.shadowProgram = createShadowProgram(renderCache);
         this.shadowMegaState.depthWrite = false;
         this.streakProgram = createStreakProgram(renderCache);
+        this.streakCutoutProgram = createStreakCutoutProgram(renderCache);
         this.mirrorFlatProgram = createMirrorFlatProgram(renderCache);
         this.mirrorWavyProgram = createMirrorWavyProgram(renderCache);
         this.mirrorDistortProgram = createMirrorDistortProgram(renderCache);
@@ -1946,6 +2006,9 @@ export class World {
             }
             const uScaleRaw = primitive.uScale ?? 1;
             const uScale = Number.isFinite(uScaleRaw) ? uScaleRaw : 1;
+            const useAlphaClip = primitive.alphaClip === true
+                && primitive.additiveBlend !== true
+                && primitive.depthTest !== false;
 
             viewX.length = points.length;
             viewY.length = points.length;
@@ -2194,16 +2257,24 @@ export class World {
             const renderInst = ctx.renderInstManager.newRenderInst();
             renderInst.setBindingLayouts(gxBindingLayouts);
             fillSceneParamsDataOnTemplate(renderInst, ctx.viewerInput, 0, this.worldState.time.getAnimTimeFrames());
-            renderInst.setGfxProgram(this.streakProgram);
+            renderInst.setGfxProgram(useAlphaClip ? this.streakCutoutProgram : this.streakProgram);
             renderInst.setPrimitiveTopology(GfxPrimitiveTopology.Triangles);
-            renderInst.setMegaStateFlags(getRibbonMegaState(primitive.additiveBlend === true, primitive.depthTest !== false));
+            if (useAlphaClip) {
+                renderInst.setMegaStateFlags(this.ribbonCutoutMegaState);
+            } else {
+                renderInst.setMegaStateFlags(getRibbonMegaState(primitive.additiveBlend === true, primitive.depthTest !== false));
+            }
             renderInst.setVertexInput(this.streakInputLayout, [vbuf], null);
             renderInst.setDrawCount(vertexCount);
             renderInst.setSamplerBindingsFromTextureMappings([this.getStreakTextureMapping(primitive.textureName)]);
             renderInst.setAllowSkippingIfPipelineNotReady(false);
-            const invPoints = 1 / points.length;
-            renderInst.sortKey = -Math.hypot(centerX * invPoints, centerY * invPoints, centerZ * invPoints);
-            ctx.translucentInstList.submitRenderInst(renderInst);
+            if (useAlphaClip) {
+                ctx.opaqueInstList.submitRenderInst(renderInst);
+            } else {
+                const invPoints = 1 / points.length;
+                renderInst.sortKey = -Math.hypot(centerX * invPoints, centerY * invPoints, centerZ * invPoints);
+                ctx.translucentInstList.submitRenderInst(renderInst);
+            }
         }
     }
 

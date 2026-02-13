@@ -6,6 +6,7 @@ export type RibbonRenderPrimitive = {
   points: Vec3[];
   width: number;
   alpha: number;
+  alphaClip?: boolean;
   colorR?: number;
   colorG?: number;
   colorB?: number;

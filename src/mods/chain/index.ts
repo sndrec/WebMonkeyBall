@@ -149,6 +149,12 @@ function isChainedTogetherMode(game: any): boolean {
   return !!game.session?.isMultiplayer?.(game);
 }
 
+function hasBallDropStarted(game: any): boolean {
+  const introTimerFrames = Number.isFinite(game?.introTimerFrames) ? game.introTimerFrames : 0;
+  const dropFrames = Number.isFinite(game?.dropFrames) ? game.dropFrames : 0;
+  return introTimerFrames <= dropFrames;
+}
+
 function cloneVec3(source: Vec3): Vec3 {
   return {
     x: Number.isFinite(source?.x) ? source.x : 0,
@@ -875,8 +881,13 @@ function buildChainHooks(): ModHooks {
       }
       const state = getChainState(game as object);
       const sortedPlayers = getPlayersSorted(players as any[]);
-      syncChainTopology(game, state, sortedPlayers);
-      simulateChainedTogether(game, state, sortedPlayers);
+      if (hasBallDropStarted(game)) {
+        syncChainTopology(game, state, sortedPlayers);
+        simulateChainedTogether(game, state, sortedPlayers);
+      } else {
+        state.links = [];
+        state.topologyKey = '';
+      }
       updateChainedTogetherFalloutState(game, sortedPlayers, isBonusStage, resultReplayActive, stageInputEnabled);
       const localPlayer = game.getLocalPlayer?.();
       const replayFalloutActive = game.activeResultReplay?.kind === 'fallout';
@@ -913,6 +924,9 @@ function buildChainHooks(): ModHooks {
       if (!isChainedTogetherMode(game)) {
         return;
       }
+      if (!hasBallDropStarted(game)) {
+        return;
+      }
       const state = getChainState(game as object);
       if (state.links.length === 0) {
         return;
@@ -936,6 +950,7 @@ function buildChainHooks(): ModHooks {
           points,
           width: CHAIN_RIBBON_WIDTH,
           alpha: 0.92,
+          alphaClip: true,
           colorR: 0.78,
           colorG: 0.79,
           colorB: 0.82,
