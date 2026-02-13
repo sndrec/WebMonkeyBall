@@ -703,6 +703,15 @@ export class ModelInst implements ModelInterface {
                 return;
             }
         }
+        const clipPlaneNormal = ctx.clipPlaneNormal;
+        const clipPlanePoint = ctx.clipPlanePoint;
+        if (clipPlaneNormal && clipPlanePoint) {
+            vec3.sub(scratchVec3b, centerWorldSpace, clipPlanePoint);
+            const dist = vec3.dot(scratchVec3b, clipPlaneNormal);
+            if (dist < 0.0) {
+                return;
+            }
+        }
         for (let i = 0; i < this.meshes.length; i++) {
             this.meshes[i].prepareToRender(ctx, renderParams, this.forceCullMode);
         }
@@ -725,6 +734,15 @@ export class ModelInst implements ModelInterface {
             vec3.sub(scratchVec3b, centerWorldSpace, mirrorPlanePoint);
             const dist = vec3.dot(scratchVec3b, mirrorPlaneNormal);
             if (dist < -(this.modelData.boundSphereRadius * maxScale)) {
+                return;
+            }
+        }
+        const clipPlaneNormal = ctx.clipPlaneNormal;
+        const clipPlanePoint = ctx.clipPlanePoint;
+        if (clipPlaneNormal && clipPlanePoint) {
+            vec3.sub(scratchVec3b, centerWorldSpace, clipPlanePoint);
+            const dist = vec3.dot(scratchVec3b, clipPlaneNormal);
+            if (dist < 0.0) {
                 return;
             }
         }

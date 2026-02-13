@@ -1,5 +1,5 @@
 import { mat4, vec3 } from "gl-matrix";
-import { MathConstants, setMatrixTranslation, transformVec3Mat4w1 } from "../MathHelpers.js";
+import { MathConstants, setMatrixTranslation, transformVec3Mat4w0, transformVec3Mat4w1 } from "../MathHelpers.js";
 import { assertExists } from "../util.js";
 import { interpolateKeyframes, loopWrap } from "./Anim.js";
 import { ModelInst, RenderParams, RenderSort } from "./Model.js";
@@ -58,6 +58,9 @@ const SWITCH_MODEL_NAMES = [
     "BUTTON_FF",
     "BUTTON_FR",
 ];
+const WORMHOLE_NEAR_FADE_INNER_RADIUS_SCALE = 0.8;
+const WORMHOLE_NEAR_FADE_OUTER_RADIUS_SCALE = 2.0;
+const WORMHOLE_FADE_SIDE_NORMAL_LOCAL = vec3.fromValues(0, 0, -1);
 
 class StageModelInst {
     private worldFromModel: mat4 = mat4.create();
@@ -859,6 +862,39 @@ class Wormhole {
         this.surfaceModel = modelCache.getWormholeSurfaceModel();
     }
 
+    private computeNearCameraAlpha(viewFromModel: mat4): number {
+        const refModel = this.surfaceModel ?? this.model;
+        if (!refModel) {
+            return 1;
+        }
+        const centerView = scratchVec3a;
+        const sideNormalView = scratchVec3b;
+        transformVec3Mat4w1(centerView, viewFromModel, refModel.modelData.boundSphereCenter);
+        transformVec3Mat4w0(sideNormalView, viewFromModel, WORMHOLE_FADE_SIDE_NORMAL_LOCAL);
+        if (vec3.squaredLength(sideNormalView) > 1e-8) {
+            vec3.normalize(sideNormalView, sideNormalView);
+            const sideDot =
+                -centerView[0] * sideNormalView[0] -
+                centerView[1] * sideNormalView[1] -
+                centerView[2] * sideNormalView[2];
+            if (sideDot >= 0.0) {
+                // Camera is on the portal's front side; keep it opaque.
+                return 1;
+            }
+        }
+        const dist = vec3.length(centerView);
+        const radius = Math.max(refModel.modelData.boundSphereRadius, 1e-3);
+        const fadeStart = radius * WORMHOLE_NEAR_FADE_INNER_RADIUS_SCALE;
+        const fadeEnd = radius * WORMHOLE_NEAR_FADE_OUTER_RADIUS_SCALE;
+        if (dist <= fadeStart) {
+            return 0;
+        }
+        if (dist >= fadeEnd) {
+            return 1;
+        }
+        return (dist - fadeStart) / Math.max(fadeEnd - fadeStart, 1e-6);
+    }
+
     public prepareToRender(state: WorldState, ctx: RenderContext, viewFromAnimGroup: mat4): void {
         if (!this.model && !this.surfaceModel) {
             return;
@@ -878,11 +914,17 @@ class Wormhole {
 
         const base = scratchMat4b;
         mat4.copy(base, rp.viewFromModel);
+        const nearAlpha = this.computeNearCameraAlpha(base);
+        const disableDepthWriteForFade = nearAlpha < 0.999;
         if (!ctx.wormholeCapture) {
+            rp.alpha = nearAlpha;
+            rp.megaStateFlags = disableDepthWriteForFade ? { depthWrite: false } : undefined;
             this.model?.prepareToRender(ctx, rp);
         }
         if (!ctx.skipWormholeSurfaces && this.surfaceModel) {
             mat4.copy(rp.viewFromModel, base);
+            rp.alpha = nearAlpha;
+            rp.megaStateFlags = disableDepthWriteForFade ? { depthWrite: false } : undefined;
             this.surfaceModel.prepareToRender(ctx, rp);
         }
     }

@@ -4128,6 +4128,10 @@ export class GameCore {
                 transform: this.cloneNumericArray(ball.wormholeTransform, 16),
               });
               player.camera.applyWormholeTransform(ball.wormholeTransform);
+              if (player.id === this.localPlayerId) {
+                // Keep interpolation history in the same portal space to prevent a one-frame camera lerp pop.
+                this.syncCameraPose();
+              }
               ball.wormholeTransform = null;
             }
             ball.wormholeTraversal = null;

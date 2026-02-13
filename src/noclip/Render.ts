@@ -58,6 +58,8 @@ export type RenderContext = {
   mirrorCapture?: boolean;
   mirrorPlanePoint?: vec3;
   mirrorPlaneNormal?: vec3;
+  clipPlanePoint?: vec3;
+  clipPlaneNormal?: vec3;
   forceAlphaWrite?: boolean;
   skipWormholeSurfaces?: boolean;
   skipWormholeIds?: Set<number>;
@@ -190,6 +192,8 @@ const scratchDistortClipFromWorld = mat4.create();
 const scratchWormholeViewFromWorld = mat4.create();
 const scratchWormholeClipFromWorld = mat4.create();
 const scratchWormholeWorldFromView = mat4.create();
+const scratchWormholeClipPlanePoint = vec3.create();
+const scratchWormholeClipPlaneNormal = vec3.create();
 const mirrorFlipX = mat4.fromScaling(mat4.create(), [-1, 1, 1]);
 const WAVY_MIRROR_ALPHA = 0x60 / 0xff;
 const WORMHOLE_DEBUG_PREVIEW_ENABLED = true;
@@ -505,6 +509,11 @@ export class Renderer {
         this.activeWormholeSourceId = activeCapture.sourceId;
         this.activeWormholeDestId = activeCapture.destId;
         const skipWormholeIds = new Set<number>([activeCapture.destId]);
+        const hasWormholeClipPlane = this.world.getWormholeCaptureClipPlane(
+          activeCapture.destId,
+          scratchWormholeClipPlanePoint,
+          scratchWormholeClipPlaneNormal
+        );
         this.wormholeCaptureWidth = Math.max(1, viewerInput.backbufferWidth);
         this.wormholeCaptureHeight = Math.max(1, viewerInput.backbufferHeight);
 
@@ -547,6 +556,8 @@ export class Renderer {
             skipStageTilt: true,
             skipWormholeSurfaces: true,
             skipWormholeIds,
+            clipPlanePoint: hasWormholeClipPlane ? scratchWormholeClipPlanePoint : undefined,
+            clipPlaneNormal: hasWormholeClipPlane ? scratchWormholeClipPlaneNormal : undefined,
           };
           this.world.prepareToRender(wormholeCaptureCtx);
           this.renderHelper.renderInstManager.popTemplate();

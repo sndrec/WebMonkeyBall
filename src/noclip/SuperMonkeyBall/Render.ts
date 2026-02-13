@@ -1,4 +1,4 @@
-import type { vec3 } from 'gl-matrix';
+import type { mat4, vec3 } from 'gl-matrix';
 import type { GfxDevice } from '../gfx/platform/GfxPlatform.js';
 import type { GfxRenderInstList, GfxRenderInstManager } from '../gfx/render/GfxRenderInstManager.js';
 
@@ -18,6 +18,7 @@ export type RenderContext = {
   };
   opaqueInstList: GfxRenderInstList;
   translucentInstList: GfxRenderInstList;
+  viewFromWorld?: mat4;
   bgOpaqueInstList?: GfxRenderInstList;
   bgTranslucentInstList?: GfxRenderInstList;
   forceAlphaWrite?: boolean;
@@ -26,4 +27,9 @@ export type RenderContext = {
   mirrorCapture?: boolean;
   mirrorPlanePoint?: vec3;
   mirrorPlaneNormal?: vec3;
+  clipPlanePoint?: vec3;
+  clipPlaneNormal?: vec3;
+  skipWormholeSurfaces?: boolean;
+  skipWormholeIds?: Set<number>;
+  wormholeCapture?: boolean;
 };

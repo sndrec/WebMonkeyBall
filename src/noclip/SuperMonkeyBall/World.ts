@@ -181,6 +181,8 @@ const WORMHOLE_UP_LOCAL = vec3.fromValues(0, 1, 0);
 const WORMHOLE_FORWARD_SOURCE_LOCAL = vec3.fromValues(0, 0, -1);
 const WORMHOLE_FORWARD_DEST_LOCAL = vec3.fromValues(0, 0, 1);
 const WORMHOLE_LOCAL_THROUGH = mat4.fromYRotation(mat4.create(), Math.PI);
+const WORMHOLE_NEAR_FADE_INNER_RADIUS_SCALE = 0.8;
+const WORMHOLE_NEAR_FADE_OUTER_RADIUS_SCALE = 2.0;
 
 type WormholeRenderInfo = {
     id: number;
@@ -1701,6 +1703,64 @@ export class World {
         return true;
     }
 
+    private computeWormholeSurfaceNearAlpha(viewFromWorld: mat4, worldFromModel: mat4): number {
+        if (!this.wormholeSurfaceModel) {
+            return 1;
+        }
+        const scale = scratchVec3a;
+        mat4.getScaling(scale, worldFromModel);
+        const maxScale = Math.max(scale[0], scale[1], scale[2]);
+        const radius = Math.max(this.wormholeSurfaceModel.modelData.boundSphereRadius * maxScale, 1e-3);
+        const fadeStart = radius * WORMHOLE_NEAR_FADE_INNER_RADIUS_SCALE;
+        const fadeEnd = radius * WORMHOLE_NEAR_FADE_OUTER_RADIUS_SCALE;
+        const centerWorld = scratchVec3b;
+        const centerView = scratchVec3c;
+        const sideNormalWorld = scratchVec3d;
+        const sideNormalView = scratchVec3e;
+        transformVec3Mat4w1(centerWorld, worldFromModel, this.wormholeSurfaceModel.modelData.boundSphereCenter);
+        transformVec3Mat4w1(centerView, viewFromWorld, centerWorld);
+        transformVec3Mat4w0(sideNormalWorld, worldFromModel, WORMHOLE_FORWARD_SOURCE_LOCAL);
+        transformVec3Mat4w0(sideNormalView, viewFromWorld, sideNormalWorld);
+        if (vec3.squaredLength(sideNormalView) > 1e-8) {
+            vec3.normalize(sideNormalView, sideNormalView);
+            const sideDot =
+                -centerView[0] * sideNormalView[0] -
+                centerView[1] * sideNormalView[1] -
+                centerView[2] * sideNormalView[2];
+            if (sideDot >= 0.0) {
+                // Camera is on the portal's front side; keep it opaque.
+                return 1;
+            }
+        }
+        const dist = vec3.length(centerView);
+        if (dist <= fadeStart) {
+            return 0;
+        }
+        if (dist >= fadeEnd) {
+            return 1;
+        }
+        return (dist - fadeStart) / Math.max(fadeEnd - fadeStart, 1e-6);
+    }
+
+    public getWormholeCaptureClipPlane(wormholeId: number, outPoint: vec3, outNormal: vec3): boolean {
+        const wormhole = this.wormholeInfoById.get(wormholeId);
+        if (!wormhole) {
+            return false;
+        }
+        const worldFromModel = scratchWormholeMat4f;
+        if (!this.buildWormholeWorldFromModel(wormhole, worldFromModel)) {
+            return false;
+        }
+        transformVec3Mat4w1(outPoint, worldFromModel, WORMHOLE_OFFSET_LOCAL);
+        // Clip against the exit portal plane, keeping the side in front of the portal.
+        transformVec3Mat4w0(outNormal, worldFromModel, WORMHOLE_FORWARD_SOURCE_LOCAL);
+        if (vec3.squaredLength(outNormal) <= 1e-8) {
+            return false;
+        }
+        vec3.normalize(outNormal, outNormal);
+        return true;
+    }
+
     public hasRenderableWormholes(): boolean {
         if (!this.wormholeSurfaceModel || this.wormholeInfos.length === 0) {
             return false;
@@ -1841,6 +1901,7 @@ export class World {
         rp.sort = RenderSort.None;
         rp.lighting = this.worldState.lighting;
         mat4.mul(rp.viewFromModel, viewFromWorldTilted, worldFromModel);
+        const nearAlpha = this.computeWormholeSurfaceNearAlpha(viewFromWorldTilted, worldFromModel);
         this.wormholeSurfaceModel.prepareToRenderCustom(ctx, rp, (renderInst, renderParams): void => {
             renderInst.setBindingLayouts(gxBindingLayouts);
             fillSceneParamsDataOnTemplate(renderInst, ctx.viewerInput, 0, this.worldState.time.getAnimTimeFrames());
@@ -1850,7 +1911,7 @@ export class World {
             const d = renderInst.allocateUniformBufferF32(WORMHOLE_SURFACE_UBO_INDEX, WORMHOLE_SURFACE_UBO_WORDS);
             fillMatrix4x4(d, 0, renderParams.viewFromModel);
             fillMatrix4x4(d, 16, portalClipFromModel);
-            fillVec4(d, 32, 1, 0, 0, 0);
+            fillVec4(d, 32, nearAlpha, 0, 0, 0);
         });
     }
 
