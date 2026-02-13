@@ -355,7 +355,7 @@ export function runMainApp() {
   
   const perfEnabled = false;
   const perfBreakdownEnabled = false;
-  const collisionPerfEnabled = true;
+  const collisionPerfEnabled = new URLSearchParams(window.location.search).has('perfCollision');
   const perfLogEvery = 120;
   const audio = new AudioManager();
   const game = new Game({

@@ -6,7 +6,13 @@ import {
   INFO_FLAGS,
 } from '../../shared/constants/index.js';
 import type { Vec3 } from '../../shared/types.js';
-import { collideBallWithBonusWave, collideBallWithStage } from '../../collision.js';
+import {
+  collideBallWithBonusWave,
+  collideBallWithStage,
+  STAGE_COLLISION_TRI_PHASE_EDGE,
+  precomputeStageCollisionCellTris,
+  STAGE_COLLISION_TRI_PHASE_FACE,
+} from '../../collision.js';
 import { cosS16, sinS16, sqrt } from '../../math.js';
 import { startGoal } from '../../physics.js';
 
@@ -46,6 +52,7 @@ type ChainNodeState = {
   pos: Vec3;
   prevPos: Vec3;
   animGroupId: number;
+  stageCellTrisByAnimGroup?: Array<readonly number[] | null>;
 };
 
 type ChainLinkState = {
@@ -65,6 +72,16 @@ type ChainBallTransferState = {
 type ChainState = {
   links: ChainLinkState[];
   topologyKey: string;
+  faceOnlyCollisionOptions: {
+    trianglePhaseMask: number;
+    includePrimitives: boolean;
+    precomputedCellTrisByAnimGroup: Array<readonly number[] | null> | null;
+  };
+  fullCollisionOptions: {
+    trianglePhaseMask: number;
+    includePrimitives: boolean;
+    precomputedCellTrisByAnimGroup: Array<readonly number[] | null> | null;
+  };
   tmpPhysBall: {
     flags: number;
     pos: Vec3;
@@ -90,6 +107,16 @@ function getChainState(game: object): ChainState {
     state = {
       links: [],
       topologyKey: '',
+      faceOnlyCollisionOptions: {
+        trianglePhaseMask: STAGE_COLLISION_TRI_PHASE_FACE,
+        includePrimitives: true,
+        precomputedCellTrisByAnimGroup: null,
+      },
+      fullCollisionOptions: {
+        trianglePhaseMask: STAGE_COLLISION_TRI_PHASE_FACE | STAGE_COLLISION_TRI_PHASE_EDGE,
+        includePrimitives: true,
+        precomputedCellTrisByAnimGroup: null,
+      },
       tmpPhysBall: {
         flags: 0,
         pos: { x: 0, y: 0, z: 0 },
@@ -363,7 +390,13 @@ function syncChainTopology(game: any, state: ChainState, players: any[], forceRe
   state.links = nextLinks;
 }
 
-function applyChainNodeCollision(state: ChainState, game: any, node: ChainNodeState, stageFormat: string) {
+function applyChainNodeCollision(
+  state: ChainState,
+  game: any,
+  node: ChainNodeState,
+  stageFormat: string,
+  useFullCollision: boolean,
+) {
   if (!game.stage || !game.stageRuntime) {
     return;
   }
@@ -387,7 +420,9 @@ function applyChainNodeCollision(state: ChainState, game: any, node: ChainNodeSt
   phys.frictionMode = stageFormat === 'smb2' ? 'smb2' : 'smb1';
   phys.animGroupId = node.animGroupId ?? 0;
 
-  collideBallWithStage(phys, game.stage, game.stageRuntime.animGroups);
+  const collisionOptions = useFullCollision ? state.fullCollisionOptions : state.faceOnlyCollisionOptions;
+  collisionOptions.precomputedCellTrisByAnimGroup = node.stageCellTrisByAnimGroup ?? null;
+  collideBallWithStage(phys, game.stage, game.stageRuntime.animGroups, collisionOptions);
   collideBallWithBonusWave(phys, game.stageRuntime);
 
   node.pos.x = phys.pos.x;
@@ -481,16 +516,17 @@ function collideChainInteriorNodes(
   game: any,
   link: ChainLinkState,
   stageFormat: string,
+  useFullCollision: boolean,
   reverse = false,
 ) {
   if (!reverse) {
     for (let i = 1; i < link.nodes.length - 1; i += 1) {
-      applyChainNodeCollision(state, game, link.nodes[i], stageFormat);
+      applyChainNodeCollision(state, game, link.nodes[i], stageFormat, useFullCollision);
     }
     return;
   }
   for (let i = link.nodes.length - 2; i >= 1; i -= 1) {
-    applyChainNodeCollision(state, game, link.nodes[i], stageFormat);
+    applyChainNodeCollision(state, game, link.nodes[i], stageFormat, useFullCollision);
   }
 }
 
@@ -557,10 +593,22 @@ function simulateChainedTogether(game: any, state: ChainState, players: any[]) {
   }
   const gravity = game.world?.gravity ?? { x: 0, y: -1, z: 0 };
   const stageFormat = game.stageRuntime.stage?.format ?? game.stage?.format ?? 'smb1';
+  const animGroups = game.stageRuntime.animGroups;
   const substeps = Math.max(1, CHAIN_SUBSTEPS);
   const substepDamping = Math.pow(CHAIN_NODE_DAMPING, 1 / substeps);
   const substepGravity = CHAIN_NODE_GRAVITY / substeps;
   const segmentRestLen = CHAIN_LINK_LENGTH / CHAIN_SEGMENTS;
+  for (const link of state.links) {
+    for (let i = 1; i < link.nodes.length - 1; i += 1) {
+      const node = link.nodes[i];
+      node.stageCellTrisByAnimGroup = precomputeStageCollisionCellTris(
+        node.pos,
+        game.stage,
+        animGroups,
+        node.stageCellTrisByAnimGroup ?? null,
+      );
+    }
+  }
   for (let substep = 0; substep < substeps; substep += 1) {
     for (const link of state.links) {
       for (let i = 1; i < link.nodes.length - 1; i += 1) {
@@ -592,7 +640,8 @@ function simulateChainedTogether(game: any, state: ChainState, players: any[]) {
         // Solve constraints in both directions to avoid persistent endpoint-order bias.
         solveChainSegmentConstraints(link.nodes, segmentRestLen, false);
         solveChainSegmentConstraints(link.nodes, segmentRestLen, true);
-        collideChainInteriorNodes(state, game, link, stageFormat, (iter & 1) === 1);
+        const useFullCollision = iter === (CHAIN_CONSTRAINT_ITERS - 1);
+        collideChainInteriorNodes(state, game, link, stageFormat, useFullCollision, (iter & 1) === 1);
       }
     }
 

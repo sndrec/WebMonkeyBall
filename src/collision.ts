@@ -32,7 +32,13 @@ const BONUS_WAVE_ANGLE_SPEED = -1092.0;
 const BONUS_WAVE_START_FRAME = 30.0;
 const BONUS_WAVE_ANGLE_SCALE = 16384.0;
 const ANIM_PLAY_ONCE = 1;
+const GOAL_BROADPHASE_RADIUS = 6.0;
+const TRI_PHASE_FACE = 1;
+const TRI_PHASE_EDGE = 1 << 1;
+const TRI_PHASE_VERT = 1 << 2;
+const TRI_PHASE_FULL = TRI_PHASE_FACE | TRI_PHASE_EDGE | TRI_PHASE_VERT;
 const stack = new MatrixStack();
+const boundsStack = new MatrixStack();
 const switchLocalCenter = { x: 0, y: 0, z: 0 };
 const raycastLocalPos = { x: 0, y: 0, z: 0 };
 const raycastTriPos = { x: 0, y: 0, z: 0 };
@@ -185,7 +191,16 @@ const bonusWaveSurfaceScratch = {
   point: { x: 0, y: 0, z: 0 },
   normal: { x: 0, y: 1, z: 0 },
 };
+const triBoundsVert2Scratch = { x: 0, y: 0, z: 0 };
+const triBoundsVert3Scratch = { x: 0, y: 0, z: 0 };
+const groupBoundDeltaScratch = { x: 0, y: 0, z: 0 };
+const gridLookupLocalPos = { x: 0, y: 0, z: 0 };
+const stageAnimGroupBoundsCache = new WeakMap<object, Array<{ center: { x: number; y: number; z: number }; radius: number } | null>>();
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+export const STAGE_COLLISION_TRI_PHASE_FACE = TRI_PHASE_FACE;
+export const STAGE_COLLISION_TRI_PHASE_EDGE = TRI_PHASE_EDGE;
+export const STAGE_COLLISION_TRI_PHASE_FULL = TRI_PHASE_FULL;
 
 export const stageCollisionPerf = {
   enabled: false,
@@ -480,6 +495,155 @@ function coligridLookup(stageAg, x, z) {
     return null;
   }
   return stageAg.gridCellTris[cellZ * stageAg.gridCellCountX + cellX];
+}
+
+function computeStageAnimGroupBounds(stage) {
+  const bounds = new Array(stage.animGroupCount);
+  for (let animGroupId = 0; animGroupId < stage.animGroupCount; animGroupId += 1) {
+    const stageAg = stage.animGroups[animGroupId];
+    if (!stageAg) {
+      bounds[animGroupId] = null;
+      continue;
+    }
+
+    let hasBounds = false;
+    let minX = 0;
+    let minY = 0;
+    let minZ = 0;
+    let maxX = 0;
+    let maxY = 0;
+    let maxZ = 0;
+    const includePoint = (x, y, z, radius = 0) => {
+      const pxMin = x - radius;
+      const pyMin = y - radius;
+      const pzMin = z - radius;
+      const pxMax = x + radius;
+      const pyMax = y + radius;
+      const pzMax = z + radius;
+      if (!hasBounds) {
+        hasBounds = true;
+        minX = pxMin;
+        minY = pyMin;
+        minZ = pzMin;
+        maxX = pxMax;
+        maxY = pyMax;
+        maxZ = pzMax;
+        return;
+      }
+      if (pxMin < minX) minX = pxMin;
+      if (pyMin < minY) minY = pyMin;
+      if (pzMin < minZ) minZ = pzMin;
+      if (pxMax > maxX) maxX = pxMax;
+      if (pyMax > maxY) maxY = pyMax;
+      if (pzMax > maxZ) maxZ = pzMax;
+    };
+
+    for (const tri of stageAg.triangles ?? []) {
+      includePoint(tri.pos.x, tri.pos.y, tri.pos.z);
+      boundsStack.fromTranslate(tri.pos);
+      boundsStack.rotateY(tri.rot.y);
+      boundsStack.rotateX(tri.rot.x);
+      boundsStack.rotateZ(tri.rot.z);
+      triBoundsVert2Scratch.x = tri.vert2.x;
+      triBoundsVert2Scratch.y = tri.vert2.y;
+      triBoundsVert2Scratch.z = 0;
+      triBoundsVert3Scratch.x = tri.vert3.x;
+      triBoundsVert3Scratch.y = tri.vert3.y;
+      triBoundsVert3Scratch.z = 0;
+      boundsStack.tfPoint(triBoundsVert2Scratch, triBoundsVert2Scratch);
+      boundsStack.tfPoint(triBoundsVert3Scratch, triBoundsVert3Scratch);
+      includePoint(triBoundsVert2Scratch.x, triBoundsVert2Scratch.y, triBoundsVert2Scratch.z);
+      includePoint(triBoundsVert3Scratch.x, triBoundsVert3Scratch.y, triBoundsVert3Scratch.z);
+    }
+
+    for (const cone of stageAg.coliCones ?? []) {
+      const maxScale = cone.scale.x > cone.scale.y ? cone.scale.x : cone.scale.y;
+      includePoint(cone.pos.x, cone.pos.y, cone.pos.z, maxScale);
+    }
+    for (const sphere of stageAg.coliSpheres ?? []) {
+      includePoint(sphere.pos.x, sphere.pos.y, sphere.pos.z, sphere.radius);
+    }
+    for (const cylinder of stageAg.coliCylinders ?? []) {
+      includePoint(cylinder.pos.x, cylinder.pos.y, cylinder.pos.z, sqrt(sumSq2(cylinder.radius, cylinder.height)));
+    }
+    for (const goal of stageAg.goals ?? []) {
+      includePoint(goal.pos.x, goal.pos.y, goal.pos.z, GOAL_BROADPHASE_RADIUS);
+    }
+
+    if (!hasBounds) {
+      bounds[animGroupId] = null;
+      continue;
+    }
+    const cx = (minX + maxX) * 0.5;
+    const cy = (minY + maxY) * 0.5;
+    const cz = (minZ + maxZ) * 0.5;
+    const dx = maxX - cx;
+    const dy = maxY - cy;
+    const dz = maxZ - cz;
+    bounds[animGroupId] = {
+      center: { x: cx, y: cy, z: cz },
+      radius: sqrt(sumSq3(dx, dy, dz)),
+    };
+  }
+  return bounds;
+}
+
+function getStageAnimGroupBounds(stage) {
+  let bounds = stageAnimGroupBoundsCache.get(stage);
+  if (!bounds) {
+    bounds = computeStageAnimGroupBounds(stage);
+    stageAnimGroupBoundsCache.set(stage, bounds);
+  }
+  return bounds;
+}
+
+function broadphaseHitsAnimGroup(ball, groupBounds) {
+  if (!groupBounds) {
+    return false;
+  }
+  const combinedRadius = ball.radius + groupBounds.radius;
+  const combinedRadiusSq = combinedRadius * combinedRadius;
+  groupBoundDeltaScratch.x = ball.pos.x - groupBounds.center.x;
+  groupBoundDeltaScratch.y = ball.pos.y - groupBounds.center.y;
+  groupBoundDeltaScratch.z = ball.pos.z - groupBounds.center.z;
+  if (sumSq3(groupBoundDeltaScratch.x, groupBoundDeltaScratch.y, groupBoundDeltaScratch.z) <= combinedRadiusSq) {
+    return true;
+  }
+  groupBoundDeltaScratch.x = ball.prevPos.x - groupBounds.center.x;
+  groupBoundDeltaScratch.y = ball.prevPos.y - groupBounds.center.y;
+  groupBoundDeltaScratch.z = ball.prevPos.z - groupBounds.center.z;
+  if (sumSq3(groupBoundDeltaScratch.x, groupBoundDeltaScratch.y, groupBoundDeltaScratch.z) <= combinedRadiusSq) {
+    return true;
+  }
+  return intersectsMovingSpheres(
+    ball.prevPos,
+    ball.pos,
+    groupBounds.center,
+    groupBounds.center,
+    ball.radius,
+    groupBounds.radius,
+  );
+}
+
+export function precomputeStageCollisionCellTris(pos, stage, animGroups, out = null) {
+  const cache = out && out.length === stage.animGroupCount ? out : new Array(stage.animGroupCount);
+  for (let animGroupId = 0; animGroupId < stage.animGroupCount; animGroupId += 1) {
+    const stageAg = stage.animGroups[animGroupId];
+    if (!stageAg) {
+      cache[animGroupId] = null;
+      continue;
+    }
+    gridLookupLocalPos.x = pos.x;
+    gridLookupLocalPos.y = pos.y;
+    gridLookupLocalPos.z = pos.z;
+    const group = animGroups?.[animGroupId];
+    if (animGroupId !== 0 && group) {
+      boundsStack.fromMtx(group.transform);
+      boundsStack.rigidInvTfPoint(gridLookupLocalPos, gridLookupLocalPos);
+    }
+    cache[animGroupId] = coligridLookup(stageAg, gridLookupLocalPos.x, gridLookupLocalPos.z);
+  }
+  return cache;
 }
 
 export function raycastStageDown(pos, stageRuntime) {
@@ -1833,7 +1997,11 @@ export function collideBallWithBonusWave(ball, stageRuntime) {
   collideBallWithPlane(ball, surface);
 }
 
-export function collideBallWithStage(ball, stage, animGroups) {
+export function collideBallWithStage(ball, stage, animGroups, options = null) {
+  const triPhaseMask = options?.trianglePhaseMask ?? TRI_PHASE_FULL;
+  const includePrimitives = options?.includePrimitives !== false;
+  const precomputedCellTrisByAnimGroup = options?.precomputedCellTrisByAnimGroup ?? null;
+  const stageGroupBounds = getStageAnimGroupBounds(stage);
   const perf = stageCollisionPerf;
   const perfEnabled = perf.enabled;
   const totalStart = perfEnabled ? nowMs() : 0;
@@ -1856,6 +2024,14 @@ export function collideBallWithStage(ball, stage, animGroups) {
       animGroupsVisited += 1;
     }
     const stageAg = stage.animGroups[animGroupId];
+    if (!stageAg) {
+      continue;
+    }
+    const seesawState = animGroups[animGroupId]?.seesawState;
+    const groupBounds = stageGroupBounds[animGroupId];
+    if (!seesawState && !groupBounds) {
+      continue;
+    }
     if (animGroupId !== ball.animGroupId) {
       const t = perfEnabled ? nowMs() : 0;
       tfPhysballToAnimGroupSpace(ball, animGroupId, animGroups);
@@ -1864,7 +2040,6 @@ export function collideBallWithStage(ball, stage, animGroups) {
       }
     }
 
-    const seesawState = animGroups[animGroupId]?.seesawState;
     if (seesawState && stage.format !== 'smb2') {
       const t = perfEnabled ? nowMs() : 0;
       applySeesawCollision(ball, seesawState);
@@ -1872,9 +2047,14 @@ export function collideBallWithStage(ball, stage, animGroups) {
         seesawMs += nowMs() - t;
       }
     }
+    if (!groupBounds || !broadphaseHitsAnimGroup(ball, groupBounds)) {
+      continue;
+    }
 
     const lookupStart = perfEnabled ? nowMs() : 0;
-    const cellTris = coligridLookup(stageAg, ball.pos.x, ball.pos.z);
+    const cellTris = precomputedCellTrisByAnimGroup
+      ? (precomputedCellTrisByAnimGroup[animGroupId] ?? null)
+      : coligridLookup(stageAg, ball.pos.x, ball.pos.z);
     if (perfEnabled) {
       gridLookupMs += nowMs() - lookupStart;
     }
@@ -1883,29 +2063,38 @@ export function collideBallWithStage(ball, stage, animGroups) {
         cellHits += 1;
         trianglesTested += cellTris.length;
       }
-      let t = perfEnabled ? nowMs() : 0;
-      for (const triIndex of cellTris) {
-        collideBallWithTriFace(ball, stageAg.triangles[triIndex]);
+      if (triPhaseMask & TRI_PHASE_FACE) {
+        const t = perfEnabled ? nowMs() : 0;
+        for (const triIndex of cellTris) {
+          collideBallWithTriFace(ball, stageAg.triangles[triIndex]);
+        }
+        if (perfEnabled) {
+          triFaceMs += nowMs() - t;
+        }
       }
-      if (perfEnabled) {
-        triFaceMs += nowMs() - t;
-        t = nowMs();
+      if (triPhaseMask & TRI_PHASE_EDGE) {
+        const t = perfEnabled ? nowMs() : 0;
+        for (const triIndex of cellTris) {
+          collideBallWithTriEdges(ball, stageAg.triangles[triIndex]);
+        }
+        if (perfEnabled) {
+          triEdgeMs += nowMs() - t;
+        }
       }
-      for (const triIndex of cellTris) {
-        collideBallWithTriEdges(ball, stageAg.triangles[triIndex]);
-      }
-      if (perfEnabled) {
-        triEdgeMs += nowMs() - t;
-        t = nowMs();
-      }
-      for (const triIndex of cellTris) {
-        collideBallWithTriVerts(ball, stageAg.triangles[triIndex]);
-      }
-      if (perfEnabled) {
-        triVertMs += nowMs() - t;
+      if (triPhaseMask & TRI_PHASE_VERT) {
+        const t = perfEnabled ? nowMs() : 0;
+        for (const triIndex of cellTris) {
+          collideBallWithTriVerts(ball, stageAg.triangles[triIndex]);
+        }
+        if (perfEnabled) {
+          triVertMs += nowMs() - t;
+        }
       }
     }
 
+    if (!includePrimitives) {
+      continue;
+    }
     const primitiveStart = perfEnabled ? nowMs() : 0;
     for (const cone of stageAg.coliCones) {
       if (perfEnabled) {
@@ -1935,7 +2124,6 @@ export function collideBallWithStage(ball, stage, animGroups) {
       primitiveMs += nowMs() - primitiveStart;
     }
   }
-
   if (ball.animGroupId !== 0) {
     const t = perfEnabled ? nowMs() : 0;
     tfPhysballToAnimGroupSpace(ball, 0, animGroups);
