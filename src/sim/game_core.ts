@@ -1225,6 +1225,12 @@ export class GameCore {
       bananas: source.bananas ?? 0,
       wormholeCooldown: source.wormholeCooldown ?? 0,
       wormholeTransform: source.wormholeTransform ? this.cloneNumericArray(source.wormholeTransform, 16) : null,
+      wormholeTraversal: source.wormholeTraversal
+        ? {
+          srcWormholeId: source.wormholeTraversal.srcWormholeId ?? 0,
+          dstWormholeId: source.wormholeTraversal.dstWormholeId ?? 0,
+        }
+        : null,
       physBall: source.physBall
         ? {
           flags: source.physBall.flags ?? 0,
@@ -1972,6 +1978,14 @@ export class GameCore {
       }
     } else {
       target.wormholeTransform = null;
+    }
+    if (source.wormholeTraversal) {
+      target.wormholeTraversal = {
+        srcWormholeId: source.wormholeTraversal.srcWormholeId ?? 0,
+        dstWormholeId: source.wormholeTraversal.dstWormholeId ?? 0,
+      };
+    } else {
+      target.wormholeTraversal = null;
     }
     if (target.physBall && source.physBall) {
       const phys = target.physBall;
@@ -4086,6 +4100,12 @@ export class GameCore {
         }
         if (!timeoverActive) {
           segmentStart = breakdownEnabled ? nowMs() : 0;
+          const wormholeTeleports: Array<{
+            playerId: number;
+            srcWormholeId: number;
+            dstWormholeId: number;
+            transform: Float32Array;
+          }> = [];
           for (const player of simPlayers) {
             if (player.isSpectator || player.pendingSpawn) {
               continue;
@@ -4100,9 +4120,17 @@ export class GameCore {
             this.emitModHook('onBallUpdate', { game: this, playerId: player.id, ball });
             stepBall(ball, this.stageRuntime, player.world, !this.suppressVisualEffects);
             if (ball.wormholeTransform) {
+              const traversal = ball.wormholeTraversal;
+              wormholeTeleports.push({
+                playerId: player.id,
+                srcWormholeId: traversal?.srcWormholeId ?? 0,
+                dstWormholeId: traversal?.dstWormholeId ?? 0,
+                transform: this.cloneNumericArray(ball.wormholeTransform, 16),
+              });
               player.camera.applyWormholeTransform(ball.wormholeTransform);
               ball.wormholeTransform = null;
             }
+            ball.wormholeTraversal = null;
           }
           if (breakdownEnabled) {
             tickStepBallMs += nowMs() - segmentStart;
@@ -4116,6 +4144,7 @@ export class GameCore {
             stageInputEnabled,
             resultReplayActive,
             ringoutActive,
+            wormholeTeleports,
           });
           ringoutActive = postBall.ringoutActive;
           skipStandardRingout = postBall.skipStandardRingout;

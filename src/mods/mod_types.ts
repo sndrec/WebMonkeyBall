@@ -28,6 +28,12 @@ export type ModHooks = {
     stageInputEnabled: boolean;
     resultReplayActive: boolean;
     ringoutActive: boolean;
+    wormholeTeleports: Array<{
+      playerId: number;
+      srcWormholeId: number;
+      dstWormholeId: number;
+      transform: Float32Array;
+    }>;
   }) => { ringoutActive?: boolean; skipStandardRingout?: boolean } | void;
   onGoalHit?: (ctx: {
     game: unknown;

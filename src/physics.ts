@@ -183,6 +183,7 @@ export function createBallState() {
     },
     wormholeCooldown: 0,
     wormholeTransform: null,
+    wormholeTraversal: null,
     physBall: createPhysicsBall(),
   };
 }
@@ -264,6 +265,7 @@ export function resetBall(ball, startPos, startRotY = ball.startRotY, stageForma
   ball.prevOrientation.w = ball.orientation.w;
   ball.wormholeCooldown = 0;
   ball.wormholeTransform = null;
+  ball.wormholeTraversal = null;
   updateBallTransform(ball);
   ball.prevTransform.set(ball.transform);
 }
@@ -322,6 +324,7 @@ export function initBallForStage(ball, startPos, startRotY, stageFormat = 'smb1'
   ball.prevOrientation.w = ball.orientation.w;
   ball.wormholeCooldown = 0;
   ball.wormholeTransform = null;
+  ball.wormholeTraversal = null;
   updateBallTransform(ball);
   ball.prevTransform.set(ball.transform);
 }
@@ -361,6 +364,7 @@ export function startBallDrop(ball, frames = 24, stageFormat = 'smb1') {
   ball.apeFlags = 0;
   ball.wormholeCooldown = 0;
   ball.wormholeTransform = null;
+  ball.wormholeTraversal = null;
   updateBallTransform(ball);
   ball.prevTransform.set(ball.transform);
 }
@@ -1103,6 +1107,11 @@ function computeWormholeTransform(stageRuntime, srcWormhole, destWormhole, outMa
 }
 
 function teleportBallToWormhole(ball, stageRuntime, srcWormhole, destWormhole) {
+  const srcWormholeId = Number.isFinite(srcWormhole?._fileOffset) ? (srcWormhole._fileOffset | 0) : 0;
+  const dstWormholeId = Number.isFinite(destWormhole?._fileOffset) ? (destWormhole._fileOffset | 0) : 0;
+  const prevPosX = ball.pos.x;
+  const prevPosY = ball.pos.y;
+  const prevPosZ = ball.pos.z;
   const wormholeTf = wormholeTfScratch;
   if (!computeWormholeTransform(stageRuntime, srcWormhole, destWormhole, wormholeTf)) {
     const destPos = wormholeDestPosScratch;
@@ -1122,6 +1131,17 @@ function teleportBallToWormhole(ball, stageRuntime, srcWormhole, destWormhole) {
     ball.prevPos.z = destPos.z;
     updateBallTransform(ball);
     ball.prevTransform.set(ball.transform);
+    if (!ball.wormholeTransform) {
+      ball.wormholeTransform = mat4.create();
+    }
+    mat4.identity(ball.wormholeTransform);
+    ball.wormholeTransform[12] = destPos.x - prevPosX;
+    ball.wormholeTransform[13] = destPos.y - prevPosY;
+    ball.wormholeTransform[14] = destPos.z - prevPosZ;
+    ball.wormholeTraversal = {
+      srcWormholeId,
+      dstWormholeId,
+    };
     return;
   }
 
@@ -1156,6 +1176,10 @@ function teleportBallToWormhole(ball, stageRuntime, srcWormhole, destWormhole) {
     ball.wormholeTransform = mat4.create();
   }
   ball.wormholeTransform.set(wormholeTf);
+  ball.wormholeTraversal = {
+    srcWormholeId,
+    dstWormholeId,
+  };
 }
 
 function checkBallEnteredWormhole(ball, stageRuntime) {
