@@ -23,6 +23,7 @@ type BindMainUiDeps = {
   leaderboardsOpenButton: HTMLButtonElement | null;
   multiplayerBackButton: HTMLButtonElement | null;
   levelSelectOpenButton: HTMLButtonElement | null;
+  levelSelectConfirmButton: HTMLButtonElement | null;
   levelSelectBackButton: HTMLButtonElement | null;
   leaderboardsBackButton: HTMLButtonElement | null;
   settingsOpenButton: HTMLButtonElement | null;
@@ -157,6 +158,10 @@ export function bindMainUiControls(deps: BindMainUiDeps) {
 
   deps.levelSelectOpenButton?.addEventListener('click', () => {
     deps.onOpenLevelSelectMenu('main');
+  });
+
+  deps.levelSelectConfirmButton?.addEventListener('click', () => {
+    deps.onSetActiveMenu('main');
   });
 
   deps.levelSelectBackButton?.addEventListener('click', () => {

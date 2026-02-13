@@ -52,6 +52,7 @@ const GOAL_SPECTATE_DESTROY_FRAMES = 180;
 type ChainNodeState = {
   pos: Vec3;
   prevPos: Vec3;
+  renderPrevPos?: Vec3;
   animGroupId: number;
   stageCellTrisByAnimGroup?: Array<readonly number[] | null>;
 };
@@ -207,6 +208,7 @@ function createInitialChainNodes(start: Vec3, end: Vec3): ChainNodeState[] {
     nodes[i] = {
       pos: { x, y, z },
       prevPos: { x, y, z },
+      renderPrevPos: { x, y, z },
       animGroupId: 0,
     };
   }
@@ -375,6 +377,7 @@ function syncChainTopology(game: any, state: ChainState, players: any[], forceRe
       ? prev.nodes.map((node) => ({
         pos: cloneVec3(node.pos),
         prevPos: cloneVec3(node.prevPos),
+        renderPrevPos: cloneVec3(node.renderPrevPos ?? node.pos),
         animGroupId: node.animGroupId ?? 0,
       }))
       : createInitialChainNodes(playerA.ball.pos, playerB.ball.pos);
@@ -600,6 +603,17 @@ function simulateChainedTogether(game: any, state: ChainState, players: any[]) {
   const substepDamping = Math.pow(CHAIN_NODE_DAMPING, 1 / substeps);
   const substepGravity = CHAIN_NODE_GRAVITY / substeps;
   const segmentRestLen = CHAIN_LINK_LENGTH / CHAIN_SEGMENTS;
+  for (const link of state.links) {
+    for (const node of link.nodes) {
+      if (!node.renderPrevPos) {
+        node.renderPrevPos = cloneVec3(node.pos);
+      } else {
+        node.renderPrevPos.x = node.pos.x;
+        node.renderPrevPos.y = node.pos.y;
+        node.renderPrevPos.z = node.pos.z;
+      }
+    }
+  }
   for (const link of state.links) {
     for (let i = 1; i < link.nodes.length - 1; i += 1) {
       const node = link.nodes[i];
@@ -938,10 +952,11 @@ function buildChainHooks(): ModHooks {
         const points = new Array(link.nodes.length);
         for (let i = 0; i < link.nodes.length; i += 1) {
           const node = link.nodes[i];
+          const renderPrev = node.renderPrevPos ?? node.prevPos;
           points[i] = {
-            x: node.prevPos.x + ((node.pos.x - node.prevPos.x) * alpha),
-            y: node.prevPos.y + ((node.pos.y - node.prevPos.y) * alpha),
-            z: node.prevPos.z + ((node.pos.z - node.prevPos.z) * alpha),
+            x: renderPrev.x + ((node.pos.x - renderPrev.x) * alpha),
+            y: renderPrev.y + ((node.pos.y - renderPrev.y) * alpha),
+            z: renderPrev.z + ((node.pos.z - renderPrev.z) * alpha),
           };
         }
         primitives.push({

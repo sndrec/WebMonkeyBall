@@ -126,6 +126,8 @@ export class CourseSelectionController {
     if (!smb2StoryWorldSelect || !smb2StoryStageSelect) {
       return;
     }
+    const selectedWorld = Number(smb2StoryWorldSelect.value ?? 1);
+    const selectedStage = Number(smb2StoryStageSelect.value ?? 1);
     const { gameSource } = this.deps.resolveSelectedGameSource();
     const storyOrder = this.getSmb2LikeStoryOrder(gameSource);
     if (storyOrder.length === 0) {
@@ -138,7 +140,7 @@ export class CourseSelectionController {
       label: `World ${index + 1}`,
     }));
     setSelectOptions(smb2StoryWorldSelect, worldOptions);
-    const currentWorld = Math.max(0, Math.min(storyOrder.length - 1, Number(smb2StoryWorldSelect.value ?? 1) - 1));
+    const currentWorld = Math.max(0, Math.min(storyOrder.length - 1, selectedWorld - 1));
     smb2StoryWorldSelect.value = String(currentWorld + 1);
     const stageList = storyOrder[currentWorld] ?? [];
     const stageOptions = stageList.map((_: unknown, index: number) => ({
@@ -146,8 +148,10 @@ export class CourseSelectionController {
       label: `Stage ${index + 1}`,
     }));
     setSelectOptions(smb2StoryStageSelect, stageOptions);
-    const currentStage = Math.max(0, Math.min(stageList.length - 1, Number(smb2StoryStageSelect.value ?? 1) - 1));
-    smb2StoryStageSelect.value = String(currentStage + 1);
+    if (stageList.length > 0) {
+      const currentStage = Math.max(0, Math.min(stageList.length - 1, selectedStage - 1));
+      smb2StoryStageSelect.value = String(currentStage + 1);
+    }
   }
 
   updateSmb2ModeFields() {

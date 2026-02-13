@@ -25,6 +25,8 @@ type LobbyUiDeps = {
   lobbyChatPanel: HTMLElement | null;
   lobbyStartButton: HTMLButtonElement | null;
   levelSelectOpenButton: HTMLButtonElement | null;
+  levelSelectActions: HTMLElement | null;
+  levelSelectConfirmButton: HTMLButtonElement | null;
   lobbyStageInfo: HTMLElement | null;
   lobbyStageButton: HTMLButtonElement | null;
   lobbyStageActions: HTMLElement | null;
@@ -75,6 +77,13 @@ export class LobbyUiController {
 
   updateLevelSelectUi() {
     const showLobbyStage = !!(this.deps.netplayEnabled() && this.deps.lobbyRoom() && this.deps.netplayRole() === 'host');
+    const showSingleplayerConfirm = !showLobbyStage;
+    if (this.deps.levelSelectActions) {
+      this.deps.levelSelectActions.classList.toggle('hidden', !showSingleplayerConfirm);
+    }
+    if (this.deps.levelSelectConfirmButton) {
+      this.deps.levelSelectConfirmButton.disabled = !showSingleplayerConfirm;
+    }
     if (this.deps.lobbyStageActions) {
       this.deps.lobbyStageActions.classList.toggle('hidden', !showLobbyStage);
     }

@@ -77,6 +77,8 @@ export function collectMainDomRefs() {
   const multiplayerBackButton = document.getElementById('multiplayer-back') as HTMLButtonElement | null;
   const levelSelectOpenButton = document.getElementById('open-level-select') as HTMLButtonElement | null;
   const levelSelectBackButton = document.getElementById('level-select-back') as HTMLButtonElement | null;
+  const levelSelectActions = document.getElementById('level-select-actions') as HTMLElement | null;
+  const levelSelectConfirmButton = document.getElementById('level-select-confirm') as HTMLButtonElement | null;
   const leaderboardsOpenButton = document.getElementById('open-leaderboards') as HTMLButtonElement | null;
   const leaderboardsBackButton = document.getElementById('leaderboards-back') as HTMLButtonElement | null;
   const settingsOpenButton = document.getElementById('open-settings') as HTMLButtonElement | null;
@@ -216,6 +218,8 @@ export function collectMainDomRefs() {
     multiplayerBackButton,
     levelSelectOpenButton,
     levelSelectBackButton,
+    levelSelectActions,
+    levelSelectConfirmButton,
     leaderboardsOpenButton,
     leaderboardsBackButton,
     settingsOpenButton,
