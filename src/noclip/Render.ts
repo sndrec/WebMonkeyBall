@@ -6,12 +6,25 @@ import {
   makeBackbufferDescSimple,
   opaqueBlackFullClearRenderPassDescriptor,
 } from './gfx/helpers/RenderGraphHelpers.js';
-import { GfxDevice, GfxFormat } from './gfx/platform/GfxPlatform.js';
+import { fullscreenMegaState } from './gfx/helpers/GfxMegaStateDescriptorHelpers.js';
+import { GfxShaderLibrary } from './gfx/helpers/GfxShaderLibrary.js';
+import { fillVec4 } from './gfx/helpers/UniformBufferHelpers.js';
+import {
+  GfxDevice,
+  GfxFormat,
+  GfxMipFilterMode,
+  GfxTexFilterMode,
+  GfxWrapMode,
+  type GfxProgram,
+  type GfxSampler,
+} from './gfx/platform/GfxPlatform.js';
 import { GfxrAttachmentSlot, GfxrRenderTargetDescription } from './gfx/render/GfxRenderGraph.js';
 import {
   GfxRenderInstList,
   GfxRenderInstManager,
 } from './gfx/render/GfxRenderInstManager.js';
+import type { GfxRenderCache } from './gfx/render/GfxRenderCache.js';
+import { preprocessProgram_GLSL } from './gfx/shaderc/GfxShaderCompiler.js';
 import {
   GXRenderHelperGfx,
   fillSceneParamsDataOnTemplate,
@@ -38,6 +51,17 @@ export type RenderContext = {
   opaqueInstList: GfxRenderInstList;
   translucentInstList: GfxRenderInstList;
   viewFromWorld?: mat4;
+  bgOpaqueInstList?: GfxRenderInstList;
+  bgTranslucentInstList?: GfxRenderInstList;
+  skipMirrorModels?: boolean;
+  skipStageTilt?: boolean;
+  mirrorCapture?: boolean;
+  mirrorPlanePoint?: vec3;
+  mirrorPlaneNormal?: vec3;
+  forceAlphaWrite?: boolean;
+  skipWormholeSurfaces?: boolean;
+  skipWormholeIds?: Set<number>;
+  wormholeCapture?: boolean;
 };
 
 export type BallRenderState = {
@@ -163,8 +187,52 @@ const scratchMirrorWorldFromView = mat4.create();
 const scratchMirrorClipFromWorld = mat4.create();
 const scratchViewFromWorldTilted = mat4.create();
 const scratchDistortClipFromWorld = mat4.create();
+const scratchWormholeViewFromWorld = mat4.create();
+const scratchWormholeClipFromWorld = mat4.create();
+const scratchWormholeWorldFromView = mat4.create();
 const mirrorFlipX = mat4.fromScaling(mat4.create(), [-1, 1, 1]);
 const WAVY_MIRROR_ALPHA = 0x60 / 0xff;
+const WORMHOLE_DEBUG_PREVIEW_ENABLED = true;
+const WORMHOLE_DEBUG_PREVIEW_UBO_INDEX = 0;
+const WORMHOLE_DEBUG_PREVIEW_UBO_WORDS = 4;
+
+function createWormholeDebugPreviewProgram(device: GfxDevice, renderCache: GfxRenderCache): GfxProgram {
+  const vert = GfxShaderLibrary.fullscreenVS;
+  const frag = `
+uniform sampler2D u_Texture;
+
+layout(std140) uniform ub_DebugPreview {
+  vec4 u_Rect;
+};
+
+in vec2 v_TexCoord;
+out vec4 o_Color;
+
+void main() {
+  vec2 uv = v_TexCoord;
+  if (uv.x < u_Rect.x || uv.x > u_Rect.z || uv.y < u_Rect.y || uv.y > u_Rect.w) {
+    discard;
+  }
+
+  vec2 localUv = vec2(
+    (uv.x - u_Rect.x) / max(u_Rect.z - u_Rect.x, 1e-6),
+    (uv.y - u_Rect.y) / max(u_Rect.w - u_Rect.y, 1e-6)
+  );
+  localUv = clamp(localUv, vec2(0.0), vec2(1.0));
+  vec4 tex = texture(u_Texture, localUv);
+
+  float edgePx = 0.0035;
+  bool edge = localUv.x <= edgePx || localUv.x >= (1.0 - edgePx) || localUv.y <= edgePx || localUv.y >= (1.0 - edgePx);
+  if (edge) {
+    o_Color = vec4(1.0, 1.0, 0.0, 1.0);
+  } else {
+    o_Color = tex;
+  }
+}
+`;
+  const program = preprocessProgram_GLSL(device.queryVendorInfo(), vert, frag);
+  return renderCache.createProgramSimple(program);
+}
 
 function computeReflectionMatrix(out: mat4, planePoint: vec3, planeNormal: vec3): void {
   vec3.normalize(scratchMirrorPlaneNormal, planeNormal);
@@ -239,16 +307,34 @@ export class Renderer {
   private mirrorCaptureTranslucentInstList = new GfxRenderInstList();
   private mirrorOverlayInstList = new GfxRenderInstList();
   private mirrorDistortInstList = new GfxRenderInstList();
+  private wormholeCaptureOpaqueInstList = new GfxRenderInstList();
+  private wormholeCaptureTranslucentInstList = new GfxRenderInstList();
+  private wormholeOverlayInstList = new GfxRenderInstList();
   private mirrorCamera = new Camera();
+  private wormholeCamera = new Camera();
   private mirrorMode: MirrorMode = 'none';
   private mirrorCaptureWidth = 0;
   private mirrorCaptureHeight = 0;
   private mirrorNeedsDistort = false;
+  private wormholeCaptureWidth = 0;
+  private wormholeCaptureHeight = 0;
+  private activeWormholeSourceId: number | null = null;
+  private activeWormholeDestId: number | null = null;
+  private wormholeDebugPreviewProgram: GfxProgram;
+  private wormholeDebugPreviewSampler: GfxSampler;
   private lastExternalTimeFrames: number | null = null;
 
   constructor(device: GfxDevice, private stageData: StageData) {
     this.renderHelper = new GXRenderHelperGfx(device);
     this.world = new World(device, this.renderHelper.renderCache, stageData);
+    this.wormholeDebugPreviewProgram = createWormholeDebugPreviewProgram(device, this.renderHelper.renderCache);
+    this.wormholeDebugPreviewSampler = this.renderHelper.renderCache.createSampler({
+      wrapS: GfxWrapMode.Clamp,
+      wrapT: GfxWrapMode.Clamp,
+      minFilter: GfxTexFilterMode.Bilinear,
+      magFilter: GfxTexFilterMode.Bilinear,
+      mipFilter: GfxMipFilterMode.Nearest,
+    });
   }
 
   private prepareToRender(
@@ -262,6 +348,9 @@ export class Renderer {
     this.mirrorCaptureTranslucentInstList.reset();
     this.mirrorOverlayInstList.reset();
     this.mirrorDistortInstList.reset();
+    this.wormholeCaptureOpaqueInstList.reset();
+    this.wormholeCaptureTranslucentInstList.reset();
+    this.wormholeOverlayInstList.reset();
     this.world.update(viewerInput);
 
     viewerInput.camera.setClipPlanes(0.1);
@@ -270,6 +359,10 @@ export class Renderer {
     this.mirrorNeedsDistort = this.mirrorMode === 'wavy';
     this.mirrorCaptureWidth = 0;
     this.mirrorCaptureHeight = 0;
+    this.wormholeCaptureWidth = 0;
+    this.wormholeCaptureHeight = 0;
+    this.activeWormholeSourceId = null;
+    this.activeWormholeDestId = null;
 
     const mirrorPlaneMatrix = scratchMirrorReflection;
     if (this.mirrorMode !== 'none') {
@@ -401,6 +494,87 @@ export class Renderer {
       this.renderHelper.renderInstManager.popTemplate();
     }
 
+    if (this.world.hasRenderableWormholes()) {
+      const activeCapture = this.world.getActiveWormholeCapture(
+        viewerInput.camera.viewMatrix,
+        viewerInput.camera.projectionMatrix,
+        scratchWormholeViewFromWorld,
+        scratchWormholeClipFromWorld
+      );
+      if (activeCapture) {
+        this.activeWormholeSourceId = activeCapture.sourceId;
+        this.activeWormholeDestId = activeCapture.destId;
+        const skipWormholeIds = new Set<number>([activeCapture.destId]);
+        this.wormholeCaptureWidth = Math.max(1, viewerInput.backbufferWidth);
+        this.wormholeCaptureHeight = Math.max(1, viewerInput.backbufferHeight);
+
+        if (mat4.invert(scratchWormholeWorldFromView, scratchWormholeViewFromWorld)) {
+          this.wormholeCamera.clipSpaceNearZ = viewerInput.camera.clipSpaceNearZ;
+          if (viewerInput.camera.isOrthographic) {
+            this.wormholeCamera.setOrthographic(
+              viewerInput.camera.top,
+              viewerInput.camera.aspect,
+              viewerInput.camera.near,
+              viewerInput.camera.far
+            );
+          } else {
+            this.wormholeCamera.setPerspective(
+              viewerInput.camera.fovY,
+              viewerInput.camera.aspect,
+              viewerInput.camera.near,
+              viewerInput.camera.far
+            );
+          }
+          mat4.copy(this.wormholeCamera.worldMatrix, scratchWormholeWorldFromView);
+          this.wormholeCamera.worldMatrixUpdated();
+
+          const wormholeViewerInput: RenderContext['viewerInput'] = {
+            ...viewerInput,
+            camera: this.wormholeCamera,
+            backbufferWidth: this.wormholeCaptureWidth,
+            backbufferHeight: this.wormholeCaptureHeight,
+          };
+
+          const wormholeCaptureTemplate = this.renderHelper.pushTemplateRenderInst();
+          fillSceneParamsDataOnTemplate(wormholeCaptureTemplate, wormholeViewerInput, 0, this.world.getAnimTimeFrames());
+          const wormholeCaptureCtx: RenderContext = {
+            device,
+            renderInstManager: this.renderHelper.renderInstManager,
+            viewerInput: wormholeViewerInput,
+            opaqueInstList: this.wormholeCaptureOpaqueInstList,
+            translucentInstList: this.wormholeCaptureTranslucentInstList,
+            wormholeCapture: true,
+            skipStageTilt: true,
+            skipWormholeSurfaces: true,
+            skipWormholeIds,
+          };
+          this.world.prepareToRender(wormholeCaptureCtx);
+          this.renderHelper.renderInstManager.popTemplate();
+
+          const wormholeOverlayTemplate = this.renderHelper.pushTemplateRenderInst();
+          fillSceneParamsDataOnTemplate(wormholeOverlayTemplate, viewerInput, 0, this.world.getAnimTimeFrames());
+          const wormholeOverlayCtx: RenderContext = {
+            device,
+            renderInstManager: this.renderHelper.renderInstManager,
+            viewerInput,
+            opaqueInstList: this.wormholeOverlayInstList,
+            translucentInstList: this.wormholeOverlayInstList,
+          };
+          this.world.prepareToRenderWormholeSurface(
+            wormholeOverlayCtx,
+            viewerInput.camera.viewMatrix,
+            scratchWormholeClipFromWorld,
+            this.activeWormholeSourceId,
+            this.activeWormholeDestId
+          );
+          this.renderHelper.renderInstManager.popTemplate();
+        } else {
+          this.activeWormholeSourceId = null;
+          this.activeWormholeDestId = null;
+        }
+      }
+    }
+
     const template = this.renderHelper.pushTemplateRenderInst();
     fillSceneParamsDataOnTemplate(template, viewerInput, 0, this.world.getAnimTimeFrames());
 
@@ -437,6 +611,9 @@ export class Renderer {
     let mirrorDistortTargetID = null;
     let mirrorDistortResolveID = null;
     let mirrorDistortDepthTargetID = null;
+    let wormholeColorTargetID = null;
+    let wormholeColorResolveID = null;
+    let wormholeDepthTargetID = null;
     if (this.mirrorMode !== 'none') {
       const mirrorDims = { width: this.mirrorCaptureWidth, height: this.mirrorCaptureHeight };
       const mirrorColorDesc = new GfxrRenderTargetDescription(GfxFormat.U8_RGBA_RT);
@@ -491,6 +668,34 @@ export class Renderer {
       }
     }
 
+    if (this.activeWormholeSourceId !== null && this.wormholeCaptureWidth > 0 && this.wormholeCaptureHeight > 0) {
+      const wormholeDims = { width: this.wormholeCaptureWidth, height: this.wormholeCaptureHeight };
+      const wormholeColorDesc = new GfxrRenderTargetDescription(GfxFormat.U8_RGBA_RT);
+      wormholeColorDesc.setDimensions(wormholeDims.width, wormholeDims.height, 1);
+      wormholeColorDesc.clearColor = this.world.getClearColor();
+      wormholeColorDesc.clearDepth = opaqueBlackFullClearRenderPassDescriptor.clearDepth;
+      wormholeColorDesc.clearStencil = 0;
+      const wormholeDepthDesc = new GfxrRenderTargetDescription(GfxFormat.D24);
+      wormholeDepthDesc.setDimensions(wormholeDims.width, wormholeDims.height, 1);
+      wormholeDepthDesc.clearColor = 'load';
+      wormholeDepthDesc.clearDepth = opaqueBlackFullClearRenderPassDescriptor.clearDepth;
+      wormholeDepthDesc.clearStencil = 0;
+
+      wormholeColorTargetID = builder.createRenderTargetID(wormholeColorDesc, 'Wormhole Color');
+      wormholeDepthTargetID = builder.createRenderTargetID(wormholeDepthDesc, 'Wormhole Depth');
+
+      builder.pushPass((pass) => {
+        pass.setDebugName('Wormhole Capture');
+        pass.attachRenderTargetID(GfxrAttachmentSlot.Color0, wormholeColorTargetID!);
+        pass.attachRenderTargetID(GfxrAttachmentSlot.DepthStencil, wormholeDepthTargetID!);
+        pass.exec((passRenderer) => {
+          this.wormholeCaptureOpaqueInstList.drawOnPassRenderer(this.renderHelper.renderCache, passRenderer);
+          this.wormholeCaptureTranslucentInstList.drawOnPassRenderer(this.renderHelper.renderCache, passRenderer);
+        });
+      });
+      wormholeColorResolveID = builder.resolveRenderTarget(wormholeColorTargetID);
+    }
+
     const mainColorTargetID = builder.createRenderTargetID(mainColorDesc, 'Main Color');
     const mainDepthTargetID = builder.createRenderTargetID(mainDepthDesc, 'Main Depth');
     builder.pushPass((pass) => {
@@ -537,6 +742,69 @@ export class Renderer {
         this.translucentInstList.drawOnPassRenderer(this.renderHelper.renderCache, passRenderer);
       });
     });
+    if (this.activeWormholeSourceId !== null && wormholeColorResolveID !== null) {
+      builder.pushPass((pass) => {
+        pass.setDebugName('Wormhole Overlay');
+        pass.attachRenderTargetID(GfxrAttachmentSlot.Color0, mainColorTargetID);
+        pass.attachRenderTargetID(GfxrAttachmentSlot.DepthStencil, mainDepthTargetID);
+        pass.attachResolveTexture(wormholeColorResolveID!);
+        pass.exec((passRenderer, scope) => {
+          const wormholeTexture = scope.getResolveTextureForID(wormholeColorResolveID!);
+          this.wormholeOverlayInstList.resolveLateSamplerBinding('wormhole-color', {
+            gfxTexture: wormholeTexture,
+            gfxSampler: null,
+            lateBinding: null,
+          });
+          this.wormholeOverlayInstList.drawOnPassRenderer(this.renderHelper.renderCache, passRenderer);
+        });
+      });
+    }
+    if (WORMHOLE_DEBUG_PREVIEW_ENABLED && wormholeColorResolveID !== null) {
+      builder.pushPass((pass) => {
+        pass.setDebugName('Wormhole Debug Preview');
+        pass.attachRenderTargetID(GfxrAttachmentSlot.Color0, mainColorTargetID);
+        pass.attachRenderTargetID(GfxrAttachmentSlot.DepthStencil, mainDepthTargetID);
+        pass.attachResolveTexture(wormholeColorResolveID);
+
+        const srcWidth = Math.max(1, this.wormholeCaptureWidth);
+        const srcHeight = Math.max(1, this.wormholeCaptureHeight);
+        let previewWidth = 0.32;
+        let previewHeight = previewWidth * (srcHeight / srcWidth);
+        const maxPreviewHeight = 0.32;
+        if (previewHeight > maxPreviewHeight) {
+          previewHeight = maxPreviewHeight;
+          previewWidth = previewHeight * (srcWidth / srcHeight);
+        }
+        const pad = 0.015;
+        const x1 = 1.0 - pad;
+        const x0 = Math.max(pad, x1 - previewWidth);
+        const y0 = pad;
+        const y1 = Math.min(1.0 - pad, y0 + previewHeight);
+
+        const renderInst = this.renderHelper.renderInstManager.newRenderInst();
+        renderInst.setUniformBuffer(this.renderHelper.uniformBuffer);
+        renderInst.setAllowSkippingIfPipelineNotReady(false);
+        renderInst.setMegaStateFlags(fullscreenMegaState);
+        renderInst.setBindingLayouts([{ numUniformBuffers: 1, numSamplers: 1 }]);
+        renderInst.setDrawCount(3);
+        renderInst.setGfxProgram(this.wormholeDebugPreviewProgram);
+        const d = renderInst.allocateUniformBufferF32(
+          WORMHOLE_DEBUG_PREVIEW_UBO_INDEX,
+          WORMHOLE_DEBUG_PREVIEW_UBO_WORDS
+        );
+        fillVec4(d, 0, x0, y0, x1, y1);
+
+        pass.exec((passRenderer, scope) => {
+          const wormholeTexture = scope.getResolveTextureForID(wormholeColorResolveID);
+          renderInst.setSamplerBindingsFromTextureMappings([{
+            gfxTexture: wormholeTexture,
+            gfxSampler: this.wormholeDebugPreviewSampler,
+            lateBinding: null,
+          }]);
+          renderInst.drawOnPass(this.renderHelper.renderCache, passRenderer);
+        });
+      });
+    }
     this.renderHelper.antialiasingSupport.pushPasses(
       builder,
       viewerInput,

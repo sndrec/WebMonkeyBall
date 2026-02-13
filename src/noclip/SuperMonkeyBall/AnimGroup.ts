@@ -863,6 +863,10 @@ class Wormhole {
         if (!this.model && !this.surfaceModel) {
             return;
         }
+        const wormholeId = this.wormholeData.wormholeId;
+        if (wormholeId !== undefined && ctx.skipWormholeIds?.has(wormholeId)) {
+            return;
+        }
         const rp = scratchRenderParams;
         rp.reset();
         rp.lighting = state.lighting;
@@ -874,8 +878,10 @@ class Wormhole {
 
         const base = scratchMat4b;
         mat4.copy(base, rp.viewFromModel);
-        this.model?.prepareToRender(ctx, rp);
-        if (this.surfaceModel) {
+        if (!ctx.wormholeCapture) {
+            this.model?.prepareToRender(ctx, rp);
+        }
+        if (!ctx.skipWormholeSurfaces && this.surfaceModel) {
             mat4.copy(rp.viewFromModel, base);
             this.surfaceModel.prepareToRender(ctx, rp);
         }

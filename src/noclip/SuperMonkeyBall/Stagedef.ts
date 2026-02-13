@@ -319,6 +319,9 @@ export type ColiCylinder = {
 export type Wormhole = {
     pos: vec3;
     rot: vec3;
+    wormholeId?: number;
+    destWormholeId?: number | null;
+    animGroupIndex?: number;
 };
 
 export type InitBallPose = {

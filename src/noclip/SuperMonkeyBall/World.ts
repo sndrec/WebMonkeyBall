@@ -135,6 +135,9 @@ const MIRROR_WAVY_UBO_INDEX = 1;
 const MIRROR_WAVY_UBO_WORDS = 60;
 const MIRROR_DISTORT_UBO_INDEX = 1;
 const MIRROR_DISTORT_UBO_WORDS = 16;
+const WORMHOLE_SURFACE_UBO_INDEX = 1;
+const WORMHOLE_SURFACE_UBO_WORDS = 36;
+const WORMHOLE_VIEW_OFFSET_Y = 2.2;
 const WAVY_MIRROR_PLANE_Y = 0.02;
 const scratchRenderParams = new RenderParams();
 const scratchTiltedView = mat4.create();
@@ -162,6 +165,30 @@ const scratchMirrorMat4c = mat4.create();
 const scratchMirrorMat4d = mat4.create();
 const scratchMirrorMat4e = mat4.create();
 const scratchMirrorVec3a = vec3.create();
+const scratchWormholeMat4a = mat4.create();
+const scratchWormholeMat4b = mat4.create();
+const scratchWormholeMat4c = mat4.create();
+const scratchWormholeMat4d = mat4.create();
+const scratchWormholeMat4e = mat4.create();
+const scratchWormholeMat4f = mat4.create();
+const scratchWormholeMat4g = mat4.create();
+const scratchWormholeVec3a = vec3.create();
+const scratchWormholeVec3b = vec3.create();
+const scratchWormholeVec3c = vec3.create();
+const scratchWormholeVec3d = vec3.create();
+const WORMHOLE_OFFSET_LOCAL = vec3.fromValues(0, WORMHOLE_VIEW_OFFSET_Y, 0);
+const WORMHOLE_UP_LOCAL = vec3.fromValues(0, 1, 0);
+const WORMHOLE_FORWARD_SOURCE_LOCAL = vec3.fromValues(0, 0, -1);
+const WORMHOLE_FORWARD_DEST_LOCAL = vec3.fromValues(0, 0, 1);
+const WORMHOLE_LOCAL_THROUGH = mat4.fromYRotation(mat4.create(), Math.PI);
+
+type WormholeRenderInfo = {
+    id: number;
+    destId: number | null;
+    animGroupIndex: number;
+    pos: vec3;
+    rot: vec3;
+};
 
 function getNlModelInst(
     device: GfxDevice,
@@ -616,6 +643,77 @@ void main() {
     return renderCache.createProgramSimple(program);
 }
 
+function createWormholeSurfaceProgram(renderCache: GfxRenderCache): GfxProgram {
+    const vert = `
+${GfxShaderLibrary.MatrixLibrary}
+
+layout(std140) uniform ub_SceneParams {
+    Mat4x4 u_Projection;
+    vec4 u_Misc0;
+};
+
+layout(std140) uniform ub_WormholeParams {
+    Mat4x4 u_ViewFromModel;
+    Mat4x4 u_PortalClipFromModel;
+    vec4 u_Params;
+};
+
+layout(location = 0) in vec4 a_Position;
+layout(location = 6) in vec4 a_Color;
+
+out vec4 v_PortalClip;
+out vec4 v_Color;
+
+void main() {
+    mat4 viewFromModel = UnpackMatrix(u_ViewFromModel);
+    vec4 posView = viewFromModel * vec4(a_Position.xyz, 1.0);
+    gl_Position = UnpackMatrix(u_Projection) * posView;
+    v_PortalClip = UnpackMatrix(u_PortalClipFromModel) * vec4(a_Position.xyz, 1.0);
+    v_Color = a_Color;
+}
+`;
+
+    const frag = `
+${GfxShaderLibrary.MatrixLibrary}
+
+precision highp float;
+
+layout(std140) uniform ub_WormholeParams {
+    Mat4x4 u_ViewFromModel;
+    Mat4x4 u_PortalClipFromModel;
+    vec4 u_Params;
+};
+
+uniform sampler2D u_PortalTexture;
+
+in vec4 v_PortalClip;
+in vec4 v_Color;
+
+out vec4 o_Color;
+
+vec2 Project(vec4 clipPos) {
+    vec2 uv = clipPos.xy / clipPos.w;
+    return uv * 0.5 + vec2(0.5);
+}
+
+void main() {
+    if (v_PortalClip.w <= 0.0) {
+        discard;
+    }
+    vec2 uv = clamp(Project(v_PortalClip), 0.0, 1.0);
+    vec4 tex = texture(u_PortalTexture, uv);
+    float alpha = clamp(u_Params.x * v_Color.a, 0.0, 1.0);
+    if (alpha <= 0.0) {
+        discard;
+    }
+    o_Color = vec4(tex.rgb, alpha);
+}
+`;
+
+    const program = preprocessProgram_GLSL(renderCache.device.queryVendorInfo(), vert, frag);
+    return renderCache.createProgramSimple(program);
+}
+
 function collectStreakTextures(textureSources: Map<string, TextureInputGX>, gma: Gma.Gma): void {
     for (const model of gma.nameMap.values()) {
         for (const tevLayer of model.tevLayers) {
@@ -851,6 +949,11 @@ export class World {
     private mirrorGradMapping = new GXTextureMapping();
     private mirrorGradOwnsTexture = false;
     private mirrorModelNames = new Set<string>();
+    private wormholeSurfaceProgram!: GfxProgram;
+    private wormholeColorMapping = new GXTextureMapping();
+    private wormholeSurfaceModel: ModelInst | null = null;
+    private wormholeInfos: WormholeRenderInfo[] = [];
+    private wormholeInfoById = new Map<number, WormholeRenderInfo>();
     private mirrorFlatMegaState = makeMegaState(
         setAttachmentStateSimple({ depthWrite: false }, {
             blendMode: GfxBlendMode.Add,
@@ -872,6 +975,14 @@ export class World {
             blendMode: GfxBlendMode.Add,
             blendSrcFactor: GfxBlendFactor.One,
             blendDstFactor: GfxBlendFactor.Zero,
+            channelWriteMask: GfxChannelWriteMask.RGBA,
+        })
+    );
+    private wormholeSurfaceMegaState = makeMegaState(
+        setAttachmentStateSimple({ depthWrite: false, cullMode: GfxCullMode.Front }, {
+            blendMode: GfxBlendMode.Add,
+            blendSrcFactor: GfxBlendFactor.SrcAlpha,
+            blendDstFactor: GfxBlendFactor.OneMinusSrcAlpha,
             channelWriteMask: GfxChannelWriteMask.RGBA,
         })
     );
@@ -1168,6 +1279,32 @@ export class World {
                     resolveStageModel
                 )
         );
+        this.wormholeSurfaceModel =
+            this.worldState.modelCache.getWormholeSurfaceModel()
+            ?? this.worldState.modelCache.getWormholeModel();
+        let fallbackWormholeId = 1;
+        for (let groupIndex = 0; groupIndex < stageData.stagedef.animGroups.length; groupIndex++) {
+            const group = stageData.stagedef.animGroups[groupIndex];
+            for (const wormhole of group.wormholes ?? []) {
+                const wormholeId = wormhole.wormholeId ?? fallbackWormholeId++;
+                const existing = this.wormholeInfoById.get(wormholeId);
+                if (existing) {
+                    if (existing.destId === null && wormhole.destWormholeId !== undefined) {
+                        existing.destId = wormhole.destWormholeId ?? null;
+                    }
+                    continue;
+                }
+                const info: WormholeRenderInfo = {
+                    id: wormholeId,
+                    destId: wormhole.destWormholeId ?? null,
+                    animGroupIndex: wormhole.animGroupIndex ?? groupIndex,
+                    pos: vec3.clone(wormhole.pos),
+                    rot: vec3.clone(wormhole.rot),
+                };
+                this.wormholeInfoById.set(wormholeId, info);
+                this.wormholeInfos.push(info);
+            }
+        }
         const mirrors = stageData.stagedef.mirrors ?? [];
         for (const mirror of mirrors) {
             this.mirrorModelNames.add(mirror.modelName);
@@ -1216,6 +1353,7 @@ export class World {
         this.mirrorFlatProgram = createMirrorFlatProgram(renderCache);
         this.mirrorWavyProgram = createMirrorWavyProgram(renderCache);
         this.mirrorDistortProgram = createMirrorDistortProgram(renderCache);
+        this.wormholeSurfaceProgram = createWormholeSurfaceProgram(renderCache);
         const streakInputLayoutDesc: GfxInputLayoutDescriptor = {
             vertexBufferDescriptors: [
                 { byteStride: STREAK_VERTEX_SIZE, frequency: GfxVertexBufferFrequency.PerVertex },
@@ -1255,6 +1393,8 @@ export class World {
         this.mirrorColorMapping.lateBinding = "mirror-color";
         this.mirrorDistortMapping.gfxSampler = device.createSampler(mirrorSamplerDesc);
         this.mirrorDistortMapping.lateBinding = "mirror-distort";
+        this.wormholeColorMapping.gfxSampler = device.createSampler(mirrorSamplerDesc);
+        this.wormholeColorMapping.lateBinding = "wormhole-color";
         this.mirrorGradMapping.gfxSampler = device.createSampler(mirrorSamplerDesc);
         const mirrorGradModel = stageData.commonGma.idMap.get(CommonModelID.gb_grad);
         const mirrorGradTex = mirrorGradModel?.tevLayers[0]?.gxTexture ?? null;
@@ -1514,7 +1654,7 @@ export class World {
         this.drawProjectedShadow(stageCtx, viewFromWorldTilted);
         this.drawConfetti(stageCtx, viewFromWorldTilted);
         this.drawModPrimitives(stageCtx, viewFromWorldTilted);
-        if (!ctx.mirrorCapture) {
+        if (!ctx.mirrorCapture && !ctx.wormholeCapture) {
             this.drawEffects(stageCtx, viewFromWorldTilted, viewFromWorldPrev);
         }
         for (let i = 0; i < this.fgObjects.length; i++) {
@@ -1525,6 +1665,193 @@ export class World {
         for (let i = 0; i < this.balls.length; i++) {
             this.balls[i].prepareToRender(this.worldState, ballCtx);
         }
+    }
+
+    private buildWormholeWorldFromModel(info: WormholeRenderInfo, out: mat4): boolean {
+        const animGroup = this.animGroups[info.animGroupIndex];
+        if (!animGroup) {
+            return false;
+        }
+        mat4.fromTranslation(out, info.pos);
+        mat4.rotateZ(out, out, S16_TO_RADIANS * info.rot[2]);
+        mat4.rotateY(out, out, S16_TO_RADIANS * info.rot[1]);
+        mat4.rotateX(out, out, S16_TO_RADIANS * info.rot[0]);
+        mat4.mul(out, animGroup.getWorldFromAg(), out);
+        return true;
+    }
+
+    private buildWormholeLookAt(info: WormholeRenderInfo, forwardLocal: vec3, out: mat4): boolean {
+        const worldFromModel = scratchWormholeMat4f;
+        if (!this.buildWormholeWorldFromModel(info, worldFromModel)) {
+            return false;
+        }
+        const eye = scratchWormholeVec3a;
+        const up = scratchWormholeVec3b;
+        const target = scratchWormholeVec3c;
+        const forwardWithOffset = scratchWormholeVec3d;
+        transformVec3Mat4w1(eye, worldFromModel, WORMHOLE_OFFSET_LOCAL);
+        transformVec3Mat4w0(up, worldFromModel, WORMHOLE_UP_LOCAL);
+        if (vec3.squaredLength(up) <= 1e-8) {
+            return false;
+        }
+        vec3.normalize(up, up);
+        vec3.add(forwardWithOffset, WORMHOLE_OFFSET_LOCAL, forwardLocal);
+        transformVec3Mat4w1(target, worldFromModel, forwardWithOffset);
+        mat4.lookAt(out, eye, target, up);
+        return true;
+    }
+
+    public hasRenderableWormholes(): boolean {
+        if (!this.wormholeSurfaceModel || this.wormholeInfos.length === 0) {
+            return false;
+        }
+        for (const wormhole of this.wormholeInfos) {
+            if (wormhole.destId !== null && this.wormholeInfoById.has(wormhole.destId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public getActiveWormholeCapture(
+        viewFromWorld: mat4,
+        projection: mat4,
+        outCaptureViewFromWorld: mat4,
+        outPortalClipFromWorld: mat4
+    ): { sourceId: number; destId: number } | null {
+        if (!this.hasRenderableWormholes()) {
+            return null;
+        }
+
+        const viewFromWorldTilted = this.getTiltedViewMatrix(viewFromWorld, scratchWormholeMat4a);
+        const worldFromView = scratchWormholeMat4b;
+        if (!mat4.invert(worldFromView, viewFromWorldTilted)) {
+            return null;
+        }
+
+        const cameraPos = scratchWormholeVec3a;
+        const cameraForward = scratchWormholeVec3b;
+        mat4.getTranslation(cameraPos, worldFromView);
+        transformVec3Mat4w0(cameraForward, worldFromView, WORMHOLE_FORWARD_SOURCE_LOCAL);
+        if (vec3.squaredLength(cameraForward) <= 1e-8) {
+            return null;
+        }
+        vec3.normalize(cameraForward, cameraForward);
+
+        let activeSource: WormholeRenderInfo | null = null;
+        let activeDest: WormholeRenderInfo | null = null;
+        let bestDistSq = Number.POSITIVE_INFINITY;
+        const portalCenter = scratchWormholeVec3c;
+        const cameraToPortal = scratchWormholeVec3d;
+        for (const wormhole of this.wormholeInfos) {
+            if (wormhole.destId === null) {
+                continue;
+            }
+            const dest = this.wormholeInfoById.get(wormhole.destId);
+            if (!dest) {
+                continue;
+            }
+            const sourceWorldFromModel = scratchWormholeMat4c;
+            if (!this.buildWormholeWorldFromModel(wormhole, sourceWorldFromModel)) {
+                continue;
+            }
+            transformVec3Mat4w1(portalCenter, sourceWorldFromModel, WORMHOLE_OFFSET_LOCAL);
+            vec3.sub(cameraToPortal, portalCenter, cameraPos);
+            if (vec3.dot(cameraForward, cameraToPortal) < 0) {
+                continue;
+            }
+            const distSq = vec3.squaredLength(cameraToPortal);
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                activeSource = wormhole;
+                activeDest = dest;
+            }
+        }
+
+        if (!activeSource || !activeDest) {
+            return null;
+        }
+
+        const sourceLookAt = scratchWormholeMat4c;
+        const destLookAt = scratchWormholeMat4d;
+        if (!this.buildWormholeLookAt(activeSource, WORMHOLE_FORWARD_SOURCE_LOCAL, sourceLookAt)) {
+            return null;
+        }
+        if (!this.buildWormholeLookAt(activeDest, WORMHOLE_FORWARD_DEST_LOCAL, destLookAt)) {
+            return null;
+        }
+
+        const invSource = scratchWormholeMat4b;
+        if (!mat4.invert(invSource, sourceLookAt)) {
+            return null;
+        }
+        const delta = scratchWormholeMat4e;
+        mat4.mul(delta, invSource, destLookAt);
+        mat4.mul(outCaptureViewFromWorld, viewFromWorldTilted, delta);
+        mat4.mul(outPortalClipFromWorld, projection, outCaptureViewFromWorld);
+        return {
+            sourceId: activeSource.id,
+            destId: activeDest.id,
+        };
+    }
+
+    public prepareToRenderWormholeSurface(
+        ctx: RenderContext,
+        viewFromWorld: mat4,
+        portalClipFromWorld: mat4,
+        sourceId: number,
+        destId: number | null
+    ): void {
+        if (!this.wormholeSurfaceModel || !this.wormholeSurfaceModel.prepareToRenderCustom) {
+            return;
+        }
+        const source = this.wormholeInfoById.get(sourceId);
+        if (!source) {
+            return;
+        }
+        const viewFromWorldTilted = this.getTiltedViewMatrix(viewFromWorld, scratchWormholeMat4a);
+        const worldFromModel = scratchWormholeMat4b;
+        if (!this.buildWormholeWorldFromModel(source, worldFromModel)) {
+            return;
+        }
+        const sampleFromModel = scratchWormholeMat4d;
+        let usePairedDest = false;
+        if (destId !== null) {
+            const dest = this.wormholeInfoById.get(destId);
+            if (dest && this.buildWormholeWorldFromModel(dest, sampleFromModel)) {
+                // Use destination portal local->world to map source surface UV sampling into exit space.
+                usePairedDest = true;
+            } else {
+                mat4.copy(sampleFromModel, worldFromModel);
+            }
+        } else {
+            mat4.copy(sampleFromModel, worldFromModel);
+        }
+        const sampleFromModelAdjusted = scratchWormholeMat4g;
+        if (usePairedDest) {
+            // Crossing the portal flips local facing; rotate 180 around local up before sampling.
+            mat4.mul(sampleFromModelAdjusted, sampleFromModel, WORMHOLE_LOCAL_THROUGH);
+        } else {
+            mat4.copy(sampleFromModelAdjusted, sampleFromModel);
+        }
+        const portalClipFromModel = scratchWormholeMat4c;
+        mat4.mul(portalClipFromModel, portalClipFromWorld, sampleFromModelAdjusted);
+        const rp = scratchRenderParams;
+        rp.reset();
+        rp.sort = RenderSort.None;
+        rp.lighting = this.worldState.lighting;
+        mat4.mul(rp.viewFromModel, viewFromWorldTilted, worldFromModel);
+        this.wormholeSurfaceModel.prepareToRenderCustom(ctx, rp, (renderInst, renderParams): void => {
+            renderInst.setBindingLayouts(gxBindingLayouts);
+            fillSceneParamsDataOnTemplate(renderInst, ctx.viewerInput, 0, this.worldState.time.getAnimTimeFrames());
+            renderInst.setGfxProgram(this.wormholeSurfaceProgram);
+            renderInst.setMegaStateFlags(this.wormholeSurfaceMegaState);
+            renderInst.setSamplerBindingsFromTextureMappings([this.wormholeColorMapping]);
+            const d = renderInst.allocateUniformBufferF32(WORMHOLE_SURFACE_UBO_INDEX, WORMHOLE_SURFACE_UBO_WORDS);
+            fillMatrix4x4(d, 0, renderParams.viewFromModel);
+            fillMatrix4x4(d, 16, portalClipFromModel);
+            fillVec4(d, 32, 1, 0, 0, 0);
+        });
     }
 
     public getMirrorMode(): MirrorMode {
@@ -2787,6 +3114,9 @@ export class World {
         }
         if (this.mirrorDistortMapping.gfxSampler) {
             device.destroySampler(this.mirrorDistortMapping.gfxSampler);
+        }
+        if (this.wormholeColorMapping.gfxSampler) {
+            device.destroySampler(this.wormholeColorMapping.gfxSampler);
         }
         if (this.mirrorGradMapping.gfxSampler) {
             device.destroySampler(this.mirrorGradMapping.gfxSampler);

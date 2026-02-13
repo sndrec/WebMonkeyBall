@@ -468,6 +468,27 @@ function updateLinkPortalFollowers(
   }
 }
 
+function getPortalRenderTransformForLink(state: ChainState, link: ChainLinkState): Float32Array | null {
+  const followerId = toNonNegativeInt(link.portalFollowerId);
+  if (followerId === null) {
+    return null;
+  }
+  const playerA = state.portalByPlayer.get(link.playerAId);
+  const playerB = state.portalByPlayer.get(link.playerBId);
+  if (!playerA || !playerB || playerA.signature === playerB.signature) {
+    return null;
+  }
+  if (followerId === link.playerAId) {
+    mat4.multiply(portalConstraintMatA, playerB.lift, playerA.invLift);
+    return portalConstraintMatA;
+  }
+  if (followerId === link.playerBId) {
+    mat4.multiply(portalConstraintMatA, playerA.lift, playerB.invLift);
+    return portalConstraintMatA;
+  }
+  return null;
+}
+
 function resolvePortalSeamIndex(link: ChainLinkState, bToA: Float32Array): number {
   const segmentCount = link.nodes.length - 1;
   if (segmentCount <= 0) {
@@ -936,9 +957,17 @@ function solveChainSegmentConstraints(
 }
 
 function shouldSkipPortalSeamCollision(link: ChainLinkState, nodeIndex: number) {
-  void nodeIndex;
   const followerId = toNonNegativeInt(link.portalFollowerId);
-  return followerId !== null;
+  if (followerId === null) {
+    return false;
+  }
+  const seamIndex = Number.isFinite(link.portalSeamIndex) ? (link.portalSeamIndex | 0) : -1;
+  if (seamIndex < 0) {
+    return false;
+  }
+  const minSkip = Math.max(1, seamIndex - 1);
+  const maxSkip = Math.min(link.nodes.length - 2, seamIndex + 1);
+  return nodeIndex >= minSkip && nodeIndex <= maxSkip;
 }
 
 function collideChainInteriorNodes(
@@ -1182,8 +1211,8 @@ function simulateChainedTogether(
       }
       const constraint = clonePortalConstraint(getPortalConstraintForLink(state, link, forcedSeamIndex));
       if (constraint && followerId !== null) {
-        // In follower/ghost mode, keep seam for rendering but do not apply seam-space
-        // segment corrections in physics; the chain already lives in follower space.
+        // In follower/ghost mode, do not apply seam-space segment corrections in physics;
+        // the chain already lives in follower space.
         constraint.seamIndex = -1;
       }
       portalConstraintByLink.set(link, constraint);
@@ -1745,6 +1774,7 @@ function buildChainHooks(): ModHooks {
         if (link.nodes.length < 2) {
           continue;
         }
+        const portalRenderTransform = getPortalRenderTransformForLink(state, link);
         const points = new Array(link.nodes.length);
         for (let i = 0; i < link.nodes.length; i += 1) {
           const node = link.nodes[i];
@@ -1755,15 +1785,22 @@ function buildChainHooks(): ModHooks {
             z: renderPrev.z + ((node.pos.z - renderPrev.z) * alpha),
           };
         }
-        const seamIndex = Number.isFinite(link.portalSeamIndex) ? (link.portalSeamIndex | 0) : -1;
-        if (seamIndex >= 0 && seamIndex < (points.length - 1)) {
-          const firstHalf = points.slice(0, seamIndex + 1);
-          const secondHalf = points.slice(seamIndex + 1);
-          pushChainRibbonPrimitive(primitives, (link.id ^ 0x3c6ef372) >>> 0, firstHalf);
-          pushChainRibbonPrimitive(primitives, (link.id ^ 0x9e3779b9) >>> 0, secondHalf);
+        pushChainRibbonPrimitive(primitives, link.id >>> 0, points);
+        if (!portalRenderTransform) {
           continue;
         }
-        pushChainRibbonPrimitive(primitives, link.id >>> 0, points);
+        const liftedPoints = new Array(points.length);
+        for (let i = 0; i < points.length; i += 1) {
+          const point = points[i];
+          vec3.set(portalConstraintVecA, point.x, point.y, point.z);
+          vec3.transformMat4(portalConstraintVecA, portalConstraintVecA, portalRenderTransform);
+          liftedPoints[i] = {
+            x: portalConstraintVecA[0],
+            y: portalConstraintVecA[1],
+            z: portalConstraintVecA[2],
+          };
+        }
+        pushChainRibbonPrimitive(primitives, (link.id ^ 0x9e3779b9) >>> 0, liftedPoints);
       }
     },
   };

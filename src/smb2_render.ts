@@ -698,7 +698,29 @@ export function getMb2wsStageInfo(stageId: number): StageInfo {
 }
 
 export function convertSmb2StageDef(stage: any): Stage {
-  const animGroups = stage.animGroups.map((group: any) => ({
+  const wormholeIdMap = new Map<any, number>();
+  let nextWormholeId = 1;
+  const getWormholeId = (wormhole: any): number => {
+    if (!wormhole) {
+      return 0;
+    }
+    const existing = wormholeIdMap.get(wormhole);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const id = nextWormholeId++;
+    wormholeIdMap.set(wormhole, id);
+    return id;
+  };
+  const convertWormhole = (wormhole: any, defaultAnimGroupIndex: number) => ({
+    pos: toVec3(wormhole.pos),
+    rot: toVec3(wormhole.rot),
+    wormholeId: getWormholeId(wormhole),
+    destWormholeId: wormhole.dest ? getWormholeId(wormhole.dest) : null,
+    animGroupIndex: wormhole.animGroupIndex ?? defaultAnimGroupIndex,
+  });
+
+  const animGroups = stage.animGroups.map((group: any, groupIndex: number) => ({
     originPos: toVec3(group.origin ?? group.initPos),
     originRot: toVec3(group.initRot),
     animType: mapAnimType(group.animLoopType ?? 0),
@@ -744,10 +766,7 @@ export function convertSmb2StageDef(stage: any): Stage {
       rot: toVec3(jamabar.rot),
       scale: toVec3(jamabar.scale),
     })),
-    wormholes: (group.wormholes ?? []).map((wormhole: any) => ({
-      pos: toVec3(wormhole.pos),
-      rot: toVec3(wormhole.rot),
-    })),
+    wormholes: (group.wormholes ?? []).map((wormhole: any) => convertWormhole(wormhole, groupIndex)),
     bananas: group.bananas.map((banana: any) => ({
       pos: toVec3(banana.pos),
       type: mapBananaType(banana.type),
@@ -776,12 +795,12 @@ export function convertSmb2StageDef(stage: any): Stage {
     loopEndSeconds: group.loopEndSeconds ?? 0,
   }));
 
+  const stageWormholes = (stage.wormholes ?? []).map((wormhole: any) => convertWormhole(wormhole, 0));
   if (stage.wormholes?.length) {
+    const ag0Wormholes = animGroups[0]?.wormholes ?? [];
+    const ag0WormholeIds = new Set<number>(ag0Wormholes.map((wormhole: any) => wormhole.wormholeId ?? 0));
     animGroups[0].wormholes.push(
-      ...stage.wormholes.map((wormhole: any) => ({
-        pos: toVec3(wormhole.pos),
-        rot: toVec3(wormhole.rot),
-      }))
+      ...stageWormholes.filter((wormhole: any) => !ag0WormholeIds.has(wormhole.wormholeId ?? 0))
     );
   }
 
@@ -814,10 +833,7 @@ export function convertSmb2StageDef(stage: any): Stage {
       pos: toVec3(banana.pos),
       type: mapBananaType(banana.type),
     })),
-    wormholes: (stage.wormholes ?? []).map((wormhole: any) => ({
-      pos: toVec3(wormhole.pos),
-      rot: toVec3(wormhole.rot),
-    })),
+    wormholes: stageWormholes,
     levelModels: [],
     bgObjects: stage.bgObjects.map(convertBgObject),
     fgObjects: stage.fgObjects.map(convertBgObject),
