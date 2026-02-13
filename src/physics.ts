@@ -1027,17 +1027,7 @@ export function stepBall(ball, stageRuntime, world, allowEffects = true) {
     t = nowMs();
   }
 
-  if (stage?.format === 'smb2') {
-    if (ball.wormholeCooldown > 0) {
-      ball.wormholeCooldown -= 1;
-    } else {
-      const hit = checkBallEnteredWormhole(ball, stageRuntime);
-      if (hit && hit.wormhole.dest) {
-        teleportBallToWormhole(ball, stageRuntime, hit.wormhole, hit.wormhole.dest);
-        ball.wormholeCooldown = WORMHOLE_COOLDOWN_FRAMES;
-      }
-    }
-  }
+  processBallWormholeTeleport(ball, stageRuntime);
   if (perfEnabled) {
     const dt = nowMs() - t;
     perf.lastWormholeMs = dt;
@@ -1073,6 +1063,24 @@ export function stepBall(ball, stageRuntime, world, allowEffects = true) {
       perf.wormholeMs = 0;
     }
   }
+}
+
+export function processBallWormholeTeleport(ball, stageRuntime) {
+  const stage = stageRuntime?.stage;
+  if (!stage || stage.format !== 'smb2') {
+    return false;
+  }
+  if (ball.wormholeCooldown > 0) {
+    ball.wormholeCooldown -= 1;
+    return false;
+  }
+  const hit = checkBallEnteredWormhole(ball, stageRuntime);
+  if (!hit || !hit.wormhole?.dest) {
+    return false;
+  }
+  teleportBallToWormhole(ball, stageRuntime, hit.wormhole, hit.wormhole.dest);
+  ball.wormholeCooldown = WORMHOLE_COOLDOWN_FRAMES;
+  return true;
 }
 
 function buildWormholeView(stageRuntime, wormhole, forwardPoint, outMat4) {

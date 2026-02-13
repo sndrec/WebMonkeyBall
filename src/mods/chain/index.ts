@@ -15,7 +15,7 @@ import {
   STAGE_COLLISION_TRI_PHASE_FACE,
 } from '../../collision.js';
 import { cosS16, sinS16, sqrt } from '../../math.js';
-import { startGoal } from '../../physics.js';
+import { processBallWormholeTeleport, startGoal } from '../../physics.js';
 
 const CHAIN_MOD_MANIFEST: ModManifest = {
   id: 'chain',
@@ -81,6 +81,7 @@ type ChainPortalConstraint = {
   seamIndex: number;
   bToA: Float32Array;
   aToB: Float32Array;
+  bToALinear: Float32Array;
   aToBLinear: Float32Array;
 };
 
@@ -139,6 +140,7 @@ const chainStateByGame = new WeakMap<object, ChainState>();
 const portalConstraintMatA = mat4.create();
 const portalConstraintMatB = mat4.create();
 const portalConstraintMat3 = mat3.create();
+const portalConstraintMat3B = mat3.create();
 const portalConstraintVecA = vec3.create();
 const portalConstraintVecB = vec3.create();
 const portalTransformScratch = mat4.create();
@@ -526,11 +528,13 @@ function getPortalConstraintForLink(
   }
   link.portalSeamIndex = seamIndex;
   mat4.multiply(portalConstraintMatB, playerB.lift, playerA.invLift);
+  mat3.fromMat4(portalConstraintMat3B, portalConstraintMatA);
   mat3.fromMat4(portalConstraintMat3, portalConstraintMatB);
   return {
     seamIndex,
     bToA: portalConstraintMatA,
     aToB: portalConstraintMatB,
+    bToALinear: portalConstraintMat3B,
     aToBLinear: portalConstraintMat3,
   };
 }
@@ -541,14 +545,17 @@ function clonePortalConstraint(source: ChainPortalConstraint | null): ChainPorta
   }
   const bToA = mat4.create();
   const aToB = mat4.create();
+  const bToALinear = mat3.create();
   const aToBLinear = mat3.create();
   bToA.set(source.bToA);
   aToB.set(source.aToB);
+  bToALinear.set(source.bToALinear);
   aToBLinear.set(source.aToBLinear);
   return {
     seamIndex: source.seamIndex,
     bToA,
     aToB,
+    bToALinear,
     aToBLinear,
   };
 }
@@ -928,6 +935,12 @@ function solveChainSegmentConstraints(
   }
 }
 
+function shouldSkipPortalSeamCollision(link: ChainLinkState, nodeIndex: number) {
+  void nodeIndex;
+  const followerId = toNonNegativeInt(link.portalFollowerId);
+  return followerId !== null;
+}
+
 function collideChainInteriorNodes(
   state: ChainState,
   game: any,
@@ -938,11 +951,17 @@ function collideChainInteriorNodes(
 ) {
   if (!reverse) {
     for (let i = 1; i < link.nodes.length - 1; i += 1) {
+      if (shouldSkipPortalSeamCollision(link, i)) {
+        continue;
+      }
       applyChainNodeCollision(state, game, link.nodes[i], stageFormat, useFullCollision);
     }
     return;
   }
   for (let i = link.nodes.length - 2; i >= 1; i -= 1) {
+    if (shouldSkipPortalSeamCollision(link, i)) {
+      continue;
+    }
     applyChainNodeCollision(state, game, link.nodes[i], stageFormat, useFullCollision);
   }
 }
@@ -1009,14 +1028,16 @@ function anchorLinkEndpoints(
   let ballBForChain = playerB.ball;
   let allowTransferA = transferToBall;
   let allowTransferB = transferToBall;
+  let transferAToRealLinear: Float32Array | null = null;
+  let transferBToRealLinear: Float32Array | null = null;
   if (portalConstraint && followerId === link.playerAId) {
     const animGroupId = playerA.ball?.physBall?.animGroupId ?? 0;
     ballBForChain = createBallProxyInSpace(playerB.ball, portalConstraint.bToA, animGroupId);
-    allowTransferB = false;
+    transferBToRealLinear = portalConstraint.aToBLinear;
   } else if (portalConstraint && followerId === link.playerBId) {
     const animGroupId = playerB.ball?.physBall?.animGroupId ?? 0;
     ballAForChain = createBallProxyInSpace(playerA.ball, portalConstraint.aToB, animGroupId);
-    allowTransferA = false;
+    transferAToRealLinear = portalConstraint.bToALinear;
   }
   let transferA: Vec3 | null = null;
   let transferB: Vec3 | null = null;
@@ -1054,6 +1075,16 @@ function anchorLinkEndpoints(
       allowTransferA,
       firstNeighborToEndpoint,
     );
+  }
+  if (transferA && transferAToRealLinear) {
+    vec3.set(portalConstraintVecA, transferA.x, transferA.y, transferA.z);
+    vec3.transformMat3(portalConstraintVecA, portalConstraintVecA, transferAToRealLinear);
+    transferA = { x: portalConstraintVecA[0], y: portalConstraintVecA[1], z: portalConstraintVecA[2] };
+  }
+  if (transferB && transferBToRealLinear) {
+    vec3.set(portalConstraintVecA, transferB.x, transferB.y, transferB.z);
+    vec3.transformMat3(portalConstraintVecA, portalConstraintVecA, transferBToRealLinear);
+    transferB = { x: portalConstraintVecA[0], y: portalConstraintVecA[1], z: portalConstraintVecA[2] };
   }
   return { first, last, transferA, transferB };
 }
@@ -1524,6 +1555,59 @@ function logChainPortalDebugFrame(game: any, state: ChainState, players: any[], 
   }
 }
 
+function processPostChainBallWormholes(game: any, state: ChainState, players: any[]): WormholeTeleportEvent[] {
+  if (!game?.stageRuntime) {
+    return [];
+  }
+  const extraTeleports: WormholeTeleportEvent[] = [];
+  for (const player of players) {
+    if (player?.isSpectator || player?.pendingSpawn) {
+      continue;
+    }
+    const ball = player?.ball;
+    if (!ball) {
+      continue;
+    }
+    if (ball.flags & BALL_FLAGS.INVISIBLE) {
+      continue;
+    }
+    if (ball.state !== BALL_STATES.PLAY && ball.state !== BALL_STATES.GOAL_MAIN) {
+      continue;
+    }
+    if (!processBallWormholeTeleport(ball, game.stageRuntime)) {
+      continue;
+    }
+    const tf = mat4.create();
+    if (copyMatrix16(ball.wormholeTransform, tf)) {
+      const traversal = ball.wormholeTraversal;
+      extraTeleports.push({
+        playerId: player.id,
+        srcWormholeId: toNonNegativeInt(traversal?.srcWormholeId) ?? 0,
+        dstWormholeId: toNonNegativeInt(traversal?.dstWormholeId) ?? 0,
+        transform: tf,
+      });
+      player.camera?.applyWormholeTransform?.(ball.wormholeTransform);
+    }
+    ball.wormholeTransform = null;
+    ball.wormholeTraversal = null;
+  }
+  if (extraTeleports.length === 0) {
+    return extraTeleports;
+  }
+  const teleportByPlayer = buildTeleportTransformByPlayer(extraTeleports);
+  applyFollowerTeleportToLinks(state.links, teleportByPlayer);
+  applyWormholeTeleports(state, players, extraTeleports);
+  const teleportedPlayerIds = new Set<number>();
+  for (const event of extraTeleports) {
+    const eventPlayerId = toNonNegativeInt(event.playerId);
+    if (eventPlayerId !== null) {
+      teleportedPlayerIds.add(eventPlayerId);
+    }
+  }
+  updateLinkPortalFollowers(state, state.links, teleportedPlayerIds);
+  return extraTeleports;
+}
+
 function buildChainHooks(): ModHooks {
   return {
     onStageLoad: ({ game }) => {
@@ -1604,7 +1688,11 @@ function buildChainHooks(): ModHooks {
       if (hasBallDropStarted(game)) {
         syncChainTopology(game, state, sortedPlayers);
         simulateChainedTogether(game, state, sortedPlayers, teleportEvents);
-        logChainPortalDebugFrame(game, state, sortedPlayers, teleportEvents);
+        const postChainTeleports = processPostChainBallWormholes(game, state, sortedPlayers);
+        const debugTeleports = postChainTeleports.length > 0
+          ? [...teleportEvents, ...postChainTeleports]
+          : teleportEvents;
+        logChainPortalDebugFrame(game, state, sortedPlayers, debugTeleports);
       } else {
         state.links = [];
         state.topologyKey = '';
