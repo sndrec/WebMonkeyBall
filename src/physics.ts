@@ -114,27 +114,6 @@ const seesawBall = {
   vel: { x: 0, y: 0, z: 0 },
   animGroupId: 0,
 };
-const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-
-export const stepBallPerf = {
-  enabled: false,
-  logEvery: 120,
-  callCount: 0,
-  totalMs: 0,
-  integrateMs: 0,
-  stageMeshMs: 0,
-  effectsMs: 0,
-  orientationMs: 0,
-  stageObjectsMs: 0,
-  wormholeMs: 0,
-  lastTotalMs: 0,
-  lastIntegrateMs: 0,
-  lastStageMeshMs: 0,
-  lastEffectsMs: 0,
-  lastOrientationMs: 0,
-  lastStageObjectsMs: 0,
-  lastWormholeMs: 0,
-};
 
 export function createBallState() {
   return {
@@ -872,10 +851,6 @@ function handleBallRotationalKinematics(ball, physBall, animGroups, stageRuntime
 }
 
 export function stepBall(ball, stageRuntime, world, allowEffects = true) {
-  const perf = stepBallPerf;
-  const perfEnabled = perf.enabled;
-  const totalStart = perfEnabled ? nowMs() : 0;
-  let t = totalStart;
   const stage = stageRuntime.stage;
   const animGroups = stageRuntime.animGroups;
   ball.flags &= ~BALL_FLAGS.FLAG_00;
@@ -922,12 +897,6 @@ export function stepBall(ball, stageRuntime, world, allowEffects = true) {
   ball.pos.x += ball.vel.x;
   ball.pos.y += ball.vel.y;
   ball.pos.z += ball.vel.z;
-  if (perfEnabled) {
-    const dt = nowMs() - t;
-    perf.lastIntegrateMs = dt;
-    perf.integrateMs += dt;
-    t = nowMs();
-  }
 
   const physBall = ball.physBall;
   initPhysBallFromBall(ball, physBall, stage.format);
@@ -974,12 +943,6 @@ export function stepBall(ball, stageRuntime, world, allowEffects = true) {
       ball.unk114.z = -ball.unk114.z;
     }
   }
-  if (perfEnabled) {
-    const dt = nowMs() - t;
-    perf.lastStageMeshMs = dt;
-    perf.stageMeshMs += dt;
-    t = nowMs();
-  }
 
   if (allowEffects && stageRuntime.effects) {
     const onGround = (physBall.flags & COLI_FLAGS.OCCURRED) !== 0 && physBall.hardestColiPlane.normal.y > 0;
@@ -992,12 +955,6 @@ export function stepBall(ball, stageRuntime, world, allowEffects = true) {
       spawnPostGoalSparkle(stageRuntime.effects, ball, rng);
     }
   }
-  if (perfEnabled) {
-    const dt = nowMs() - t;
-    perf.lastEffectsMs = dt;
-    perf.effectsMs += dt;
-    t = nowMs();
-  }
 
   const goalMode = ball.state === BALL_STATES.GOAL_MAIN;
   handleBallRotationalKinematics(ball, physBall, animGroups, stageRuntime, goalMode);
@@ -1006,12 +963,6 @@ export function stepBall(ball, stageRuntime, world, allowEffects = true) {
   updateBallApeBasis(ball);
   updateApeOrientation(ball, physBall, stageRuntime);
   updateBallCameraSteerYaw(ball, stage.format);
-  if (perfEnabled) {
-    const dt = nowMs() - t;
-    perf.lastOrientationMs = dt;
-    perf.orientationMs += dt;
-    t = nowMs();
-  }
 
   initPhysBallFromBall(ball, physBall, stage.format);
   collideBallWithStageObjects(physBall, stageRuntime);
@@ -1020,49 +971,10 @@ export function stepBall(ball, stageRuntime, world, allowEffects = true) {
     ball.audio.lastColiFlags = stageColiFlags | physBall.flags;
     ball.audio.lastColiSpeed = Math.min(stageColiSpeed, physBall.hardestColiSpeed);
   }
-  if (perfEnabled) {
-    const dt = nowMs() - t;
-    perf.lastStageObjectsMs = dt;
-    perf.stageObjectsMs += dt;
-    t = nowMs();
-  }
 
   processBallWormholeTeleport(ball, stageRuntime);
-  if (perfEnabled) {
-    const dt = nowMs() - t;
-    perf.lastWormholeMs = dt;
-    perf.wormholeMs += dt;
-  }
 
   ball.unk80 += 1;
-  if (perfEnabled) {
-    const totalMs = nowMs() - totalStart;
-    perf.lastTotalMs = totalMs;
-    perf.totalMs += totalMs;
-    perf.callCount += 1;
-    if (perf.callCount >= perf.logEvery) {
-      const count = Math.max(1, perf.callCount);
-      console.log(
-        "[perf] ball-step-breakdown avg total=%sms integrate=%sms stage=%sms effects=%sms orient=%sms objects=%sms wormhole=%sms over=%d",
-        (perf.totalMs / count).toFixed(3),
-        (perf.integrateMs / count).toFixed(3),
-        (perf.stageMeshMs / count).toFixed(3),
-        (perf.effectsMs / count).toFixed(3),
-        (perf.orientationMs / count).toFixed(3),
-        (perf.stageObjectsMs / count).toFixed(3),
-        (perf.wormholeMs / count).toFixed(3),
-        perf.callCount,
-      );
-      perf.callCount = 0;
-      perf.totalMs = 0;
-      perf.integrateMs = 0;
-      perf.stageMeshMs = 0;
-      perf.effectsMs = 0;
-      perf.orientationMs = 0;
-      perf.stageObjectsMs = 0;
-      perf.wormholeMs = 0;
-    }
-  }
 }
 
 export function processBallWormholeTeleport(ball, stageRuntime) {

@@ -6,25 +6,15 @@ import {
   makeBackbufferDescSimple,
   opaqueBlackFullClearRenderPassDescriptor,
 } from './gfx/helpers/RenderGraphHelpers.js';
-import { fullscreenMegaState } from './gfx/helpers/GfxMegaStateDescriptorHelpers.js';
-import { GfxShaderLibrary } from './gfx/helpers/GfxShaderLibrary.js';
-import { fillVec4 } from './gfx/helpers/UniformBufferHelpers.js';
 import {
   GfxDevice,
   GfxFormat,
-  GfxMipFilterMode,
-  GfxTexFilterMode,
-  GfxWrapMode,
-  type GfxProgram,
-  type GfxSampler,
 } from './gfx/platform/GfxPlatform.js';
 import { GfxrAttachmentSlot, GfxrRenderTargetDescription } from './gfx/render/GfxRenderGraph.js';
 import {
   GfxRenderInstList,
   GfxRenderInstManager,
 } from './gfx/render/GfxRenderInstManager.js';
-import type { GfxRenderCache } from './gfx/render/GfxRenderCache.js';
-import { preprocessProgram_GLSL } from './gfx/shaderc/GfxShaderCompiler.js';
 import {
   GXRenderHelperGfx,
   fillSceneParamsDataOnTemplate,
@@ -196,47 +186,6 @@ const scratchWormholeClipPlanePoint = vec3.create();
 const scratchWormholeClipPlaneNormal = vec3.create();
 const mirrorFlipX = mat4.fromScaling(mat4.create(), [-1, 1, 1]);
 const WAVY_MIRROR_ALPHA = 0x60 / 0xff;
-const WORMHOLE_DEBUG_PREVIEW_ENABLED = true;
-const WORMHOLE_DEBUG_PREVIEW_UBO_INDEX = 0;
-const WORMHOLE_DEBUG_PREVIEW_UBO_WORDS = 4;
-
-function createWormholeDebugPreviewProgram(device: GfxDevice, renderCache: GfxRenderCache): GfxProgram {
-  const vert = GfxShaderLibrary.fullscreenVS;
-  const frag = `
-uniform sampler2D u_Texture;
-
-layout(std140) uniform ub_DebugPreview {
-  vec4 u_Rect;
-};
-
-in vec2 v_TexCoord;
-out vec4 o_Color;
-
-void main() {
-  vec2 uv = v_TexCoord;
-  if (uv.x < u_Rect.x || uv.x > u_Rect.z || uv.y < u_Rect.y || uv.y > u_Rect.w) {
-    discard;
-  }
-
-  vec2 localUv = vec2(
-    (uv.x - u_Rect.x) / max(u_Rect.z - u_Rect.x, 1e-6),
-    (uv.y - u_Rect.y) / max(u_Rect.w - u_Rect.y, 1e-6)
-  );
-  localUv = clamp(localUv, vec2(0.0), vec2(1.0));
-  vec4 tex = texture(u_Texture, localUv);
-
-  float edgePx = 0.0035;
-  bool edge = localUv.x <= edgePx || localUv.x >= (1.0 - edgePx) || localUv.y <= edgePx || localUv.y >= (1.0 - edgePx);
-  if (edge) {
-    o_Color = vec4(1.0, 1.0, 0.0, 1.0);
-  } else {
-    o_Color = tex;
-  }
-}
-`;
-  const program = preprocessProgram_GLSL(device.queryVendorInfo(), vert, frag);
-  return renderCache.createProgramSimple(program);
-}
 
 function computeReflectionMatrix(out: mat4, planePoint: vec3, planeNormal: vec3): void {
   vec3.normalize(scratchMirrorPlaneNormal, planeNormal);
@@ -324,21 +273,11 @@ export class Renderer {
   private wormholeCaptureHeight = 0;
   private activeWormholeSourceId: number | null = null;
   private activeWormholeDestId: number | null = null;
-  private wormholeDebugPreviewProgram: GfxProgram;
-  private wormholeDebugPreviewSampler: GfxSampler;
   private lastExternalTimeFrames: number | null = null;
 
   constructor(device: GfxDevice, private stageData: StageData) {
     this.renderHelper = new GXRenderHelperGfx(device);
     this.world = new World(device, this.renderHelper.renderCache, stageData);
-    this.wormholeDebugPreviewProgram = createWormholeDebugPreviewProgram(device, this.renderHelper.renderCache);
-    this.wormholeDebugPreviewSampler = this.renderHelper.renderCache.createSampler({
-      wrapS: GfxWrapMode.Clamp,
-      wrapT: GfxWrapMode.Clamp,
-      minFilter: GfxTexFilterMode.Bilinear,
-      magFilter: GfxTexFilterMode.Bilinear,
-      mipFilter: GfxMipFilterMode.Nearest,
-    });
   }
 
   private prepareToRender(
@@ -767,52 +706,6 @@ export class Renderer {
             lateBinding: null,
           });
           this.wormholeOverlayInstList.drawOnPassRenderer(this.renderHelper.renderCache, passRenderer);
-        });
-      });
-    }
-    if (WORMHOLE_DEBUG_PREVIEW_ENABLED && wormholeColorResolveID !== null) {
-      builder.pushPass((pass) => {
-        pass.setDebugName('Wormhole Debug Preview');
-        pass.attachRenderTargetID(GfxrAttachmentSlot.Color0, mainColorTargetID);
-        pass.attachRenderTargetID(GfxrAttachmentSlot.DepthStencil, mainDepthTargetID);
-        pass.attachResolveTexture(wormholeColorResolveID);
-
-        const srcWidth = Math.max(1, this.wormholeCaptureWidth);
-        const srcHeight = Math.max(1, this.wormholeCaptureHeight);
-        let previewWidth = 0.32;
-        let previewHeight = previewWidth * (srcHeight / srcWidth);
-        const maxPreviewHeight = 0.32;
-        if (previewHeight > maxPreviewHeight) {
-          previewHeight = maxPreviewHeight;
-          previewWidth = previewHeight * (srcWidth / srcHeight);
-        }
-        const pad = 0.015;
-        const x1 = 1.0 - pad;
-        const x0 = Math.max(pad, x1 - previewWidth);
-        const y0 = pad;
-        const y1 = Math.min(1.0 - pad, y0 + previewHeight);
-
-        const renderInst = this.renderHelper.renderInstManager.newRenderInst();
-        renderInst.setUniformBuffer(this.renderHelper.uniformBuffer);
-        renderInst.setAllowSkippingIfPipelineNotReady(false);
-        renderInst.setMegaStateFlags(fullscreenMegaState);
-        renderInst.setBindingLayouts([{ numUniformBuffers: 1, numSamplers: 1 }]);
-        renderInst.setDrawCount(3);
-        renderInst.setGfxProgram(this.wormholeDebugPreviewProgram);
-        const d = renderInst.allocateUniformBufferF32(
-          WORMHOLE_DEBUG_PREVIEW_UBO_INDEX,
-          WORMHOLE_DEBUG_PREVIEW_UBO_WORDS
-        );
-        fillVec4(d, 0, x0, y0, x1, y1);
-
-        pass.exec((passRenderer, scope) => {
-          const wormholeTexture = scope.getResolveTextureForID(wormholeColorResolveID);
-          renderInst.setSamplerBindingsFromTextureMappings([{
-            gfxTexture: wormholeTexture,
-            gfxSampler: this.wormholeDebugPreviewSampler,
-            lateBinding: null,
-          }]);
-          renderInst.drawOnPass(this.renderHelper.renderCache, passRenderer);
         });
       });
     }

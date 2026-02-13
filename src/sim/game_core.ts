@@ -102,7 +102,6 @@ const SPEED_MPH_SCALE = 134.21985;
 const SPEED_BAR_MAX_MPH = 70;
 const fallOutStack = new MatrixStack();
 const fallOutLocal = { x: 0, y: 0, z: 0 };
-const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 
 function lerp(a: number, b: number, t: number): number {
@@ -366,47 +365,7 @@ export class GameCore {
   public cameraPose: CameraPose | null;
   public spectatorStartPose: CameraPose | null;
   public interpolatedAnimGroupTransforms: Float32Array[] | null;
-  public effectDebugLastLogTime: number;
   public loadingStage: boolean;
-  public simPerf: {
-    enabled: boolean;
-    logEvery: number;
-    tickCount: number;
-    tickMs: number;
-    lastTickMs: number;
-  };
-  public rollbackPerf: {
-    enabled: boolean;
-    logEvery: number;
-    saveMs: number;
-    saveCount: number;
-    lastSaveMs: number;
-    loadMs: number;
-    loadCount: number;
-    lastLoadMs: number;
-    advanceMs: number;
-    advanceCount: number;
-    lastAdvanceMs: number;
-  };
-  public simBreakdownPerf: {
-    enabled: boolean;
-    logEvery: number;
-    tickCount: number;
-    inputMs: number;
-    stageAdvanceMs: number;
-    stepBallMs: number;
-    playerCollisionMs: number;
-    goalCheckMs: number;
-    cameraMs: number;
-    bananaCollectMs: number;
-    lastInputMs: number;
-    lastStageAdvanceMs: number;
-    lastStepBallMs: number;
-    lastPlayerCollisionMs: number;
-    lastGoalCheckMs: number;
-    lastCameraMs: number;
-    lastBananaCollectMs: number;
-  };
   public simTick: number;
   public netplayRttMs: number | null;
   public netplayDebugLines: string[] | null;
@@ -543,47 +502,7 @@ export class GameCore {
     this.cameraPose = null;
     this.spectatorStartPose = null;
     this.interpolatedAnimGroupTransforms = null;
-    this.effectDebugLastLogTime = 0;
     this.loadingStage = false;
-    this.simPerf = {
-      enabled: true,
-      logEvery: 120,
-      tickCount: 0,
-      tickMs: 0,
-      lastTickMs: 0,
-    };
-    this.rollbackPerf = {
-      enabled: false,
-      logEvery: 120,
-      saveMs: 0,
-      saveCount: 0,
-      lastSaveMs: 0,
-      loadMs: 0,
-      loadCount: 0,
-      lastLoadMs: 0,
-      advanceMs: 0,
-      advanceCount: 0,
-      lastAdvanceMs: 0,
-    };
-    this.simBreakdownPerf = {
-      enabled: false,
-      logEvery: 120,
-      tickCount: 0,
-      inputMs: 0,
-      stageAdvanceMs: 0,
-      stepBallMs: 0,
-      playerCollisionMs: 0,
-      goalCheckMs: 0,
-      cameraMs: 0,
-      bananaCollectMs: 0,
-      lastInputMs: 0,
-      lastStageAdvanceMs: 0,
-      lastStepBallMs: 0,
-      lastPlayerCollisionMs: 0,
-      lastGoalCheckMs: 0,
-      lastCameraMs: 0,
-      lastBananaCollectMs: 0,
-    };
     this.simTick = 0;
     this.netplayRttMs = null;
     this.netplayDebugLines = null;
@@ -698,48 +617,14 @@ export class GameCore {
     if (this.rollbackSession) {
       return this.rollbackSession;
     }
-    const perf = this.rollbackPerf;
     this.rollbackSession = new RollbackSession({
       saveState: () => {
-        if (!perf.enabled) {
-          return this.saveRollbackState();
-        }
-        const t0 = nowMs();
-        const state = this.saveRollbackState();
-        const dt = nowMs() - t0;
-        perf.lastSaveMs = dt;
-        perf.saveMs += dt;
-        perf.saveCount += 1;
-        return state;
+        return this.saveRollbackState();
       },
       loadState: (state) => {
-        if (!perf.enabled) {
-          this.loadRollbackState(state);
-          return;
-        }
-        const t0 = nowMs();
         this.loadRollbackState(state);
-        const dt = nowMs() - t0;
-        perf.lastLoadMs = dt;
-        perf.loadMs += dt;
-        perf.loadCount += 1;
       },
       advanceFrame: (inputs) => {
-        if (!perf.enabled) {
-          const prev = this.suppressVisualEffects;
-          const prevAudio = this.suppressAudioEffects;
-          const suppress = this.rollbackSession?.suppressVisuals ?? false;
-          this.suppressVisualEffects = suppress;
-          this.suppressAudioEffects = suppress;
-          try {
-            this.advanceOneFrame(inputs);
-          } finally {
-            this.suppressVisualEffects = prev;
-            this.suppressAudioEffects = prevAudio;
-          }
-          return;
-        }
-        const t0 = nowMs();
         const prev = this.suppressVisualEffects;
         const prevAudio = this.suppressAudioEffects;
         const suppress = this.rollbackSession?.suppressVisuals ?? false;
@@ -751,10 +636,6 @@ export class GameCore {
           this.suppressVisualEffects = prev;
           this.suppressAudioEffects = prevAudio;
         }
-        const dt = nowMs() - t0;
-        perf.lastAdvanceMs = dt;
-        perf.advanceMs += dt;
-        perf.advanceCount += 1;
       },
     }, 30);
     return this.rollbackSession;
@@ -2598,52 +2479,17 @@ export class GameCore {
       this.renderEffects = null;
       return null;
     }
-    let nanCount = 0;
-    let nanSample: {
-      kind: string;
-      pos: { x: number; y: number; z: number };
-      prevPos: { x: number; y: number; z: number };
-    } | null = null;
     if (!this.renderEffects) {
       this.renderEffects = [];
     }
     let outIdx = 0;
     for (const effect of effects) {
-      if (
-        !Number.isFinite(effect.pos.x) ||
-        !Number.isFinite(effect.pos.y) ||
-        !Number.isFinite(effect.pos.z) ||
-        !Number.isFinite(effect.prevPos.x) ||
-        !Number.isFinite(effect.prevPos.y) ||
-        !Number.isFinite(effect.prevPos.z)
-      ) {
-        nanCount += 1;
-        if (!nanSample) {
-          nanSample = {
-            kind: effect.kind,
-            pos: { x: effect.pos.x, y: effect.pos.y, z: effect.pos.z },
-            prevPos: { x: effect.prevPos.x, y: effect.prevPos.y, z: effect.prevPos.z },
-          };
-        }
-      }
       const pos = {
         x: effect.prevPos.x + (effect.pos.x - effect.prevPos.x) * alpha,
         y: effect.prevPos.y + (effect.pos.y - effect.prevPos.y) * alpha,
         z: effect.prevPos.z + (effect.pos.z - effect.prevPos.z) * alpha,
       };
       if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y) || !Number.isFinite(pos.z)) {
-        const now = Date.now();
-        if (now - this.effectDebugLastLogTime > 1000) {
-          console.warn(
-            "[effects] bad-pos kind=%s alpha=%s pos=%s prev=%s curr=%s",
-            effect.kind,
-            alpha,
-            `${pos.x},${pos.y},${pos.z}`,
-            `${effect.prevPos.x},${effect.prevPos.y},${effect.prevPos.z}`,
-            `${effect.pos.x},${effect.pos.y},${effect.pos.z}`,
-          );
-          this.effectDebugLastLogTime = now;
-        }
         continue;
       }
       if (effect.kind === 'coli') {
@@ -2727,18 +2573,6 @@ export class GameCore {
     this.renderEffects.length = outIdx;
     if (hasModEffects) {
       this.emitModHook('onAppendEffectRender', { game: this, effects: this.renderEffects, alpha });
-    }
-    if (nanCount > 0) {
-      const now = Date.now();
-      if (now - this.effectDebugLastLogTime > 1000) {
-        console.log(
-          "[effects] nan=%d/%d sample=%s",
-          nanCount,
-          effects.length,
-          nanSample ? `${nanSample.kind} pos=${nanSample.pos.x},${nanSample.pos.y},${nanSample.pos.z} prev=${nanSample.prevPos.x},${nanSample.prevPos.y},${nanSample.prevPos.z}` : "n/a",
-        );
-        this.effectDebugLastLogTime = now;
-      }
     }
     return this.renderEffects;
   }
@@ -2980,8 +2814,6 @@ export class GameCore {
       this.stage = stage;
       this.stageAttempts = isRestart ? this.stageAttempts + 1 : 1;
       this.stageRuntime = new StageRuntime(stage, undefined, this.stageRulesetId ?? undefined);
-      this.stageRuntime.advancePerf.enabled = this.simBreakdownPerf.enabled;
-      this.stageRuntime.advancePerf.logEvery = this.simBreakdownPerf.logEvery;
       this.simTick = 0;
       this.inputFeedIndex = 0;
       this.inputStartTick = 0;
@@ -3913,16 +3745,6 @@ export class GameCore {
         this.accumulator = 0;
       }
       while (!this.pendingAdvance && this.accumulator >= this.fixedStep) {
-        const tickStart = this.simPerf.enabled ? nowMs() : 0;
-        const breakdownPerf = this.simBreakdownPerf;
-        const breakdownEnabled = breakdownPerf.enabled;
-        let tickInputMs = 0;
-        let tickStageAdvanceMs = 0;
-        let tickStepBallMs = 0;
-        let tickPlayerCollisionMs = 0;
-        let tickGoalCheckMs = 0;
-        let tickCameraMs = 0;
-        let tickBananaCollectMs = 0;
         try {
         const simPlayers = this.getPlayersSorted();
         const isSinglePlayer = this.session.isSinglePlayer(this);
@@ -3968,7 +3790,6 @@ export class GameCore {
             player.cameraRotY = player.camera.rotY;
           }
         }
-        let segmentStart = breakdownEnabled ? nowMs() : 0;
         let tiltCount = 0;
         let avgGravX = 0;
         let avgGravY = 0;
@@ -4008,13 +3829,9 @@ export class GameCore {
             this.world.gravity.z = 0;
           }
         }
-        if (breakdownEnabled) {
-          tickInputMs += nowMs() - segmentStart;
-        }
         const stagePaused = this.paused || timeoverActive;
         const stageBall = isSinglePlayer ? localBall : null;
         const stageCamera = isSinglePlayer ? this.cameraController : null;
-        segmentStart = breakdownEnabled ? nowMs() : 0;
         this.stageRuntime.advance(
           1,
           stagePaused,
@@ -4025,9 +3842,6 @@ export class GameCore {
           stageCamera,
           !this.suppressVisualEffects,
         );
-        if (breakdownEnabled) {
-          tickStageAdvanceMs += nowMs() - segmentStart;
-        }
         if (localPlayer.goalTimerFrames > 0) {
           const outcome = this.ruleset.updateGoalSequence({
             game: this,
@@ -4099,7 +3913,6 @@ export class GameCore {
           }
         }
         if (!timeoverActive) {
-          segmentStart = breakdownEnabled ? nowMs() : 0;
           const wormholeTeleports: Array<{
             playerId: number;
             srcWormholeId: number;
@@ -4135,9 +3948,6 @@ export class GameCore {
               ball.wormholeTransform = null;
             }
             ball.wormholeTraversal = null;
-          }
-          if (breakdownEnabled) {
-            tickStepBallMs += nowMs() - segmentStart;
           }
           const postBall = this.runAfterBallStepHooks({
             game: this,
@@ -4184,11 +3994,7 @@ export class GameCore {
             this.accumulator = 0;
             break;
           }
-          segmentStart = breakdownEnabled ? nowMs() : 0;
           this.resolvePlayerCollisions(simPlayers);
-          if (breakdownEnabled) {
-            tickPlayerCollisionMs += nowMs() - segmentStart;
-          }
           const switchPresses = this.stageRuntime.switchPressCount ?? 0;
           if (switchPresses > 0) {
             this.stageRuntime.switchPressCount = 0;
@@ -4247,11 +4053,7 @@ export class GameCore {
           && !timeoverActive
           && hasPlayableBall;
         if (canCollectBananas) {
-          segmentStart = breakdownEnabled ? nowMs() : 0;
           this.collectBananas();
-          if (breakdownEnabled) {
-            tickBananaCollectMs += nowMs() - segmentStart;
-          }
         }
         const anyGoalSequenceActive = simPlayers.some((player) => {
           if (player.isSpectator || player.pendingSpawn) {
@@ -4270,7 +4072,6 @@ export class GameCore {
           break;
         }
         if (stageInputEnabled) {
-          segmentStart = breakdownEnabled ? nowMs() : 0;
           for (const player of simPlayers) {
             if (player.isSpectator || player.pendingSpawn) {
               continue;
@@ -4324,9 +4125,6 @@ export class GameCore {
               }
             }
           }
-          if (breakdownEnabled) {
-            tickGoalCheckMs += nowMs() - segmentStart;
-          }
         }
         if (this.activeResultReplay && this.resultReplayNeedsRestart) {
           this.resultReplayNeedsRestart = false;
@@ -4379,7 +4177,6 @@ export class GameCore {
           this.multiplayerGoalTimerFrames = 0;
         }
         const cameraPaused = this.paused || timeoverActive;
-        segmentStart = breakdownEnabled ? nowMs() : 0;
         for (const player of simPlayers) {
           if (player.id === this.localPlayerId) {
             if ((player.isSpectator || player.pendingSpawn) && !player.freeFly) {
@@ -4428,9 +4225,6 @@ export class GameCore {
             this.emitModHook('onCameraUpdate', { game: this, playerId: player.id, camera: player.camera });
           }
         }
-        if (breakdownEnabled) {
-          tickCameraMs += nowMs() - segmentStart;
-        }
         if (this.activeResultReplay) {
           if (this.stepResultReplay()) {
             break;
@@ -4440,29 +4234,6 @@ export class GameCore {
         }
         this.accumulator -= this.fixedStep;
         } finally {
-          if (this.simPerf.enabled) {
-            const tickMs = nowMs() - tickStart;
-            this.simPerf.lastTickMs = tickMs;
-            this.simPerf.tickMs += tickMs;
-            this.simPerf.tickCount += 1;
-          }
-          if (breakdownEnabled) {
-            breakdownPerf.lastInputMs = tickInputMs;
-            breakdownPerf.lastStageAdvanceMs = tickStageAdvanceMs;
-            breakdownPerf.lastStepBallMs = tickStepBallMs;
-            breakdownPerf.lastPlayerCollisionMs = tickPlayerCollisionMs;
-            breakdownPerf.lastGoalCheckMs = tickGoalCheckMs;
-            breakdownPerf.lastCameraMs = tickCameraMs;
-            breakdownPerf.lastBananaCollectMs = tickBananaCollectMs;
-            breakdownPerf.inputMs += tickInputMs;
-            breakdownPerf.stageAdvanceMs += tickStageAdvanceMs;
-            breakdownPerf.stepBallMs += tickStepBallMs;
-            breakdownPerf.playerCollisionMs += tickPlayerCollisionMs;
-            breakdownPerf.goalCheckMs += tickGoalCheckMs;
-            breakdownPerf.cameraMs += tickCameraMs;
-            breakdownPerf.bananaCollectMs += tickBananaCollectMs;
-            breakdownPerf.tickCount += 1;
-          }
           this.simTick += 1;
           this.emitModHook('onAfterSimTick', { game: this, tick: this.simTick });
           if (this.replayAutoFastForward && this.replayInputStartTick !== null) {
@@ -4472,85 +4243,6 @@ export class GameCore {
             }
           }
         }
-      }
-      if (this.simPerf.enabled && this.simPerf.tickCount >= this.simPerf.logEvery) {
-        const avgMs = this.simPerf.tickMs / Math.max(1, this.simPerf.tickCount);
-        console.log(
-          "[perf] sim-tick avg=%sms last=%sms over=%d",
-          avgMs.toFixed(3),
-          this.simPerf.lastTickMs.toFixed(3),
-          this.simPerf.tickCount,
-        );
-        this.simPerf.tickCount = 0;
-        this.simPerf.tickMs = 0;
-      }
-      if (this.simBreakdownPerf.enabled && this.simBreakdownPerf.tickCount >= this.simBreakdownPerf.logEvery) {
-        const count = Math.max(1, this.simBreakdownPerf.tickCount);
-        const avgInput = this.simBreakdownPerf.inputMs / count;
-        const avgStage = this.simBreakdownPerf.stageAdvanceMs / count;
-        const avgBall = this.simBreakdownPerf.stepBallMs / count;
-        const avgPlayerCollision = this.simBreakdownPerf.playerCollisionMs / count;
-        const avgGoal = this.simBreakdownPerf.goalCheckMs / count;
-        const avgCamera = this.simBreakdownPerf.cameraMs / count;
-        const avgBanana = this.simBreakdownPerf.bananaCollectMs / count;
-        console.log(
-          "[perf] sim-breakdown avg input=%sms stage=%sms ball=%sms pcoli=%sms goal=%sms cam=%sms banana=%sms over=%d",
-          avgInput.toFixed(3),
-          avgStage.toFixed(3),
-          avgBall.toFixed(3),
-          avgPlayerCollision.toFixed(3),
-          avgGoal.toFixed(3),
-          avgCamera.toFixed(3),
-          avgBanana.toFixed(3),
-          this.simBreakdownPerf.tickCount,
-        );
-        this.simBreakdownPerf.tickCount = 0;
-        this.simBreakdownPerf.inputMs = 0;
-        this.simBreakdownPerf.stageAdvanceMs = 0;
-        this.simBreakdownPerf.stepBallMs = 0;
-        this.simBreakdownPerf.playerCollisionMs = 0;
-        this.simBreakdownPerf.goalCheckMs = 0;
-        this.simBreakdownPerf.cameraMs = 0;
-        this.simBreakdownPerf.bananaCollectMs = 0;
-        const stageAdvancePerf = this.stageRuntime?.advancePerf;
-        if (stageAdvancePerf?.enabled && stageAdvancePerf.tickCount > 0) {
-          const stageCount = Math.max(1, stageAdvancePerf.tickCount);
-          const avgAnim = stageAdvancePerf.animMs / stageCount;
-          const avgSwitches = stageAdvancePerf.switchesMs / stageCount;
-          const avgObjects = stageAdvancePerf.objectsMs / stageCount;
-          console.log(
-            "[perf] stage-breakdown avg anim=%sms switches=%sms objects=%sms over=%d",
-            avgAnim.toFixed(3),
-            avgSwitches.toFixed(3),
-            avgObjects.toFixed(3),
-            stageAdvancePerf.tickCount,
-          );
-          stageAdvancePerf.tickCount = 0;
-          stageAdvancePerf.animMs = 0;
-          stageAdvancePerf.switchesMs = 0;
-          stageAdvancePerf.objectsMs = 0;
-        }
-      }
-      if (this.rollbackPerf.enabled && this.rollbackPerf.saveCount >= this.rollbackPerf.logEvery) {
-        const avgSave = this.rollbackPerf.saveMs / Math.max(1, this.rollbackPerf.saveCount);
-        const avgLoad = this.rollbackPerf.loadMs / Math.max(1, this.rollbackPerf.loadCount);
-        const avgAdvance = this.rollbackPerf.advanceMs / Math.max(1, this.rollbackPerf.advanceCount);
-        console.log(
-          "[perf] rollback save avg=%sms last=%sms load avg=%sms last=%sms advance avg=%sms last=%sms over=%d",
-          avgSave.toFixed(3),
-          this.rollbackPerf.lastSaveMs.toFixed(3),
-          avgLoad.toFixed(3),
-          this.rollbackPerf.lastLoadMs.toFixed(3),
-          avgAdvance.toFixed(3),
-          this.rollbackPerf.lastAdvanceMs.toFixed(3),
-          this.rollbackPerf.saveCount,
-        );
-        this.rollbackPerf.saveMs = 0;
-        this.rollbackPerf.saveCount = 0;
-        this.rollbackPerf.loadMs = 0;
-        this.rollbackPerf.loadCount = 0;
-        this.rollbackPerf.advanceMs = 0;
-        this.rollbackPerf.advanceCount = 0;
       }
     }
 

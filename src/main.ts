@@ -80,8 +80,6 @@ import { PackLoader } from './app/packs/pack_loader.js';
 import { PackSelectionController } from './app/packs/pack_selection.js';
 import { ReplayController } from './app/replay/controller.js';
 import { CourseSelectionController } from './app/gameplay/course_selection.js';
-import { stageCollisionPerf } from './collision.js';
-import { stepBallPerf } from './physics.js';
 import type { MatchFlowController } from './app/gameplay/match_flow.js';
 import type { MatchStartFlowController } from './app/gameplay/start_flow.js';
 import { initRendererGfx, prewarmConfettiRenderer as prewarmConfettiRenderResources, type ViewerInputState } from './app/render/boot.js';
@@ -355,10 +353,6 @@ export function runMainApp() {
   let camera: Camera | null = null;
   let viewerInput: ViewerInputState | null = null;
   
-  const perfEnabled = false;
-  const perfBreakdownEnabled = false;
-  const collisionPerfEnabled = new URLSearchParams(window.location.search).has('perfCollision');
-  const perfLogEvery = 120;
   const audio = new AudioManager();
   const game = new Game({
     audio,
@@ -391,26 +385,8 @@ export function runMainApp() {
     onCourseComplete: () => matchFlow.handleCourseComplete(),
   });
   game.init();
-  game.simPerf.enabled = perfEnabled;
-  game.rollbackPerf.enabled = perfEnabled;
-  game.simPerf.logEvery = perfLogEvery;
-  game.rollbackPerf.logEvery = perfLogEvery;
-  game.simBreakdownPerf.enabled = perfBreakdownEnabled;
-  game.simBreakdownPerf.logEvery = perfLogEvery;
-  stageCollisionPerf.enabled = collisionPerfEnabled;
-  stageCollisionPerf.logEvery = perfLogEvery;
-  stepBallPerf.enabled = collisionPerfEnabled;
-  stepBallPerf.logEvery = perfLogEvery;
   if (game.stageRuntime?.advancePerf) {
-    game.stageRuntime.advancePerf.enabled = perfBreakdownEnabled;
-    game.stageRuntime.advancePerf.logEvery = perfLogEvery;
-  }
-  if (perfBreakdownEnabled) {
-    console.log(`[perf] sim-breakdown enabled (logEvery=${perfLogEvery})`);
-  }
-  if (collisionPerfEnabled) {
-    console.log(`[perf] stage-coli-breakdown enabled (logEvery=${perfLogEvery})`);
-    console.log(`[perf] ball-step-breakdown enabled (logEvery=${perfLogEvery})`);
+    game.stageRuntime.advancePerf.enabled = false;
   }
   
   const hudRenderer = new HudRenderer(hudCanvas);
@@ -808,7 +784,6 @@ export function runMainApp() {
       lobbyRoomNameInput,
       clampInt,
       sanitizeLobbyName,
-      netplayPerf,
       profileUpdateThrottle,
       chatUi,
       resetLocalPlayersAfterNetplay,
@@ -839,7 +814,6 @@ export function runMainApp() {
       appendChatMessage,
       sanitizeChatText,
       getAvatarValidationCached: (dataUrl: string) => profileUi.getAvatarValidationCached(dataUrl),
-      recordNetplayPerf,
       isNetplayDebugEnabled,
       netplayDebugOverlay,
       ensureGfxReady: () => {
@@ -935,13 +909,9 @@ export function runMainApp() {
   }
   
   const {
-    netplayPerf,
-    recordNetplayPerf,
     isNetplayDebugEnabled,
   } = createNetplayDebugState({
-    enabled: perfEnabled,
     storageKey: netplayDebugStorageKey,
-    game,
   });
   
   type NetplayRole = 'host' | 'client';

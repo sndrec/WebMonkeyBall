@@ -69,20 +69,6 @@ function setVecLen(vec, len) {
   }
 }
 
-function goalReplayModeToSmb1State(mode) {
-  switch (mode) {
-    case 1:
-      return 18;
-    case 2:
-      return 19;
-    case 3:
-      return 20;
-    case 0:
-    default:
-      return 17;
-  }
-}
-
 function smb2ApeIsStandstill(ball) {
   const apeMotionLen = sqrt(sumSq3(ball.unkB8?.x ?? 0, ball.unkB8?.y ?? 0, ball.unkB8?.z ?? 0));
   return apeMotionLen < SMB2_APE_STANDSTILL_THRESHOLD && (ball.vel?.y ?? 0) >= -0.16203703;
@@ -876,7 +862,6 @@ export class GameplayCamera {
     this.lookAt.x = replayStartPos.x;
     this.lookAt.y = replayStartPos.y;
     this.lookAt.z = replayStartPos.z;
-    let selectionReason = 'default_state17';
 
     tmpVec.x = replayStartPos.x - this.goalReplayGoal.x;
     tmpVec.y = replayStartPos.y - this.goalReplayGoal.y;
@@ -884,7 +869,6 @@ export class GameplayCamera {
     const goalDist = sqrt(sumSq3(tmpVec.x, tmpVec.y, tmpVec.z));
     if (goalDist >= 16) {
       this.goalReplayMode = 1;
-      selectionReason = 'far_from_goal_state18';
       if (goalDist <= 1e-7) {
         tmpVec.x = 0;
         tmpVec.y = 0;
@@ -904,7 +888,6 @@ export class GameplayCamera {
       this.buildGoalReplayBasisTransform(stageRuntime);
       if (eventGoalDist > 2.5 && rand3A && replayEventPos.y > this.goalReplayGoal.y) {
         this.goalReplayMode = 0;
-        selectionReason = 'event_above_goal_state17';
         this.eyeVel.x = 0;
         this.eyeVel.y = 0;
         this.eyeVel.z = 0;
@@ -935,7 +918,6 @@ export class GameplayCamera {
         this.eye.z = replayEventPos.z + tmpVec2.z;
       } else if (speed > 0.25 && (Math.random() * 4) >= 1) {
         this.goalReplayMode = 3;
-        selectionReason = 'speed_random_state20';
         this.unk54.x = 2 + Math.random();
         this.unk54.y = 1 + 5 * Math.random();
         this.unk54.z = 4 * (Math.random() - 0.5);
@@ -956,7 +938,6 @@ export class GameplayCamera {
         this.eyeVel.x = 0;
         this.eyeVel.y = 0;
         this.eyeVel.z = 0;
-        selectionReason = this.goalReplayAnimGroupId > 0 ? 'anim_group_follow_state19' : 'fallback_state17';
         tmpVec2.x = 9 * (speed * (Math.random() - 0.5));
         tmpVec2.y = 2.5;
         tmpVec2.z = 5;
@@ -974,17 +955,6 @@ export class GameplayCamera {
         }
       }
     }
-
-    console.info('[GoalReplayCamera]', {
-      goalReplayMode: this.goalReplayMode,
-      smb1CameraState: goalReplayModeToSmb1State(this.goalReplayMode),
-      selectionReason,
-      goalId: this.goalReplayGoalId,
-      animGroupId: this.goalReplayAnimGroupId,
-      replayStartPos: { x: replayStartPos.x, y: replayStartPos.y, z: replayStartPos.z },
-      replayEventPos: { x: replayEventPos.x, y: replayEventPos.y, z: replayEventPos.z },
-      goalPos: { x: this.goalReplayGoal.x, y: this.goalReplayGoal.y, z: this.goalReplayGoal.z },
-    });
 
     this.setEyeLookAt(this.eye, this.lookAt);
   }

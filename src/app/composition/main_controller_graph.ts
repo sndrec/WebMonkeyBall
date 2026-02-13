@@ -50,7 +50,6 @@ export function createMainControllerGraph(args: any) {
     lobbyRoomNameInput,
     clampInt,
     sanitizeLobbyName,
-    netplayPerf,
     profileUpdateThrottle,
     chatUi,
     resetLocalPlayersAfterNetplay,
@@ -81,7 +80,6 @@ export function createMainControllerGraph(args: any) {
     appendChatMessage,
     sanitizeChatText,
     getAvatarValidationCached,
-    recordNetplayPerf,
     isNetplayDebugEnabled,
     netplayDebugOverlay,
     ensureGfxReady,
@@ -456,7 +454,6 @@ netplaySimSync = new NetplaySimulationSyncController({
     netplaySync?.resetNetplaySession();
   },
   quantizedEqual: (a, b) => netplaySync?.quantizedEqual(a, b) ?? (a.x === b.x && a.y === b.y && (a.buttons ?? 0) === (b.buttons ?? 0)),
-  netplayPerf,
 });
 netplayConnectionState = new NetplayConnectionStateController({
   game,
@@ -784,7 +781,6 @@ netplayRuntime = new NetplayRuntimeController({
   getAuthoritativeHashFrame: (state) => netplaySync?.getAuthoritativeHashFrame(state) ?? null,
   getEstimatedHostFrame: (state) => netplaySync?.getEstimatedHostFrame(state) ?? state.lastReceivedHostFrame,
   getClientLeadFrames: (state) => netplaySync?.getClientLeadFrames(state) ?? NETPLAY_CLIENT_LEAD,
-  recordNetplayPerf,
   isNetplayDebugEnabled,
   netplayDebugOverlay,
   constants: {

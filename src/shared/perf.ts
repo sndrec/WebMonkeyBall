@@ -9,7 +9,7 @@ export function perfStart(label: string): PerfScope {
   return { label, startMs: perfNow() };
 }
 
-export function perfEnd(scope: PerfScope, log: (message: string) => void = console.debug): number {
+export function perfEnd(scope: PerfScope, log: (message: string) => void = () => {}): number {
   const elapsedMs = perfNow() - scope.startMs;
   log(`${scope.label}: ${elapsedMs.toFixed(3)}ms`);
   return elapsedMs;

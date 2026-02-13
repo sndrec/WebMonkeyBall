@@ -46,8 +46,6 @@ const CHAIN_ENDPOINT_VEL_BLEND = 0.1;
 const CHAIN_RIBBON_WIDTH = 0.1;
 const CHAIN_RIBBON_TEXTURE = 'src/mods/chain/chain.png';
 const CHAIN_PORTAL_SEAM_MAX_CORRECTION = 0.2;
-const CHAIN_PORTAL_DEBUG_STORAGE_KEY = 'smb_chain_portal_debug';
-const CHAIN_PORTAL_DEBUG_LOG_EVERY = 30;
 
 const GOAL_SEQUENCE_FRAMES = 330;
 const GOAL_SKIP_TOTAL_FRAMES = 210;
@@ -144,8 +142,6 @@ const portalConstraintMat3B = mat3.create();
 const portalConstraintVecA = vec3.create();
 const portalConstraintVecB = vec3.create();
 const portalTransformScratch = mat4.create();
-const portalDebugMat = mat4.create();
-const portalDebugVec = vec3.create();
 
 function getChainState(game: object): ChainState {
   let state = chainStateByGame.get(game);
@@ -311,26 +307,6 @@ function getWormholeDirection(srcWormholeId: number, dstWormholeId: number) {
 
 function getPlayersSorted(players: any[]) {
   return [...players].sort((a, b) => a.id - b.id);
-}
-
-function isChainPortalDebugEnabled() {
-  return true;
-}
-
-function setChainPortalDebugEnabled(enabled: boolean) {
-  if (typeof window === 'undefined') {
-    return;
-  }
-  (window as any).CHAIN_PORTAL_DEBUG = !!enabled;
-  try {
-    localStorage.setItem(CHAIN_PORTAL_DEBUG_STORAGE_KEY, enabled ? '1' : '0');
-  } catch {
-    // Ignore storage write failures.
-  }
-}
-
-if (typeof window !== 'undefined' && !(window as any).setChainPortalDebug) {
-  (window as any).setChainPortalDebug = setChainPortalDebugEnabled;
 }
 
 function getChainActivePlayersSorted(players: any[]) {
@@ -1518,72 +1494,6 @@ function pushChainRibbonPrimitive(primitives: any[], id: number, points: Vec3[])
   });
 }
 
-function logChainPortalDebugFrame(game: any, state: ChainState, players: any[], wormholeTeleports: WormholeTeleportEvent[]) {
-  if (!isChainPortalDebugEnabled()) {
-    return;
-  }
-  const simTick = Number.isFinite(game?.simTick) ? (game.simTick | 0) : 0;
-  const periodic = simTick % CHAIN_PORTAL_DEBUG_LOG_EVERY === 0;
-  const hadTeleport = Array.isArray(wormholeTeleports) && wormholeTeleports.length > 0;
-  if (!periodic && !hadTeleport) {
-    return;
-  }
-  const sortedPlayers = getPlayersSorted(players);
-  const signatures = sortedPlayers.map((player) => {
-    const playerId = toNonNegativeInt(player?.id) ?? -1;
-    const portalState = state.portalByPlayer.get(playerId);
-    return `${playerId}:${portalState?.signature ?? ''}`;
-  }).join(' ');
-  if (hadTeleport) {
-    const teleportSummary = wormholeTeleports.map((entry) => (
-      `${entry.playerId}:${entry.srcWormholeId}->${entry.dstWormholeId}`
-    )).join(', ');
-    console.log('[chain-portal] tick=%d teleports=%s', simTick, teleportSummary);
-  }
-  console.log('[chain-portal] tick=%d signatures=%s', simTick, signatures || '(none)');
-  for (const link of state.links) {
-    const playerA = state.portalByPlayer.get(link.playerAId);
-    const playerB = state.portalByPlayer.get(link.playerBId);
-    const crossing = !!playerA && !!playerB && playerA.signature !== playerB.signature;
-    const seamIndex = Number.isFinite(link.portalSeamIndex) ? (link.portalSeamIndex | 0) : -1;
-    let worldSeg = -1;
-    let portalSeg = -1;
-    if (seamIndex >= 0 && seamIndex < (link.nodes.length - 1)) {
-      const nodeA = link.nodes[seamIndex];
-      const nodeB = link.nodes[seamIndex + 1];
-      const worldDx = nodeB.pos.x - nodeA.pos.x;
-      const worldDy = nodeB.pos.y - nodeA.pos.y;
-      const worldDz = nodeB.pos.z - nodeA.pos.z;
-      worldSeg = sqrt((worldDx * worldDx) + (worldDy * worldDy) + (worldDz * worldDz));
-      if (playerA && playerB) {
-        mat4.multiply(portalDebugMat, playerA.lift, playerB.invLift);
-        vec3.set(portalDebugVec, nodeB.pos.x, nodeB.pos.y, nodeB.pos.z);
-        vec3.transformMat4(portalDebugVec, portalDebugVec, portalDebugMat);
-        const portalDx = portalDebugVec[0] - nodeA.pos.x;
-        const portalDy = portalDebugVec[1] - nodeA.pos.y;
-        const portalDz = portalDebugVec[2] - nodeA.pos.z;
-        portalSeg = sqrt((portalDx * portalDx) + (portalDy * portalDy) + (portalDz * portalDz));
-      }
-    }
-    if (!crossing && !hadTeleport && !periodic) {
-      continue;
-    }
-    const followerId = toNonNegativeInt(link.portalFollowerId);
-    console.log(
-      '[chain-portal] tick=%d link=%d pair=%d-%d crossing=%s follower=%s seam=%d worldSeg=%s portalSeg=%s',
-      simTick,
-      link.id >>> 0,
-      link.playerAId,
-      link.playerBId,
-      crossing ? 'yes' : 'no',
-      followerId === null ? '-' : String(followerId),
-      seamIndex,
-      worldSeg.toFixed(3),
-      portalSeg.toFixed(3),
-    );
-  }
-}
-
 function processPostChainBallWormholes(game: any, state: ChainState, players: any[]): WormholeTeleportEvent[] {
   if (!game?.stageRuntime) {
     return [];
@@ -1717,11 +1627,7 @@ function buildChainHooks(): ModHooks {
       if (hasBallDropStarted(game)) {
         syncChainTopology(game, state, sortedPlayers);
         simulateChainedTogether(game, state, sortedPlayers, teleportEvents);
-        const postChainTeleports = processPostChainBallWormholes(game, state, sortedPlayers);
-        const debugTeleports = postChainTeleports.length > 0
-          ? [...teleportEvents, ...postChainTeleports]
-          : teleportEvents;
-        logChainPortalDebugFrame(game, state, sortedPlayers, debugTeleports);
+        processPostChainBallWormholes(game, state, sortedPlayers);
       } else {
         state.links = [];
         state.topologyKey = '';

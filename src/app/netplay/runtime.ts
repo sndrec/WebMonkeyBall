@@ -45,11 +45,6 @@ type RuntimeDeps = {
   getAuthoritativeHashFrame: (state: any) => number | null;
   getEstimatedHostFrame: (state: any) => number;
   getClientLeadFrames: (state: any) => number;
-  recordNetplayPerf: (
-    startMs: number,
-    simTicks?: number,
-    breakdown?: { preMs?: number; hostRollbackApplyMs?: number; stepMs?: number; postMs?: number },
-  ) => void;
   isNetplayDebugEnabled: () => boolean;
   netplayDebugOverlay: { show: (warning: string | null, lines: string[]) => void; hide: () => void };
   constants: RuntimeConstants;
@@ -257,39 +252,25 @@ export class NetplayRuntimeController {
     if (!state) {
       return;
     }
-    const perfStart = performance.now();
-    let preMs = 0;
-    let hostRollbackApplyMs = 0;
-    let stepMs = 0;
-    let postMs = 0;
-    const preStart = perfStart;
     if (!this.deps.game.stageRuntime || this.deps.game.loadingStage) {
       this.deps.game.update(0);
-      preMs = Math.max(0, performance.now() - preStart);
-      this.deps.recordNetplayPerf(perfStart, 0, { preMs, hostRollbackApplyMs, stepMs, postMs });
       return;
     }
     const nowMs = performance.now();
     if (state.role === 'client' && state.awaitingStageSync) {
       this.deps.maybeResendStageReady(nowMs);
       this.deps.game.accumulator = 0;
-      preMs = Math.max(0, performance.now() - preStart);
-      this.deps.recordNetplayPerf(perfStart, 0, { preMs, hostRollbackApplyMs, stepMs, postMs });
       return;
     }
     if (state.role === 'host' && state.awaitingStageReady) {
       this.deps.maybeForceStageSync(nowMs);
       if (state.awaitingStageReady) {
         this.deps.game.accumulator = 0;
-        preMs = Math.max(0, performance.now() - preStart);
-        this.deps.recordNetplayPerf(perfStart, 0, { preMs, hostRollbackApplyMs, stepMs, postMs });
         return;
       }
     }
     if (state.role === 'host') {
-      const hostRollbackStart = performance.now();
       this.deps.hostApplyPendingRollback();
-      hostRollbackApplyMs += performance.now() - hostRollbackStart;
     }
     let netplayAccumulator = this.deps.getNetplayAccumulator();
     if (netplayAccumulator < 0) {
@@ -330,8 +311,6 @@ export class NetplayRuntimeController {
     }
     if (state.role === 'client' && drift < -this.deps.constants.clientAheadSlack) {
       this.clientSendInputBuffer(currentFrame);
-      preMs = Math.max(0, performance.now() - preStart - hostRollbackApplyMs);
-      this.deps.recordNetplayPerf(perfStart, 0, { preMs, hostRollbackApplyMs, stepMs, postMs });
       return;
     }
     let rateScale = 1;
@@ -357,24 +336,18 @@ export class NetplayRuntimeController {
       const add = introSync ? 2 : 1;
       ticks = Math.min(maxTicks, Math.max(1, ticks + add));
     }
-    preMs = Math.max(0, performance.now() - preStart - hostRollbackApplyMs);
-    const stepStart = performance.now();
     for (let i = 0; i < ticks; i += 1) {
       this.netplayStep();
       netplayAccumulator -= this.deps.game.fixedStep;
     }
-    stepMs = performance.now() - stepStart;
     if (netplayAccumulator < 0) {
       netplayAccumulator = 0;
     }
-    const postStart = performance.now();
     this.deps.setNetplayAccumulator(netplayAccumulator);
     if (state.role === 'host') {
       this.hostMaybeSendSnapshots(nowMs);
     }
     this.deps.game.accumulator = Math.max(0, Math.min(this.deps.game.fixedStep, netplayAccumulator));
-    postMs = performance.now() - postStart;
-    this.deps.recordNetplayPerf(perfStart, ticks, { preMs, hostRollbackApplyMs, stepMs, postMs });
   }
 
   updateNetplayDebugOverlay(nowMs: number) {

@@ -890,7 +890,6 @@ export class World {
     private streakExternalTextureLoading = new Set<string>();
     private streakExternalTextureFailed = new Set<string>();
     private streakExternalTextureOwned = new Set<string>();
-    private lastStreakLogTime = -1;
     private streakHistory = new Map<number, { older: vec3; prev: vec3; lastUpdate: number }>();
     private prevViewFromWorld = mat4.create();
     private lastViewFromWorld = mat4.create();
@@ -1111,7 +1110,6 @@ export class World {
         }
 
         const usesSmb2Models = stageData.gameSource === 'smb2' || stageData.gameSource === 'mb2ws';
-        const shouldLogNaomi = stageData.stageInfo.id === StageId.St092_Bonus_Wave;
         const goalBagModels: GoalBagModels = {
             closed: usesSmb2Models
                 ? this.worldState.modelCache.getModel("NEW_SCENT_BAG_WHOLE", GmaSrc.Common)
@@ -1140,13 +1138,6 @@ export class World {
                 ? this.worldState.modelCache.getModel("PAPER_PIECE_YELLOW", GmaSrc.Common)
                 : this.worldState.modelCache.getModel(CommonModelID.PAPER_PIECE_YELLOW, GmaSrc.Common),
         ];
-        const missingConfetti = this.confettiModels
-            .map((model, index) => (model ? null : index))
-            .filter((index) => index !== null);
-        if (missingConfetti.length > 0) {
-            console.log("confetti models missing", missingConfetti);
-        }
-
         this.sparkModel = usesSmb2Models
             ? this.worldState.modelCache.getModel("CRASH_STAR", GmaSrc.Common)
             : this.worldState.modelCache.getModel(CommonModelID.CRASH_STAR, GmaSrc.Common);
@@ -1188,29 +1179,6 @@ export class World {
                 nameList: Array.from(stageData.stageNlObjNameMap.keys()),
             }
             : null;
-        if (shouldLogNaomi) {
-            const stageNames = new Set<string>();
-            for (const group of stageData.stagedef.animGroups) {
-                for (const model of group.animGroupModels) {
-                    stageNames.add(model.modelName);
-                }
-            }
-            const stageNameList = Array.from(stageNames.values());
-            console.log(
-                "[bonus-wave] animGroupModels",
-                stageNameList.length,
-                stageNameList.slice(0, 50)
-            );
-            if (nlStageModels) {
-                console.log(
-                    "[bonus-wave] nlObj names",
-                    nlStageModels.nameList.length,
-                    nlStageModels.nameList.slice(0, 50)
-                );
-            } else {
-                console.log("[bonus-wave] nlObj names: none");
-            }
-        }
         const resolveStageModel = nlStageModels
             ? (name: string) => {
                 if (!this.nlStageModelCache) {
@@ -1220,14 +1188,11 @@ export class World {
                 if (cached) {
                     return cached;
                 }
-                let matchReason = "direct";
                 let modelIndex = nlStageModels.nameMap.get(name);
                 if (modelIndex === undefined) {
-                    matchReason = "map";
                     modelIndex = nlStageModels.nameMap.get(`${name}_MAP`);
                 }
                 if (modelIndex === undefined) {
-                    matchReason = "prefix";
                     let bestName: string | null = null;
                     let bestLen = 0;
                     for (const candidate of nlStageModels.nameList) {
@@ -1242,9 +1207,6 @@ export class World {
                     if (bestName) {
                         modelIndex = nlStageModels.nameMap.get(bestName);
                     }
-                }
-                if (shouldLogNaomi) {
-                    console.log("[bonus-wave] resolve", name, modelIndex, matchReason);
                 }
                 if (modelIndex === undefined) {
                     return null;
@@ -1265,8 +1227,6 @@ export class World {
                 if ("setForceCullMode" in this.bonusWaveModel) {
                     this.bonusWaveModel.setForceCullMode(GfxCullMode.None);
                 }
-            } else if (shouldLogNaomi) {
-                console.log("[bonus-wave] bonus model missing", BONUS_WAVE_MODEL_NAME);
             }
         }
         this.animGroups = stageData.stagedef.animGroups.map(
@@ -2865,25 +2825,10 @@ export class World {
             renderInst.sortKey = -Math.hypot(x, y, z);
             ctx.translucentInstList.submitRenderInst(renderInst);
         };
-        let streakCount = 0;
-        let starCount = 0;
-        let flashCount = 0;
-        let sparkleCount = 0;
-        let streakSample: {
-            headZ: number;
-            tailZ: number;
-            pos: { x: number; y: number; z: number };
-            prev: { x: number; y: number; z: number };
-            reprojErr: number;
-        } | null = null;
-        let streakNaNCount = 0;
-        let streakNaNSample: { pos: string; prev: string } | null = null;
-
         const streakSeen = new Set<number>();
         for (const effect of this.effects) {
             rp.alpha = effect.alpha;
             if (effect.kind === "streak") {
-                streakCount += 1;
                 streakSeen.add(effect.id);
                 const start = scratchVec3a;
                 const end = scratchVec3b;
@@ -2998,25 +2943,6 @@ export class World {
                 tail1[1] = tailBaseY - rightY * spriteSize;
                 tail1[2] = tailZ;
 
-                const headZ = end[2];
-                if (!Number.isFinite(headZ) || !Number.isFinite(tailZ)) {
-                    streakNaNCount += 1;
-                    if (!streakNaNSample) {
-                        streakNaNSample = {
-                            pos: `${effect.pos.x},${effect.pos.y},${effect.pos.z}`,
-                            prev: `${effect.pos.x},${effect.pos.y},${effect.pos.z}`,
-                        };
-                    }
-                } else if (!streakSample) {
-                    const reprojErr = 0;
-                    streakSample = {
-                        headZ,
-                        tailZ,
-                        pos: { x: effect.pos.x, y: effect.pos.y, z: effect.pos.z },
-                        prev: { x: effect.pos.x, y: effect.pos.y, z: effect.pos.z },
-                        reprojErr,
-                    };
-                }
                 const baseR = Math.min(1, Math.max(0, effect.colorR ?? 1));
                 const baseG = Math.min(1, Math.max(0, effect.colorG ?? 1));
                 const baseB = Math.min(1, Math.max(0, effect.colorB ?? 1));
@@ -3083,17 +3009,13 @@ export class World {
             }
 
             if (effect.kind === "sparkle") {
-                sparkleCount += 1;
                 drawSparkleSprite(effect);
                 continue;
             }
 
             if (effect.kind === "flash") {
-                flashCount += 1;
                 drawFlash(effect);
                 continue;
-            } else {
-                starCount += 1;
             }
             const model = this.sparkModel;
             if (!model) {
@@ -3118,23 +3040,6 @@ export class World {
             if (effect.kind === "star") {
                 drawGlow(effect);
             }
-        }
-        const now = ctx.viewerInput.time;
-        if (now - this.lastStreakLogTime > 1000) {
-            console.log(
-                "[effects] total=%d streak=%d star=%d flash=%d sparkle=%d nan=%d sample=%s nanSample=%s",
-                this.effects.length,
-                streakCount,
-                starCount,
-                flashCount,
-                sparkleCount,
-                streakNaNCount,
-                streakSample
-                    ? `${streakSample.headZ.toFixed(2)}/${streakSample.tailZ.toFixed(2)} err=${streakSample.reprojErr.toFixed(5)} pos=${streakSample.pos.x.toFixed(2)},${streakSample.pos.y.toFixed(2)},${streakSample.pos.z.toFixed(2)} prev=${streakSample.prev.x.toFixed(2)},${streakSample.prev.y.toFixed(2)},${streakSample.prev.z.toFixed(2)}`
-                    : "n/a",
-                streakNaNSample ? `pos=${streakNaNSample.pos} prev=${streakNaNSample.prev}` : "n/a",
-            );
-            this.lastStreakLogTime = now;
         }
         if (this.streakHistory.size > 0) {
             for (const id of this.streakHistory.keys()) {

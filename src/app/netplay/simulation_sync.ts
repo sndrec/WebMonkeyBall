@@ -9,15 +9,6 @@ type SimulationDeps = {
   getSimHash: () => number;
   resetNetplaySession: () => void;
   quantizedEqual: (a: QuantizedInput, b: QuantizedInput) => boolean;
-  netplayPerf: {
-    enabled: boolean;
-    rollbackMs: number;
-    rollbackFrames: number;
-    rollbackCount: number;
-    resimMs: number;
-    resimFrames: number;
-    resimCount: number;
-  };
 };
 
 export class NetplaySimulationSyncController {
@@ -89,14 +80,12 @@ export class NetplaySimulationSyncController {
     if (!state) {
       return false;
     }
-    const perfStart = this.deps.netplayPerf.enabled ? performance.now() : 0;
     const session = state.session;
     const current = session.getFrame();
     const rollbackFrame = Math.max(0, startFrame - 1);
     if (!session.rollbackTo(rollbackFrame)) {
       return false;
     }
-    const resimFrames = current - rollbackFrame;
     const prevSuppress = session.suppressVisuals;
     session.suppressVisuals = true;
     try {
@@ -125,12 +114,6 @@ export class NetplaySimulationSyncController {
     } finally {
       session.suppressVisuals = prevSuppress;
     }
-    if (this.deps.netplayPerf.enabled) {
-      const dt = performance.now() - perfStart;
-      this.deps.netplayPerf.rollbackMs += dt;
-      this.deps.netplayPerf.rollbackFrames += resimFrames;
-      this.deps.netplayPerf.rollbackCount += 1;
-    }
     return true;
   }
 
@@ -142,9 +125,7 @@ export class NetplaySimulationSyncController {
     if (targetFrame <= snapshotFrame) {
       return;
     }
-    const perfStart = this.deps.netplayPerf.enabled ? performance.now() : 0;
     const session = state.session;
-    const resimFrames = targetFrame - snapshotFrame;
     const prevSuppress = session.suppressVisuals;
     session.suppressVisuals = true;
     try {
@@ -158,12 +139,6 @@ export class NetplaySimulationSyncController {
       }
     } finally {
       session.suppressVisuals = prevSuppress;
-    }
-    if (this.deps.netplayPerf.enabled) {
-      const dt = performance.now() - perfStart;
-      this.deps.netplayPerf.resimMs += dt;
-      this.deps.netplayPerf.resimFrames += resimFrames;
-      this.deps.netplayPerf.resimCount += 1;
     }
   }
 
