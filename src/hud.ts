@@ -441,8 +441,119 @@ function formatTimerSeconds(frames: number): { seconds: string; centis: string }
   };
 }
 
-const tintCanvas = document.createElement('canvas');
-const tintCtx = tintCanvas.getContext('2d');
+type TintSurface = {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+};
+
+type Smb2StageLabelSurface = {
+  canvas: HTMLCanvasElement;
+  offsetX: number;
+  offsetY: number;
+};
+
+const TINT_SURFACE_CACHE_LIMIT = 64;
+const tintSurfaceCache = new Map<string, TintSurface>();
+const SMB2_STAGE_LABEL_CACHE_LIMIT = 48;
+const smb2StageLabelCache = new Map<string, Smb2StageLabelSurface>();
+
+function getTintSurface(width: number, height: number): TintSurface | null {
+  const key = `${width}x${height}`;
+  const cached = tintSurfaceCache.get(key);
+  if (cached) {
+    // Move recently used surfaces to the end so we can evict oldest first.
+    tintSurfaceCache.delete(key);
+    tintSurfaceCache.set(key, cached);
+    return cached;
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    return null;
+  }
+  const surface = { canvas, ctx };
+  tintSurfaceCache.set(key, surface);
+  if (tintSurfaceCache.size > TINT_SURFACE_CACHE_LIMIT) {
+    const oldestKey = tintSurfaceCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      tintSurfaceCache.delete(oldestKey);
+    }
+  }
+  return surface;
+}
+
+function getSmb2StageLabelSurface(
+  font: SpriteFont,
+  text: string,
+  scale: number,
+  mainColor: string,
+  borderColor: string,
+): Smb2StageLabelSurface | null {
+  const key = `${font.image.src}|${text}|${scale}|${mainColor}|${borderColor}`;
+  const cached = smb2StageLabelCache.get(key);
+  if (cached) {
+    smb2StageLabelCache.delete(key);
+    smb2StageLabelCache.set(key, cached);
+    return cached;
+  }
+
+  const textWidth = measureText(font, text, scale);
+  const textHeight = font.params.lineHeight * scale;
+  const borderOffset = scale;
+  const shadowOffset = 3;
+  const minX = -borderOffset;
+  const minY = -borderOffset;
+  const maxX = shadowOffset;
+  const maxY = shadowOffset;
+  const canvasWidth = Math.max(1, Math.ceil(textWidth + (maxX - minX)));
+  const canvasHeight = Math.max(1, Math.ceil(textHeight + (maxY - minY)));
+  const canvas = document.createElement('canvas');
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+  const canvasCtx = canvas.getContext('2d');
+  if (!canvasCtx) {
+    return null;
+  }
+  const drawLeft = -minX;
+  const drawTop = -minY;
+  drawTextAtSolidTint(canvasCtx, font, text, drawLeft + shadowOffset, drawTop + shadowOffset, scale, '#000000', 0.45);
+  drawTextAtWithSmb2Border(canvasCtx, font, text, drawLeft, drawTop, scale, mainColor, borderColor);
+  const surface = {
+    canvas,
+    offsetX: minX,
+    offsetY: minY,
+  };
+  smb2StageLabelCache.set(key, surface);
+  if (smb2StageLabelCache.size > SMB2_STAGE_LABEL_CACHE_LIMIT) {
+    const oldestKey = smb2StageLabelCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      smb2StageLabelCache.delete(oldestKey);
+    }
+  }
+  return surface;
+}
+
+function drawSmb2StageLabelCached(
+  ctx: CanvasRenderingContext2D,
+  font: SpriteFont,
+  text: string,
+  left: number,
+  top: number,
+  scale: number,
+  mainColor: string,
+  borderColor: string,
+) {
+  const surface = getSmb2StageLabelSurface(font, text, scale, mainColor, borderColor);
+  if (!surface) {
+    drawTextAtSolidTint(ctx, font, text, left + 3, top + 3, scale, '#000000', 0.45);
+    drawTextAtWithSmb2Border(ctx, font, text, left, top, scale, mainColor, borderColor);
+    return;
+  }
+  ctx.drawImage(surface.canvas, left + surface.offsetX, top + surface.offsetY);
+}
 
 function drawTintedImage(
   ctx: CanvasRenderingContext2D,
@@ -460,7 +571,7 @@ function drawTintedImage(
 ) {
   ctx.save();
   ctx.globalAlpha = opacity;
-  if (!color || !tintCtx) {
+  if (!color) {
     ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
     ctx.restore();
     return;
@@ -468,21 +579,24 @@ function drawTintedImage(
 
   const w = Math.max(1, Math.ceil(dw));
   const h = Math.max(1, Math.ceil(dh));
-  if (tintCanvas.width !== w || tintCanvas.height !== h) {
-    tintCanvas.width = w;
-    tintCanvas.height = h;
-  } else {
-    tintCtx.clearRect(0, 0, w, h);
+  const tintSurface = getTintSurface(w, h);
+  if (!tintSurface) {
+    ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+    ctx.restore();
+    return;
   }
+  const tintCanvas = tintSurface.canvas;
+  const tintCtx = tintSurface.ctx;
+  tintCtx.clearRect(0, 0, w, h);
   tintCtx.globalCompositeOperation = 'source-over';
   tintCtx.globalAlpha = 1;
-  tintCtx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+  tintCtx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
   tintCtx.globalCompositeOperation = 'multiply';
   tintCtx.fillStyle = color;
   tintCtx.fillRect(0, 0, w, h);
   tintCtx.globalCompositeOperation = 'destination-in';
-  tintCtx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
-  ctx.drawImage(tintCanvas, dx, dy);
+  tintCtx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+  ctx.drawImage(tintCanvas, dx, dy, dw, dh);
   ctx.restore();
 }
 
@@ -502,7 +616,7 @@ function drawSolidTintedImage(
 ) {
   ctx.save();
   ctx.globalAlpha = opacity;
-  if (!color || !tintCtx) {
+  if (!color) {
     ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
     ctx.restore();
     return;
@@ -510,19 +624,22 @@ function drawSolidTintedImage(
 
   const w = Math.max(1, Math.ceil(dw));
   const h = Math.max(1, Math.ceil(dh));
-  if (tintCanvas.width !== w || tintCanvas.height !== h) {
-    tintCanvas.width = w;
-    tintCanvas.height = h;
-  } else {
-    tintCtx.clearRect(0, 0, w, h);
+  const tintSurface = getTintSurface(w, h);
+  if (!tintSurface) {
+    ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+    ctx.restore();
+    return;
   }
+  const tintCanvas = tintSurface.canvas;
+  const tintCtx = tintSurface.ctx;
+  tintCtx.clearRect(0, 0, w, h);
   tintCtx.globalCompositeOperation = 'source-over';
   tintCtx.globalAlpha = 1;
-  tintCtx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+  tintCtx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
   tintCtx.globalCompositeOperation = 'source-in';
   tintCtx.fillStyle = color;
   tintCtx.fillRect(0, 0, w, h);
-  ctx.drawImage(tintCanvas, dx, dy);
+  ctx.drawImage(tintCanvas, dx, dy, dw, dh);
   ctx.restore();
 }
 
@@ -564,24 +681,22 @@ function drawSpriteSolidTint(
   const dh = img.height * scale;
   const w = Math.max(1, Math.ceil(dw));
   const h = Math.max(1, Math.ceil(dh));
-  if (!tintCtx) {
+  const tintSurface = getTintSurface(w, h);
+  if (!tintSurface) {
     return;
   }
-  if (tintCanvas.width !== w || tintCanvas.height !== h) {
-    tintCanvas.width = w;
-    tintCanvas.height = h;
-  } else {
-    tintCtx.clearRect(0, 0, w, h);
-  }
+  const tintCanvas = tintSurface.canvas;
+  const tintCtx = tintSurface.ctx;
+  tintCtx.clearRect(0, 0, w, h);
   tintCtx.globalCompositeOperation = 'source-over';
   tintCtx.globalAlpha = 1;
-  tintCtx.drawImage(img, 0, 0, img.width, img.height, 0, 0, dw, dh);
+  tintCtx.drawImage(img, 0, 0, img.width, img.height, 0, 0, w, h);
   tintCtx.globalCompositeOperation = 'source-in';
   tintCtx.fillStyle = '#ffffff';
   tintCtx.fillRect(0, 0, w, h);
   ctx.save();
   ctx.globalAlpha = opacity;
-  ctx.drawImage(tintCanvas, pos.x - dw / 2, pos.y - dh / 2);
+  ctx.drawImage(tintCanvas, pos.x - dw / 2, pos.y - dh / 2, dw, dh);
   ctx.restore();
 }
 
@@ -1709,8 +1824,7 @@ export class HudRenderer {
       drawSprite(ctx, iconImage, { x: 32, y: 448 }, 1);
       drawTextAt(ctx, smb2Fonts.numSpeed, stageNumberText, stageNumberX + 3, 443, 1, '#000000', 0.5);
       drawTextAt(ctx, smb2Fonts.numSpeed, stageNumberText, stageNumberX, 440, 1, '#ffff00');
-      drawTextAtSolidTint(ctx, smb2Fonts.asc24, stageNameText, stageLabelX + 3, 443, 0.7, '#000000', 0.45);
-      drawTextAtWithSmb2Border(ctx, smb2Fonts.asc24, stageNameText, stageLabelX, 440, 0.7, '#ffff00', '#000000');
+      drawSmb2StageLabelCached(ctx, smb2Fonts.asc24, stageNameText, stageLabelX, 440, 0.7, '#ffff00', '#000000');
 
       drawSpriteTopLeft(ctx, smb2.bananaFrame, bananaCounterX, bananaCounterY, 1);
       drawSpriteTopLeft(ctx, smb2.bananaIcon, bananaCounterX - 2, bananaCounterY - 2, 1);
