@@ -7,7 +7,8 @@
   },
   "devDependencies": {
     "esbuild": "^0.25.10",
-    "playwright": "^1.44.0"
+    "playwright": "^1.44.0",
+    "wrangler": "^4.65.0"
   },
   "scripts": {
     "build": "esbuild src/main.ts src/admin.ts --bundle --format=esm --target=es2022 --outdir=dist --sourcemap --define:process.env.NODE_ENV=\\\"production\\\" --external:gl-matrix",

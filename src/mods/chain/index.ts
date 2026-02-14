@@ -1213,9 +1213,10 @@ function simulateChainedTogether(
           portalConstraint,
           link.portalFollowerId,
         );
-        // Solve constraints in both directions to avoid persistent endpoint-order bias.
-        solveChainSegmentConstraints(link.nodes, segmentRestLen, false, portalConstraint);
-        solveChainSegmentConstraints(link.nodes, segmentRestLen, true, portalConstraint);
+        // Alternate which sweep runs last so one endpoint doesn't get a persistent "last write" advantage.
+        const reverseSolveFirst = ((substep + iter) & 1) === 1;
+        solveChainSegmentConstraints(link.nodes, segmentRestLen, reverseSolveFirst, portalConstraint);
+        solveChainSegmentConstraints(link.nodes, segmentRestLen, !reverseSolveFirst, portalConstraint);
         const useFullCollision = iter === (CHAIN_CONSTRAINT_ITERS - 1);
         collideChainInteriorNodes(state, game, link, stageFormat, useFullCollision, (iter & 1) === 1);
       }
