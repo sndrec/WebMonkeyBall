@@ -221,6 +221,9 @@ const FONT_PARAMS = {
     padRight: 1,
     padTop: 0,
     padBottom: 2,
+    glyphMap: {
+      45: 45, // '-' (needed for SMB2 load-in "WORLD 1-1")
+    },
   },
   asc16x16: {
     spaceWidth: 16,
@@ -343,6 +346,9 @@ const SMB2_FONT_PARAMS = {
     padRight: 0,
     padTop: 0,
     padBottom: 0,
+    glyphMap: {
+      126: 32, // '~' maps to the wave-dash glyph stored in the '@' slot
+    },
   },
 } satisfies Record<string, FontParams>;
 
@@ -2442,7 +2448,7 @@ export class HudRenderer {
 
         if (t >= 121) {
           const hudMode = getSmb2HudMode(game);
-          const stageName = getSmb2LoadinStageName(game, floorInfo);
+          const stageName = `~ ${getSmb2LoadinStageName(game, floorInfo)} ~`;
           const stageFont = assets.smb2.fonts.asc24;
           const stageBaseScale = hudMode === 'story' ? 1.4 : 0.8;
           const stageBaseHeight = stageFont.params.lineHeight * stageBaseScale;
