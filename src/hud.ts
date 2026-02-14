@@ -486,6 +486,46 @@ function drawTintedImage(
   ctx.restore();
 }
 
+function drawSolidTintedImage(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+  color: string | null,
+  opacity: number,
+) {
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  if (!color || !tintCtx) {
+    ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+    ctx.restore();
+    return;
+  }
+
+  const w = Math.max(1, Math.ceil(dw));
+  const h = Math.max(1, Math.ceil(dh));
+  if (tintCanvas.width !== w || tintCanvas.height !== h) {
+    tintCanvas.width = w;
+    tintCanvas.height = h;
+  } else {
+    tintCtx.clearRect(0, 0, w, h);
+  }
+  tintCtx.globalCompositeOperation = 'source-over';
+  tintCtx.globalAlpha = 1;
+  tintCtx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+  tintCtx.globalCompositeOperation = 'source-in';
+  tintCtx.fillStyle = color;
+  tintCtx.fillRect(0, 0, w, h);
+  ctx.drawImage(tintCanvas, dx, dy);
+  ctx.restore();
+}
+
 function drawSprite(
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
@@ -867,6 +907,66 @@ function drawTextAt(
     drawTintedImage(ctx, font.image, sx, sy, sw, sh, x, top, dw, dh, color, opacity);
     x += params.spaceWidth * scale;
   }
+}
+
+function drawTextAtSolidTint(
+  ctx: CanvasRenderingContext2D,
+  font: SpriteFont,
+  text: string,
+  left: number,
+  top: number,
+  scale: number,
+  color: string | null,
+  opacity = 1,
+) {
+  const params = font.params;
+  let x = left;
+  for (const ch of text) {
+    const code = ch.charCodeAt(0);
+    if (ch === ' ') {
+      x += params.spaceWidth * scale;
+      continue;
+    }
+    const glyphIndex = getGlyphIndex(params, code);
+    if (glyphIndex < 0) {
+      x += params.spaceWidth * scale;
+      continue;
+    }
+    const div = Math.floor(glyphIndex / params.columns);
+    const mod = glyphIndex % params.columns;
+    const u1 = params.uStep * mod + params.uMargin * params.padLeft;
+    const v1 = params.vStep * div + params.vMargin * params.padTop;
+    const u2 = params.uStep + (params.uStep * mod - params.uMargin * params.padRight);
+    const v2 = params.vStep + (params.vStep * div - params.vMargin * params.padBottom);
+    const sx = u1 * font.image.width;
+    const sy = v1 * font.image.height;
+    const sw = (u2 - u1) * font.image.width;
+    const sh = (v2 - v1) * font.image.height;
+    const dw = sw * scale;
+    const dh = sh * scale;
+    drawSolidTintedImage(ctx, font.image, sx, sy, sw, sh, x, top, dw, dh, color, opacity);
+    x += params.spaceWidth * scale;
+  }
+}
+
+function drawTextAtWithSmb2Border(
+  ctx: CanvasRenderingContext2D,
+  font: SpriteFont,
+  text: string,
+  left: number,
+  top: number,
+  scale: number,
+  mainColor: string,
+  borderColor: string,
+  opacity = 1,
+  borderOffset = scale,
+) {
+  // SMB2 textdraw border pass uses four diagonal offsets around the glyph.
+  drawTextAtSolidTint(ctx, font, text, left + borderOffset, top - borderOffset, scale, borderColor, opacity);
+  drawTextAtSolidTint(ctx, font, text, left + borderOffset, top + borderOffset, scale, borderColor, opacity);
+  drawTextAtSolidTint(ctx, font, text, left - borderOffset, top + borderOffset, scale, borderColor, opacity);
+  drawTextAtSolidTint(ctx, font, text, left - borderOffset, top - borderOffset, scale, borderColor, opacity);
+  drawTextAtSolidTint(ctx, font, text, left, top, scale, mainColor, opacity);
 }
 
 function normalizeGoalType(goalType: string | number | null): 'B' | 'G' | 'R' {
@@ -1571,15 +1671,15 @@ export class HudRenderer {
       const speedText = String(Math.min(999, Math.round(speedMph))).padStart(3, ' ');
       drawTextAt(ctx, smb2Fonts.numSpeed, speedText, 18, 412, 1, '#000000', 0.5);
       drawTextAt(ctx, smb2Fonts.numSpeed, speedText, 16, 410, 1, null);
-      drawSpriteTopLeft(ctx, smb2.speedLabel, 40, 410, 1);
+      drawSpriteTopLeft(ctx, smb2.speedLabel, 64, 410, 1);
 
       drawSpriteTopLeft(ctx, smb2.stageFrame, 16, 432, 1);
       drawSprite(ctx, iconImage, { x: 34, y: 450 }, 1, 0.5, '#000000');
       drawSprite(ctx, iconImage, { x: 32, y: 448 }, 1);
       drawTextAt(ctx, smb2Fonts.numSpeed, stageNumberText, stageNumberX + 3, 443, 1, '#000000', 0.5);
-      drawTextAt(ctx, smb2Fonts.numSpeed, stageNumberText, stageNumberX, 440, 1, null);
-      drawTextAt(ctx, smb2Fonts.asc24, stageNameText, stageLabelX + 3, 443, 0.7, '#000000', 0.5);
-      drawTextAt(ctx, smb2Fonts.asc24, stageNameText, stageLabelX, 440, 0.7, '#ffe66e');
+      drawTextAt(ctx, smb2Fonts.numSpeed, stageNumberText, stageNumberX, 440, 1, '#ffff00');
+      drawTextAtSolidTint(ctx, smb2Fonts.asc24, stageNameText, stageLabelX + 3, 443, 0.7, '#000000', 0.45);
+      drawTextAtWithSmb2Border(ctx, smb2Fonts.asc24, stageNameText, stageLabelX, 440, 0.7, '#ffff00', '#000000');
 
       drawSpriteTopLeft(ctx, smb2.bananaFrame, bananaCounterX, bananaCounterY, 1);
       drawSpriteTopLeft(ctx, smb2.bananaIcon, bananaCounterX - 2, bananaCounterY - 2, 1);
