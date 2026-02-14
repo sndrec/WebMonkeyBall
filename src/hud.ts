@@ -30,6 +30,7 @@ type FontParams = {
   padRight: number;
   padTop: number;
   padBottom: number;
+  glyphMap?: Record<number, number>;
 };
 
 type SpriteFont = {
@@ -64,6 +65,14 @@ type HudAssets = {
     stageIconChallengeExpert: HTMLImageElement;
     stageIconChallengeMaster: HTMLImageElement;
     playerBadge: HTMLImageElement;
+    fonts: {
+      numScore: SpriteFont;
+      numTime: SpriteFont;
+      numTimeSmall: SpriteFont;
+      numSpeed: SpriteFont;
+      numSaru: SpriteFont;
+      asc24: SpriteFont;
+    };
   } | null;
   fonts: {
     num24x37: SpriteFont;
@@ -231,6 +240,112 @@ const FONT_PARAMS = {
   },
 } satisfies Record<string, FontParams>;
 
+const SMB2_FONT_PARAMS = {
+  numScore: {
+    spaceWidth: 16,
+    lineHeight: 20,
+    firstChar: 48,
+    lastChar: 57,
+    columns: 5,
+    rows: 2,
+    uStep: 0.2,
+    vStep: 0.5,
+    uMargin: 0.0125,
+    vMargin: 0.025,
+    padLeft: 0,
+    padRight: 0,
+    padTop: 0,
+    padBottom: 0,
+  },
+  numTime: {
+    spaceWidth: 28,
+    lineHeight: 40,
+    firstChar: 48,
+    lastChar: 57,
+    columns: 5,
+    rows: 2,
+    uStep: 0.2,
+    vStep: 0.5,
+    uMargin: 1 / 140,
+    vMargin: 0.0125,
+    padLeft: 1,
+    padRight: 0,
+    padTop: 0,
+    padBottom: 0,
+  },
+  numTimeSmall: {
+    spaceWidth: 16,
+    lineHeight: 24,
+    firstChar: 48,
+    lastChar: 58,
+    columns: 5,
+    rows: 3,
+    uStep: 0.2,
+    vStep: 1 / 3,
+    uMargin: 0.0125,
+    vMargin: 1 / 72,
+    padLeft: 0,
+    padRight: 0,
+    padTop: 0,
+    padBottom: 0,
+  },
+  numSpeed: {
+    spaceWidth: 16,
+    lineHeight: 16,
+    firstChar: 48,
+    lastChar: 57,
+    columns: 5,
+    rows: 3,
+    uStep: 0.2,
+    vStep: 1 / 3,
+    uMargin: 0.0125,
+    vMargin: 1 / 48,
+    padLeft: 0,
+    padRight: 0,
+    padTop: 1,
+    padBottom: 0,
+    glyphMap: {
+      45: 10, // '-'
+    },
+  },
+  numSaru: {
+    spaceWidth: 20,
+    lineHeight: 24,
+    firstChar: 48,
+    lastChar: 57,
+    columns: 5,
+    rows: 3,
+    uStep: 0.2,
+    vStep: 1 / 3,
+    uMargin: 0.01,
+    vMargin: 1 / 72,
+    padLeft: 0,
+    padRight: 0,
+    padTop: 1,
+    padBottom: 0,
+    glyphMap: {
+      88: 10, // 'X'
+      120: 10, // 'x'
+    },
+  },
+  asc24: {
+    spaceWidth: 20,
+    lineHeight: 24,
+    firstChar: 32,
+    lastChar: 90,
+    columns: 16,
+    rows: 4,
+    uStep: 24 / 384,
+    vStep: 24 / 96,
+    uMargin: 0,
+    vMargin: 0,
+    padLeft: 0,
+    padRight: 0,
+    padTop: 0,
+    padBottom: 0,
+  },
+} satisfies Record<string, FontParams>;
+
 function hudAsset(path: string) {
   const origin = window.location.origin;
   const pathname = window.location.pathname;
@@ -274,10 +389,16 @@ const SMB2_HUD_ASSET_PATHS = {
   bananaFrame: hudAsset('assets/hud/smb2/bmp_nml/502_banana_frame.png'),
   monkeyFrame: hudAsset('assets/hud/smb2/bmp_nml/503_monkey_frame.png'),
   monkeyPortrait: hudAsset('assets/hud/smb1/bmp_com/015_icon_ape_00.png'),
+  asc24: hudAsset('assets/hud/smb2/font/asc24_ascii.png'),
+  numSaru: hudAsset('assets/hud/smb2/bmp_nml/506_num_nml_saru.png'),
   scoreFrame: hudAsset('assets/hud/smb2/bmp_nml/504_score_frame.png'),
   stageFrame: hudAsset('assets/hud/smb2/bmp_nml/505_stage_frame.png'),
+  numScore: hudAsset('assets/hud/smb2/bmp_nml/508_num_nml_score.png'),
   scoreLabel: hudAsset('assets/hud/smb2/bmp_nml/507_score_label.png'),
+  numSpeed: hudAsset('assets/hud/smb2/bmp_nml/50a_num_nml_speed.png'),
   speedLabel: hudAsset('assets/hud/smb2/bmp_nml/509_speed_label.png'),
+  numTime: hudAsset('assets/hud/smb2/bmp_nml/50d_num_nml_time.png'),
+  numTimeSmall: hudAsset('assets/hud/smb2/bmp_nml/50e_num_nml_time_small.png'),
   timeLabel: hudAsset('assets/hud/smb2/bmp_nml/50b_time_label.png'),
   timerBall: hudAsset('assets/hud/smb2/bmp_nml/50c_timer_ball.png'),
   timerFrame: hudAsset('assets/hud/smb2/bmp_nml/50f_timer_frame.png'),
@@ -424,6 +545,19 @@ function drawSpriteSolidTint(
   ctx.restore();
 }
 
+function getGlyphIndex(params: FontParams, charCode: number): number {
+  if (params.glyphMap) {
+    const mappedGlyph = params.glyphMap[charCode];
+    if (mappedGlyph !== undefined) {
+      return mappedGlyph;
+    }
+  }
+  if (charCode < params.firstChar || charCode > params.lastChar) {
+    return -1;
+  }
+  return charCode - params.firstChar;
+}
+
 function drawGlyph(
   ctx: CanvasRenderingContext2D,
   font: SpriteFont,
@@ -436,10 +570,10 @@ function drawGlyph(
   opacity = 1,
 ) {
   const params = font.params;
-  if (charCode < params.firstChar || charCode > params.lastChar) {
+  const glyphIndex = getGlyphIndex(params, charCode);
+  if (glyphIndex < 0) {
     return;
   }
-  const glyphIndex = charCode - params.firstChar;
   const div = Math.floor(glyphIndex / params.columns);
   const mod = glyphIndex % params.columns;
   const u1 = params.uStep * mod + params.uMargin * params.padLeft;
@@ -464,7 +598,7 @@ function measureText(font: SpriteFont, text: string, scale: number): number {
       width += params.spaceWidth * scale;
       continue;
     }
-    if (code < params.firstChar || code > params.lastChar) {
+    if (getGlyphIndex(params, code) < 0) {
       width += params.spaceWidth * scale;
       continue;
     }
@@ -505,11 +639,11 @@ function drawText(
       x += params.spaceWidth * scale;
       continue;
     }
-    if (code < params.firstChar || code > params.lastChar) {
+    const glyphIndex = getGlyphIndex(params, code);
+    if (glyphIndex < 0) {
       x += params.spaceWidth * scale;
       continue;
     }
-    const glyphIndex = code - params.firstChar;
     const div = Math.floor(glyphIndex / params.columns);
     const mod = glyphIndex % params.columns;
     const u1 = params.uStep * mod + params.uMargin * params.padLeft;
@@ -560,11 +694,11 @@ function drawTextScaled(
       x += params.spaceWidth * scaleX;
       continue;
     }
-    if (code < params.firstChar || code > params.lastChar) {
+    const glyphIndex = getGlyphIndex(params, code);
+    if (glyphIndex < 0) {
       x += params.spaceWidth * scaleX;
       continue;
     }
-    const glyphIndex = code - params.firstChar;
     const div = Math.floor(glyphIndex / params.columns);
     const mod = glyphIndex % params.columns;
     const u1 = params.uStep * mod + params.uMargin * params.padLeft;
@@ -672,10 +806,10 @@ function drawGlyphRotatedTopLeft(
   opacity = 1,
 ) {
   const params = font.params;
-  if (charCode < params.firstChar || charCode > params.lastChar) {
+  const glyphIndex = getGlyphIndex(params, charCode);
+  if (glyphIndex < 0) {
     return;
   }
-  const glyphIndex = charCode - params.firstChar;
   const div = Math.floor(glyphIndex / params.columns);
   const mod = glyphIndex % params.columns;
   const u1 = params.uStep * mod + params.uMargin * params.padLeft;
@@ -713,11 +847,11 @@ function drawTextAt(
       x += params.spaceWidth * scale;
       continue;
     }
-    if (code < params.firstChar || code > params.lastChar) {
+    const glyphIndex = getGlyphIndex(params, code);
+    if (glyphIndex < 0) {
       x += params.spaceWidth * scale;
       continue;
     }
-    const glyphIndex = code - params.firstChar;
     const div = Math.floor(glyphIndex / params.columns);
     const mod = glyphIndex % params.columns;
     const u1 = params.uStep * mod + params.uMargin * params.padLeft;
@@ -878,10 +1012,16 @@ export class HudRenderer {
         bananaFrame,
         monkeyFrame,
         monkeyPortrait,
+        asc24,
+        numSaru,
         scoreFrame,
         stageFrame,
+        numScore,
         scoreLabel,
+        numSpeed,
         speedLabel,
+        numTime,
+        numTimeSmall,
         timeLabel,
         timerBall,
         timerFrame,
@@ -896,10 +1036,16 @@ export class HudRenderer {
         loadImage(SMB2_HUD_ASSET_PATHS.bananaFrame),
         loadImage(SMB2_HUD_ASSET_PATHS.monkeyFrame),
         loadImage(SMB2_HUD_ASSET_PATHS.monkeyPortrait),
+        loadImage(SMB2_HUD_ASSET_PATHS.asc24),
+        loadImage(SMB2_HUD_ASSET_PATHS.numSaru),
         loadImage(SMB2_HUD_ASSET_PATHS.scoreFrame),
         loadImage(SMB2_HUD_ASSET_PATHS.stageFrame),
+        loadImage(SMB2_HUD_ASSET_PATHS.numScore),
         loadImage(SMB2_HUD_ASSET_PATHS.scoreLabel),
+        loadImage(SMB2_HUD_ASSET_PATHS.numSpeed),
         loadImage(SMB2_HUD_ASSET_PATHS.speedLabel),
+        loadImage(SMB2_HUD_ASSET_PATHS.numTime),
+        loadImage(SMB2_HUD_ASSET_PATHS.numTimeSmall),
         loadImage(SMB2_HUD_ASSET_PATHS.timeLabel),
         loadImage(SMB2_HUD_ASSET_PATHS.timerBall),
         loadImage(SMB2_HUD_ASSET_PATHS.timerFrame),
@@ -915,6 +1061,14 @@ export class HudRenderer {
         bananaFrame,
         monkeyFrame,
         monkeyPortrait,
+        fonts: {
+          numScore: { image: numScore, params: SMB2_FONT_PARAMS.numScore },
+          numTime: { image: numTime, params: SMB2_FONT_PARAMS.numTime },
+          numTimeSmall: { image: numTimeSmall, params: SMB2_FONT_PARAMS.numTimeSmall },
+          numSpeed: { image: numSpeed, params: SMB2_FONT_PARAMS.numSpeed },
+          numSaru: { image: numSaru, params: SMB2_FONT_PARAMS.numSaru },
+          asc24: { image: asc24, params: SMB2_FONT_PARAMS.asc24 },
+        },
         scoreFrame,
         scoreLabel,
         speedLabel,
@@ -1375,6 +1529,7 @@ export class HudRenderer {
 
     if (useSmb2Layout && assets.smb2) {
       const smb2 = assets.smb2;
+      const smb2Fonts = smb2.fonts;
       const hudMode = getSmb2HudMode(game);
       const bananaCounterX = hudMode === 'challenge' ? 515 : 544;
       const monkeyCounterX = hudMode === 'challenge' ? 559 : 584;
@@ -1388,7 +1543,7 @@ export class HudRenderer {
       const iconImage = this.getSmb2StageIconAsset(smb2, game, floorInfo);
       const challengeDifficulty = getSmb2ChallengeDifficulty(game, floorInfo);
       const stageNumberX = 16 + (challengeDifficulty === 'beginner' ? 38 : 34);
-      const stageNumberWidth = measureText(fonts.num22x22, stageNumberText, 1);
+      const stageNumberWidth = measureText(smb2Fonts.numSpeed, stageNumberText, 1);
       const stageLabelX = stageNumberX + stageNumberWidth + 5;
       const scoreText = score.padStart(7, '0');
       const scoreTextX = 16 + smb2.scoreFrame.width;
@@ -1396,8 +1551,8 @@ export class HudRenderer {
 
       drawSpriteTopLeft(ctx, smb2.scoreFrame, 16, 24, 1);
       drawSpriteTopLeft(ctx, smb2.scoreLabel, 16, 24, 1);
-      drawTextAt(ctx, fonts.num22x22, scoreText, scoreTextX + 2, scoreTextY + 2, 1, '#000000', 0.5);
-      drawTextAt(ctx, fonts.num22x22, scoreText, scoreTextX, scoreTextY, 1, '#ffe66e');
+      drawTextAt(ctx, smb2Fonts.numScore, scoreText, scoreTextX + 2, scoreTextY + 2, 1, '#000000', 0.5);
+      drawTextAt(ctx, smb2Fonts.numScore, scoreText, scoreTextX, scoreTextY, 1, null);
 
       drawSpriteTopLeft(ctx, smb2.timerFrame, 320 - smb2.timerFrame.width / 2, 16, 1);
       const timerBallScale = timeLeftRaw <= 600 ? 1 + func800802E0(timeLeft) : 1;
@@ -1408,36 +1563,29 @@ export class HudRenderer {
         timerBallScale,
       );
 
-      const secMetrics = textMetrics(fonts.num24x37, seconds, 1);
-      drawText(ctx, fonts.num24x37, seconds, { x: 322, y: 45 }, 1, '#000000', 'center', 'center', 0.5);
-      drawText(ctx, fonts.num24x37, seconds, { x: 320, y: 43 }, 1, '#ffe66e', 'center');
       const centiText = `:${centis}`;
-      const centiMetrics = textMetrics(fonts.num12x19, centiText, 1);
-      const secLeft = 320 - secMetrics.width / 2;
-      const centiLeft = secLeft + secMetrics.width - 4;
-      const centiTop = 85 - centiMetrics.height;
-      drawTextAt(ctx, fonts.num12x19, centiText, centiLeft + 2, centiTop + 2, 1, '#000000', 0.5);
-      drawTextAt(ctx, fonts.num12x19, centiText, centiLeft, centiTop, 1, '#ff9d21');
+      drawText(ctx, smb2Fonts.numTime, seconds, { x: 320, y: 43 }, 1, null, 'center', 'top');
+      drawText(ctx, smb2Fonts.numTimeSmall, centiText, { x: 315, y: 83 }, 1, null, 'center', 'top');
       drawSpriteTopLeft(ctx, smb2.timeLabel, 320 - smb2.timeLabel.width / 2, 16, 1);
 
-      const speedText = String(Math.min(999, Math.round(speedMph)));
-      drawTextAt(ctx, fonts.num22x22, speedText, 18, 412, 1, '#000000', 0.5);
-      drawTextAt(ctx, fonts.num22x22, speedText, 16, 410, 1, '#ffffff');
+      const speedText = String(Math.min(999, Math.round(speedMph))).padStart(3, ' ');
+      drawTextAt(ctx, smb2Fonts.numSpeed, speedText, 18, 412, 1, '#000000', 0.5);
+      drawTextAt(ctx, smb2Fonts.numSpeed, speedText, 16, 410, 1, null);
       drawSpriteTopLeft(ctx, smb2.speedLabel, 40, 410, 1);
 
       drawSpriteTopLeft(ctx, smb2.stageFrame, 16, 432, 1);
       drawSprite(ctx, iconImage, { x: 34, y: 450 }, 1, 0.5, '#000000');
       drawSprite(ctx, iconImage, { x: 32, y: 448 }, 1);
-      drawTextAt(ctx, fonts.num22x22, stageNumberText, stageNumberX + 3, 443, 1, '#000000', 0.5);
-      drawTextAt(ctx, fonts.num22x22, stageNumberText, stageNumberX, 440, 1, '#ffe66e');
-      drawTextAt(ctx, fonts.asc20x20, stageNameText, stageLabelX + 3, 443, 0.7, '#000000', 0.5);
-      drawTextAt(ctx, fonts.asc20x20, stageNameText, stageLabelX, 440, 0.7, '#ffe66e');
+      drawTextAt(ctx, smb2Fonts.numSpeed, stageNumberText, stageNumberX + 3, 443, 1, '#000000', 0.5);
+      drawTextAt(ctx, smb2Fonts.numSpeed, stageNumberText, stageNumberX, 440, 1, null);
+      drawTextAt(ctx, smb2Fonts.asc24, stageNameText, stageLabelX + 3, 443, 0.7, '#000000', 0.5);
+      drawTextAt(ctx, smb2Fonts.asc24, stageNameText, stageLabelX, 440, 0.7, '#ffe66e');
 
       drawSpriteTopLeft(ctx, smb2.bananaFrame, bananaCounterX, bananaCounterY, 1);
       drawSpriteTopLeft(ctx, smb2.bananaIcon, bananaCounterX - 2, bananaCounterY - 2, 1);
       const bananasText = String(Math.max(0, Math.trunc(bananasCollected))).padStart(3, '0');
-      drawTextAt(ctx, fonts.num22x22, bananasText, bananaCounterX + 25, bananaCounterY + 3, 1, '#000000', 0.5);
-      drawTextAt(ctx, fonts.num22x22, bananasText, bananaCounterX + 23, bananaCounterY + 1, 1, '#ffe66e');
+      drawTextAt(ctx, smb2Fonts.numScore, bananasText, bananaCounterX + 25, bananaCounterY + 3, 1, '#000000', 0.5);
+      drawTextAt(ctx, smb2Fonts.numScore, bananasText, bananaCounterX + 23, bananaCounterY + 1, 1, null);
 
       drawSprite(ctx, smb2.monkeyFrame, { x: monkeyCounterX, y: monkeyCounterY }, 1);
       ctx.save();
@@ -1448,11 +1596,30 @@ export class HudRenderer {
       ctx.restore();
       if (hudMode === 'challenge') {
         const livesDisplay = Math.max(0, lives - 1);
+        const livesScale = livesDisplay >= 10 ? 0.6 : 1.0;
         drawSprite(ctx, smb2.monkeyFrame, { x: monkeyCounterX + 48, y: monkeyCounterY - 24 }, 0.71428);
-        drawText(ctx, fonts.asc16x16, 'X', { x: monkeyCounterX + 37, y: monkeyCounterY - 23 }, 1, '#000000', 'center', 'center', 0.5);
-        drawText(ctx, fonts.asc16x16, 'X', { x: monkeyCounterX + 35, y: monkeyCounterY - 25 }, 1, '#2f8cf0', 'center');
-        drawText(ctx, fonts.num22x22, String(livesDisplay), { x: monkeyCounterX + 50, y: monkeyCounterY - 22 }, 0.8, '#000000', 'center', 'center', 0.5);
-        drawText(ctx, fonts.num22x22, String(livesDisplay), { x: monkeyCounterX + 48, y: monkeyCounterY - 24 }, 0.8, '#ffe66e', 'center');
+        drawText(ctx, smb2Fonts.numSaru, 'X', { x: monkeyCounterX + 27, y: monkeyCounterY - 15 }, 1, '#000000', 'center', 'center', 0.5);
+        drawText(ctx, smb2Fonts.numSaru, 'X', { x: monkeyCounterX + 25, y: monkeyCounterY - 17 }, 1, null, 'center');
+        drawText(
+          ctx,
+          smb2Fonts.numSaru,
+          String(livesDisplay),
+          { x: monkeyCounterX + 50, y: monkeyCounterY - 22 },
+          livesScale,
+          '#000000',
+          'center',
+          'center',
+          0.5,
+        );
+        drawText(
+          ctx,
+          smb2Fonts.numSaru,
+          String(livesDisplay),
+          { x: monkeyCounterX + 48, y: monkeyCounterY - 24 },
+          livesScale,
+          null,
+          'center',
+        );
       }
     } else {
       drawText(ctx, fonts.asc20x20, 'SCORE', { x: 108, y: 24 }, 1, null, 'center');
