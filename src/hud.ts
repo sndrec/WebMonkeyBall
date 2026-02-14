@@ -772,7 +772,10 @@ function padNumber(value: number, width: number): string {
 }
 
 function getSmb2HudMode(game: any): 'story' | 'challenge' {
-  const mode = game?.course?.mode;
+  const mode = game?.course?.mode
+    ?? game?.courseConfig?.mode
+    ?? game?.session?.courseConfig?.mode
+    ?? game?.currentCourse?.mode;
   if (mode === 'story') {
     return 'story';
   }
@@ -832,6 +835,33 @@ function getSmb2StageLabel(game: any, floorInfo: any): string {
     return stageLabel.slice(0, 16);
   }
   return stageLabel;
+}
+
+function getSmb2StoryWorldStage(game: any, floorInfo: any): { world: number; stage: number } {
+  const course = game?.course as any;
+  const currentIndex = Number(course?.currentIndex);
+  if (Number.isFinite(currentIndex)) {
+    const idx = Math.max(0, Math.trunc(currentIndex));
+    return {
+      world: Math.floor(idx / 10) + 1,
+      stage: (idx % 10) + 1,
+    };
+  }
+
+  const labelRaw = String(game?.course?.getStageLabel?.() ?? '');
+  const storyMatch = labelRaw.match(/W?(\d+)\s*-\s*(\d+)/i);
+  if (storyMatch) {
+    return {
+      world: Math.max(1, Math.trunc(Number(storyMatch[1]) || 1)),
+      stage: Math.max(1, Math.trunc(Number(storyMatch[2]) || 1)),
+    };
+  }
+
+  const floorCurrent = Math.max(1, Math.trunc(floorInfo?.current ?? 1));
+  return {
+    world: Math.floor((floorCurrent - 1) / 10) + 1,
+    stage: ((floorCurrent - 1) % 10) + 1,
+  };
 }
 
 function drawGlyphRotatedTopLeft(
@@ -1636,13 +1666,14 @@ export class HudRenderer {
       const bananaCounterY = 24;
       const monkeyCounterY = 83;
       const floorCurrent = Math.max(1, Math.trunc(floorInfo?.current ?? 1));
-      const world = Math.floor((floorCurrent - 1) / 10) + 1;
-      const storyStage = ((floorCurrent - 1) % 10) + 1;
+      const { world, stage: storyStage } = getSmb2StoryWorldStage(game, floorInfo);
       const stageNumberText = hudMode === 'story' ? `${world}-${storyStage}` : String(floorCurrent);
       const stageNameText = getSmb2StageLabel(game, floorInfo);
       const iconImage = this.getSmb2StageIconAsset(smb2, game, floorInfo);
       const challengeDifficulty = getSmb2ChallengeDifficulty(game, floorInfo);
-      const stageNumberX = 16 + (challengeDifficulty === 'beginner' ? 38 : 34);
+      const stageNumberX = hudMode === 'story'
+        ? 16 + 38
+        : 16 + (challengeDifficulty === 'beginner' ? 38 : 34);
       const stageNumberWidth = measureText(smb2Fonts.numSpeed, stageNumberText, 1);
       const stageLabelX = stageNumberX + stageNumberWidth + 5;
       const scoreText = score.padStart(7, '0');
