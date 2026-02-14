@@ -504,12 +504,12 @@ function getSmb2StageLabelSurface(
   const textHeight = font.params.lineHeight * scale;
   const borderOffset = scale;
   const shadowOffset = 3;
-  const minX = -borderOffset;
-  const minY = -borderOffset;
-  const maxX = shadowOffset;
-  const maxY = shadowOffset;
-  const canvasWidth = Math.max(1, Math.ceil(textWidth + (maxX - minX)));
-  const canvasHeight = Math.max(1, Math.ceil(textHeight + (maxY - minY)));
+  const padLeft = Math.max(0, Math.ceil(borderOffset));
+  const padTop = Math.max(0, Math.ceil(borderOffset));
+  const padRight = Math.max(0, Math.ceil(shadowOffset));
+  const padBottom = Math.max(0, Math.ceil(shadowOffset));
+  const canvasWidth = Math.max(1, Math.ceil(textWidth + padLeft + padRight));
+  const canvasHeight = Math.max(1, Math.ceil(textHeight + padTop + padBottom));
   const canvas = document.createElement('canvas');
   canvas.width = canvasWidth;
   canvas.height = canvasHeight;
@@ -517,14 +517,14 @@ function getSmb2StageLabelSurface(
   if (!canvasCtx) {
     return null;
   }
-  const drawLeft = -minX;
-  const drawTop = -minY;
+  const drawLeft = padLeft;
+  const drawTop = padTop;
   drawTextAtSolidTint(canvasCtx, font, text, drawLeft + shadowOffset, drawTop + shadowOffset, scale, '#000000', 0.45);
   drawTextAtWithSmb2Border(canvasCtx, font, text, drawLeft, drawTop, scale, mainColor, borderColor);
   const surface = {
     canvas,
-    offsetX: minX,
-    offsetY: minY,
+    offsetX: -padLeft,
+    offsetY: -padTop,
   };
   smb2StageLabelCache.set(key, surface);
   if (smb2StageLabelCache.size > SMB2_STAGE_LABEL_CACHE_LIMIT) {
@@ -927,15 +927,17 @@ function getSmb2ChallengeDifficulty(game: any, floorInfo: any): 'beginner' | 'ad
   return 'expert';
 }
 
-function getSmb2StageLabel(game: any, floorInfo: any): string {
+function getSmb2StageNameText(game: any, floorInfo: any, maxLength: number): string {
   const stageId = Math.max(0, Math.trunc(game?.stage?.stageId ?? game?.course?.currentStageId ?? 0));
   const packName = getPackStageName(stageId);
   if (packName) {
-    return packName.toUpperCase().slice(0, 16);
+    const text = packName.toUpperCase();
+    return text.length > maxLength ? text.slice(0, maxLength) : text;
   }
   const vanillaName = getSmb2StageName(stageId);
   if (vanillaName) {
-    return vanillaName.toUpperCase().slice(0, 16);
+    const text = vanillaName.toUpperCase();
+    return text.length > maxLength ? text.slice(0, maxLength) : text;
   }
   const fallback = `FLOOR ${Math.max(1, Math.trunc(floorInfo?.current ?? 1))}`;
   const stageLabelRaw = String(game?.course?.getStageLabel?.() ?? fallback).trim();
@@ -946,10 +948,18 @@ function getSmb2StageLabel(game: any, floorInfo: any): string {
     stageLabel = stageLabel.slice('Challenge '.length);
   }
   stageLabel = stageLabel.toUpperCase();
-  if (stageLabel.length > 16) {
-    return stageLabel.slice(0, 16);
+  if (stageLabel.length > maxLength) {
+    return stageLabel.slice(0, maxLength);
   }
   return stageLabel;
+}
+
+function getSmb2StageLabel(game: any, floorInfo: any): string {
+  return getSmb2StageNameText(game, floorInfo, 16);
+}
+
+function getSmb2LoadinStageName(game: any, floorInfo: any): string {
+  return getSmb2StageNameText(game, floorInfo, 48);
 }
 
 function getSmb2StoryWorldStage(game: any, floorInfo: any): { world: number; stage: number } {
@@ -977,6 +987,22 @@ function getSmb2StoryWorldStage(game: any, floorInfo: any): { world: number; sta
     world: Math.floor((floorCurrent - 1) / 10) + 1,
     stage: ((floorCurrent - 1) % 10) + 1,
   };
+}
+
+function getSmb2LoadinHeadline(game: any, floorInfo: any): string {
+  const floorCurrent = Math.max(1, Math.trunc(floorInfo?.current ?? 1));
+  if (getSmb2HudMode(game) === 'story') {
+    const { world, stage } = getSmb2StoryWorldStage(game, floorInfo);
+    return `WORLD ${world}-${stage}`;
+  }
+  const prefix = String(floorInfo?.prefix ?? '').trim().toUpperCase();
+  if (prefix === 'MASTER' || prefix === 'MASTER EX' || prefix === 'EXTRA') {
+    return `${prefix} ${floorCurrent}`;
+  }
+  if (getSmb2ChallengeDifficulty(game, floorInfo) === 'master') {
+    return `MASTER ${floorCurrent}`;
+  }
+  return `STAGE ${floorCurrent}`;
 }
 
 function drawGlyphRotatedTopLeft(
@@ -2021,6 +2047,7 @@ export class HudRenderer {
     const hudPlayer = this.getHudPlayer(game);
     const goalTimerFrames = hudPlayer?.goalTimerFrames ?? game?.goalTimerFrames ?? 0;
     const goalInfo = hudPlayer?.goalInfo ?? game?.goalInfo ?? null;
+    const useSmb2Layout = this.isSmb2Hud(game) && Boolean(assets.smb2);
 
     if (this.goBanner.timer > 0) {
       const t = this.goBanner.duration - this.goBanner.timer;
@@ -2351,72 +2378,177 @@ export class HudRenderer {
 
     if (this.floorIntroActive && game) {
       const floorInfo = game.course?.getFloorInfo?.();
-      const floorNum = floorInfo?.current ?? 1;
-      const prefix = floorInfo?.prefix ?? 'FLOOR';
-      const text = `${prefix} ${floorNum}`;
-      const font = fonts.asc72x64;
-      const scaleX = 0.8;
-      const scaleY = 0.8;
-      const centerX = (text.length * 57) / 2;
-      const spaceIndex = text.indexOf(' ');
       const t = this.floorIntroFrames;
       const fadeFrames = this.floorIntroFadeFrames;
       const fadeOpacity = fadeFrames > 0 ? 0.06666 * fadeFrames : 1;
-      let baseColor = '#ffd200';
-      if (prefix === 'EXTRA') {
-        baseColor = '#ffe14d';
-      }
-
-      for (let i = 0; i < text.length; i += 1) {
-        if (text[i] === ' ') {
-          continue;
-        }
-        if (i > spaceIndex) {
-          if (t < 30 + spaceIndex * 16) {
+      if (useSmb2Layout && assets.smb2) {
+        const text = getSmb2LoadinHeadline(game, floorInfo);
+        const font = fonts.asc72x64;
+        const baseScaleX = 0.8;
+        const baseScaleY = 0.8;
+        const centerX = (text.length * 57) / 2;
+        const splitIndex = Math.max(0, text.lastIndexOf(' '));
+        for (let i = 0; i < text.length; i += 1) {
+          if (text[i] === ' ') {
             continue;
           }
-        } else if (i > 0) {
-          if (t < 30 + (i - 1) * 16) {
-            continue;
+          if (i > splitIndex) {
+            if (t < 30 + splitIndex * 16) {
+              continue;
+            }
+          } else if (i > 0) {
+            if (t < 30 + (i - 1) * 16) {
+              continue;
+            }
+          }
+
+          let xOffset = 0;
+          let yOffset = 0;
+          if (i === 0 && t < 30) {
+            xOffset = (30 - t) * -5;
+          } else if (i > 0 && i < splitIndex && t < 30 + i * 16) {
+            xOffset = -3.6 * (30 + i * 16 - t);
+          } else if (i > splitIndex) {
+            xOffset = -28;
+          }
+          if (fadeFrames > 0) {
+            const dir = i < splitIndex ? ((i & 1) ? 1 : -1) : ((i & 1) ? -1 : 1);
+            yOffset = (15 - fadeFrames) * 8 * dir;
+          }
+
+          const x = 320 - centerX + 14.4 + 57.6 * i + xOffset;
+          const y = 240 - 25.6 + yOffset;
+          let charOpacity = fadeOpacity;
+          if (i > splitIndex) {
+            charOpacity = Math.min(0.0625 * (t - 30 - splitIndex * 16), fadeOpacity);
+          } else if (i > 0) {
+            charOpacity = Math.min(0.0625 * (t - 30 - (i - 1) * 16), fadeOpacity);
+          } else if (i === 0 && fadeFrames > 0) {
+            charOpacity = fadeOpacity;
+          }
+
+          drawGlyph(
+            ctx,
+            font,
+            text.charCodeAt(i),
+            x,
+            y + 25.6,
+            baseScaleX - 0.01,
+            baseScaleY + Math.abs(yOffset) * 0.01,
+            '#ffff00',
+            charOpacity,
+          );
+        }
+
+        if (t >= 121) {
+          const hudMode = getSmb2HudMode(game);
+          const stageName = getSmb2LoadinStageName(game, floorInfo);
+          const stageFont = assets.smb2.fonts.asc24;
+          const stageBaseScale = hudMode === 'story' ? 1.4 : 0.8;
+          const stageBaseHeight = stageFont.params.lineHeight * stageBaseScale;
+          const stageBaseWidth = stageFont.params.spaceWidth * stageBaseScale;
+          const stageTopBase = 240 + (hudMode === 'story' ? 22 : 20);
+          const stageTextWidth = measureText(stageFont, stageName, stageBaseScale);
+          let cursorX = 320 - stageTextWidth / 2;
+          for (let i = 0; i < stageName.length; i += 1) {
+            const ch = stageName[i];
+            const charLeft = cursorX;
+            cursorX += stageBaseWidth;
+            if (ch === ' ') {
+              continue;
+            }
+            const counter = t - 120 - i * 4;
+            const scaleMultiplier = clamp((16 - counter) * 0.125, 1, 2);
+            let alpha = clamp(counter * 0.125, 0, 1);
+            if (scaleMultiplier > 1.9) {
+              alpha = 0;
+            }
+            if (alpha <= 0) {
+              continue;
+            }
+            const drawScale = stageBaseScale * scaleMultiplier;
+            const drawWidth = stageFont.params.spaceWidth * drawScale;
+            const drawHeight = stageFont.params.lineHeight * drawScale;
+            const drawLeft = charLeft - (drawWidth - stageBaseWidth) * 0.5;
+            const drawTop = stageTopBase - (drawHeight - stageBaseHeight) * 0.5;
+            drawTextAtWithSmb2Border(
+              ctx,
+              stageFont,
+              ch,
+              drawLeft,
+              drawTop,
+              drawScale,
+              '#ffff00',
+              '#000000',
+              alpha * fadeOpacity,
+            );
           }
         }
-
-        let xOffset = 0;
-        let yOffset = 0;
-        if (i === 0 && t < 30) {
-          xOffset = (30 - t) * -5;
-        } else if (i > 0 && i < spaceIndex && t < 30 + i * 16) {
-          xOffset = -3.6 * (30 + i * 16 - t);
-        } else if (i > spaceIndex) {
-          xOffset = -28;
-        }
-        if (fadeFrames > 0) {
-          const dir = i < spaceIndex ? ((i & 1) ? 1 : -1) : ((i & 1) ? -1 : 1);
-          yOffset = (15 - fadeFrames) * 8 * dir;
-        }
-
-        const x = 320 - centerX + 14.4 + 57.6 * i + xOffset;
-        const y = 240 - 25.6 + yOffset;
-        let charOpacity = fadeOpacity;
-        if (i > spaceIndex) {
-          charOpacity = Math.min(0.0625 * (t - 30 - spaceIndex * 16), fadeOpacity);
-        } else if (i > 0) {
-          charOpacity = Math.min(0.0625 * (t - 30 - (i - 1) * 16), fadeOpacity);
-        } else if (i === 0 && fadeFrames > 0) {
-          charOpacity = fadeOpacity;
+      } else {
+        const floorNum = floorInfo?.current ?? 1;
+        const prefix = floorInfo?.prefix ?? 'FLOOR';
+        const text = `${prefix} ${floorNum}`;
+        const font = fonts.asc72x64;
+        const scaleX = 0.8;
+        const scaleY = 0.8;
+        const centerX = (text.length * 57) / 2;
+        const spaceIndex = text.indexOf(' ');
+        let baseColor = '#ffd200';
+        if (prefix === 'EXTRA') {
+          baseColor = '#ffe14d';
         }
 
-        drawGlyph(
-          ctx,
-          font,
-          text.charCodeAt(i),
-          x,
-          y + 25.6,
-          scaleX,
-          scaleY,
-          baseColor,
-          charOpacity,
-        );
+        for (let i = 0; i < text.length; i += 1) {
+          if (text[i] === ' ') {
+            continue;
+          }
+          if (i > spaceIndex) {
+            if (t < 30 + spaceIndex * 16) {
+              continue;
+            }
+          } else if (i > 0) {
+            if (t < 30 + (i - 1) * 16) {
+              continue;
+            }
+          }
+
+          let xOffset = 0;
+          let yOffset = 0;
+          if (i === 0 && t < 30) {
+            xOffset = (30 - t) * -5;
+          } else if (i > 0 && i < spaceIndex && t < 30 + i * 16) {
+            xOffset = -3.6 * (30 + i * 16 - t);
+          } else if (i > spaceIndex) {
+            xOffset = -28;
+          }
+          if (fadeFrames > 0) {
+            const dir = i < spaceIndex ? ((i & 1) ? 1 : -1) : ((i & 1) ? -1 : 1);
+            yOffset = (15 - fadeFrames) * 8 * dir;
+          }
+
+          const x = 320 - centerX + 14.4 + 57.6 * i + xOffset;
+          const y = 240 - 25.6 + yOffset;
+          let charOpacity = fadeOpacity;
+          if (i > spaceIndex) {
+            charOpacity = Math.min(0.0625 * (t - 30 - spaceIndex * 16), fadeOpacity);
+          } else if (i > 0) {
+            charOpacity = Math.min(0.0625 * (t - 30 - (i - 1) * 16), fadeOpacity);
+          } else if (i === 0 && fadeFrames > 0) {
+            charOpacity = fadeOpacity;
+          }
+
+          drawGlyph(
+            ctx,
+            font,
+            text.charCodeAt(i),
+            x,
+            y + 25.6,
+            scaleX,
+            scaleY,
+            baseColor,
+            charOpacity,
+          );
+        }
       }
     }
 
