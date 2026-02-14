@@ -151,6 +151,7 @@ export function runMainApp() {
     ingamePlayerList,
     ingameResumeButton,
     ingameLeaveButton,
+    ingameReturnLobbyButton,
     startButton,
     resumeButton,
     difficultySelect,
@@ -795,6 +796,7 @@ export function runMainApp() {
       lobbyLeaveButton,
       lobbyPlayerList,
       ingamePlayerList,
+      ingameReturnLobbyButton,
       lobbyRoomInfo,
       lobbyRoomStatus,
       lobbyGameModeSelect,
@@ -1509,11 +1511,15 @@ export function runMainApp() {
     resumeButton,
     ingameResumeButton,
     ingameLeaveButton,
+    ingameReturnLobbyButton,
     onCloseMenuOverlay: () => {
       menuFlow.closeMenuOverlay();
     },
     onLeaveMatchToLobbyList: () => {
       void matchFlow.leaveMatchToLobbyList();
+    },
+    onReturnMatchToLobby: () => {
+      matchFlow.returnMatchToLobby();
     },
     gyroRecalibrateButton,
     onGyroRecalibrate: () => {
@@ -1522,6 +1528,7 @@ export function runMainApp() {
     mobileMenuButton,
     isNetplayEnabled: () => netplayEnabled,
     onOpenMenuOverlay: (preferredMenu) => {
+      lobbyUiController?.updateLobbyUi();
       menuFlow.openMenuOverlay(preferredMenu);
     },
     isIngameChatOpen: () => ingameChatOpen,

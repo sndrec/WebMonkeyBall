@@ -41,6 +41,7 @@ export function collectMainDomRefs() {
   const ingamePlayerList = document.getElementById('ingame-player-list') as HTMLElement | null;
   const ingameResumeButton = document.getElementById('ingame-resume') as HTMLButtonElement | null;
   const ingameLeaveButton = document.getElementById('ingame-leave') as HTMLButtonElement | null;
+  const ingameReturnLobbyButton = document.getElementById('ingame-return-lobby') as HTMLButtonElement | null;
   const startButton = document.getElementById('start') as HTMLButtonElement;
   const resumeButton = document.getElementById('resume') as HTMLButtonElement;
   const difficultySelect = document.getElementById('difficulty') as HTMLSelectElement;
@@ -183,6 +184,7 @@ export function collectMainDomRefs() {
     ingamePlayerList,
     ingameResumeButton,
     ingameLeaveButton,
+    ingameReturnLobbyButton,
     startButton,
     resumeButton,
     difficultySelect,

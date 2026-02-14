@@ -61,6 +61,7 @@ export function createMainControllerGraph(args: any) {
     lobbyLeaveButton,
     lobbyPlayerList,
     ingamePlayerList,
+    ingameReturnLobbyButton,
     lobbyRoomInfo,
     lobbyRoomStatus,
     lobbyGameModeSelect,
@@ -324,6 +325,11 @@ const matchFlow = new MatchFlowController({
   hostBroadcast: (msg) => {
     state.hostRelay?.broadcast(msg);
   },
+  clearNetplayCurrentCourse: () => {
+    if (state.netplayState) {
+      state.netplayState.currentCourse = null;
+    }
+  },
   setOverlayVisible,
   setActiveMenu: (menu) => {
     setActiveMenu(menu);
@@ -513,8 +519,8 @@ netplayConnectionState = new NetplayConnectionStateController({
   setNetplayEnabled: (enabled) => {
     state.netplayEnabled = enabled;
   },
-  setNetplayState: (state) => {
-    state.netplayState = state;
+  setNetplayState: (nextState) => {
+    state.netplayState = nextState;
   },
   setPendingSnapshot: (snapshot) => {
     state.pendingSnapshot = snapshot;
@@ -606,6 +612,7 @@ lobbyUiController = new LobbyUiController({
   lobbyLeaveButton,
   lobbyPlayerList,
   ingamePlayerList,
+  ingameReturnLobbyButton,
   lobbyRoomInfo,
   lobbyRoomStatus,
   lobbyRoomNameInput,

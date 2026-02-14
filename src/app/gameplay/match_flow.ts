@@ -35,6 +35,7 @@ type MatchFlowDeps = {
   broadcastRoomUpdate: () => void;
   sendLobbyHeartbeat: (nowMs: number, force?: boolean) => void;
   hostBroadcast: (msg: any) => void;
+  clearNetplayCurrentCourse: () => void;
   setOverlayVisible: (visible: boolean) => void;
   setActiveMenu: (menu: MenuPanel) => void;
   leaveRoom: (opts?: { skipConfirm?: boolean }) => Promise<void>;
@@ -62,8 +63,21 @@ export class MatchFlowController {
     this.deps.setLeaderboardSession(null);
     this.deps.setPendingSnapshot(null);
     if (this.deps.isNetplayEnabled()) {
+      this.deps.clearNetplayCurrentCourse();
       this.deps.resetNetplayForStage();
     }
+  }
+
+  private hostReturnAllPlayersToLobby() {
+    if (this.deps.getLobbyRoom()) {
+      const meta = this.deps.buildRoomMeta();
+      if (meta) {
+        this.deps.setLobbyRoomMeta(meta);
+      }
+      this.deps.broadcastRoomUpdate();
+      this.deps.sendLobbyHeartbeat(performance.now(), true);
+    }
+    this.deps.hostBroadcast({ type: 'match_end' });
   }
 
   destroySingleplayerForNetplay() {
@@ -102,6 +116,18 @@ export class MatchFlowController {
     this.deps.setOverlayVisible(true);
     this.deps.setActiveMenu('multiplayer');
     this.deps.updateLobbyUi();
+  }
+
+  returnMatchToLobby() {
+    if (!this.deps.isNetplayEnabled()) {
+      this.endMatchToMenu();
+      return;
+    }
+    if (!this.deps.isHost()) {
+      return;
+    }
+    this.endMatchToLobby();
+    this.hostReturnAllPlayersToLobby();
   }
 
   async leaveMatchToLobbyList() {
@@ -172,15 +198,7 @@ export class MatchFlowController {
         return;
       }
       this.endMatchToLobby();
-      if (this.deps.getLobbyRoom()) {
-        const meta = this.deps.buildRoomMeta();
-        if (meta) {
-          this.deps.setLobbyRoomMeta(meta);
-        }
-        this.deps.broadcastRoomUpdate();
-        this.deps.sendLobbyHeartbeat(performance.now(), true);
-      }
-      this.deps.hostBroadcast({ type: 'match_end' });
+      this.hostReturnAllPlayersToLobby();
       return;
     }
     this.endMatchToMenu();

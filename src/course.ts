@@ -31,7 +31,7 @@ const courseDefinitions: Record<string, CourseDefinition> = {
       { "id": 6, "name": "ST_006_STEPS", "label": "STEPS", "warpDefault": 1 },
       { "id": 7, "name": "ST_007_BLOCKS", "label": "BLOCKS", "warpDefault": 1 },
       { "id": 8, "name": "ST_008_JUMP_SINGLE", "label": "JUMP SINGLE", "warpDefault": 1 },
-      { "id": 9, "name": "ST_009_EXAM_A", "label": "EXAM A" }
+      { "id": 9, "name": "ST_009_EXAM_A", "label": "EXAM A", "warpDefault": 1 }
     ]
   },
   "advanced": {
@@ -65,7 +65,7 @@ const courseDefinitions: Record<string, CourseDefinition> = {
       { "id": 37, "name": "ST_037_WAVY_JUMP", "label": "WAVY JUMP", "timeLimitFrames": 1800, "warpDefault": 1 },
       { "id": 38, "name": "ST_038_SPIKY", "label": "SPIKY", "timeLimitFrames": 1800, "warpDefault": 1 },
       { "id": 39, "name": "ST_039_UNREST", "label": "UNREST", "timeLimitFrames": 1800, "warpDefault": 1 },
-      { "id": 40, "name": "ST_040_POLAR", "label": "POLAR", "timeLimitFrames": 1800 }
+      { "id": 40, "name": "ST_040_POLAR", "label": "POLAR", "timeLimitFrames": 1800, "warpDefault": 1 }
     ]
   },
   "expert": {
@@ -119,14 +119,14 @@ const courseDefinitions: Record<string, CourseDefinition> = {
       { "id": 87, "name": "ST_087_STAIRS", "label": "STAIRS", "timeLimitFrames": 1800, "warpDefault": 1 },
       { "id": 88, "name": "ST_088_CLOVER", "label": "CLOVER", "timeLimitFrames": 1800, "warpDefault": 1 },
       { "id": 89, "name": "ST_089_COFFEE_CUP", "label": "COFFEE CUP", "timeLimitFrames": 1800, "warpDefault": 1 },
-      { "id": 90, "name": "ST_090_METAMORPHASIS", "label": "METAMORPHASIS", "timeLimitFrames": 1800 }
+      { "id": 90, "name": "ST_090_METAMORPHASIS", "label": "METAMORPHASIS", "timeLimitFrames": 1800, "warpDefault": 1 }
     ]
   },
   "beginner-extra": {
     "stages": [
       { "id": 101, "name": "ST_101_BLUR_BRIDGE", "label": "BLUR BRIDGE", "timeLimitFrames": 1800, "warpDefault": 1 },
       { "id": 102, "name": "ST_102_HITTER", "label": "HITTER", "timeLimitFrames": 1800, "warpDefault": 1 },
-      { "id": 103, "name": "ST_103_AV_LOGO", "label": "AV LOGO", "timeLimitFrames": 1800 }
+      { "id": 103, "name": "ST_103_AV_LOGO", "label": "AV LOGO", "timeLimitFrames": 1800, "warpDefault": 1 }
     ]
   },
   "advanced-extra": {
@@ -135,7 +135,7 @@ const courseDefinitions: Record<string, CourseDefinition> = {
       { "id": 104, "name": "ST_104_HARD_HITTER", "label": "HARD HITTER", "timeLimitFrames": 1800, "warpDefault": 1 },
       { "id": 105, "name": "ST_105_PUZZLE", "label": "PUZZLE", "warpDefault": 1 },
       { "id": 103, "name": "ST_103_AV_LOGO", "label": "AV LOGO", "timeLimitFrames": 1800, "warpDefault": 1 },
-      { "id": 106, "name": "ST_106_POLAR_LARGE", "label": "POLAR LARGE" }
+      { "id": 106, "name": "ST_106_POLAR_LARGE", "label": "POLAR LARGE", "warpDefault": 1 }
     ]
   },
   "expert-extra": {
@@ -149,7 +149,7 @@ const courseDefinitions: Record<string, CourseDefinition> = {
       { "id": 111, "name": "ST_111_MAGIC_HAND", "label": "MAGIC HAND", "timeLimitFrames": 1800, "warpDefault": 1 },
       { "id": 103, "name": "ST_103_AV_LOGO", "label": "AV LOGO", "timeLimitFrames": 1800, "warpDefault": 1 },
       { "id": 112, "name": "ST_112_SANCTUARY", "label": "SANCTUARY", "timeLimitFrames": 1800, "warpDefault": 1 },
-      { "id": 113, "name": "ST_113_DAA_LOO_MAA", "label": "DAA LOO MAA", "timeLimitFrames": 1800 }
+      { "id": 113, "name": "ST_113_DAA_LOO_MAA", "label": "DAA LOO MAA", "timeLimitFrames": 1800, "warpDefault": 1 }
     ]
   },
   "master": {
@@ -163,7 +163,7 @@ const courseDefinitions: Record<string, CourseDefinition> = {
       { "id": 127, "name": "ST_127_EDGE_MASTER", "label": "EDGE MASTER", "warpDefault": 1 },
       { "id": 128, "name": "ST_128_DODGE_MASTER", "label": "DODGE MASTER", "warpDefault": 1 },
       { "id": 129, "name": "ST_129_BRIDGE_MASTER", "label": "BRIDGE MASTER", "warpDefault": 1 },
-      { "id": 130, "name": "ST_130_MONKEY_MASTER", "label": "MONKEY MASTER" }
+      { "id": 130, "name": "ST_130_MONKEY_MASTER", "label": "MONKEY MASTER", "warpDefault": 1 }
     ]
   }
 };
@@ -322,6 +322,20 @@ export class Course {
       }
     }
     return Array.from(ids.values());
+  }
+
+  peekJumpCount(info) {
+    const entry = this.stageList[this.stageIndex];
+    if (!entry || !isFloorClear(info)) {
+      return null;
+    }
+    const goalType = info.goalType ?? 'B';
+    const warpDistance = getWarpDistance(entry, goalType);
+    const nextIndex = this.stageIndex + warpDistance;
+    if (nextIndex < 0 || nextIndex >= this.stageList.length) {
+      return null;
+    }
+    return nextIndex - this.stageIndex;
   }
 
   setStageIndex(stageIndex) {

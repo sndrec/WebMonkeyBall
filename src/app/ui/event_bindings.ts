@@ -6,8 +6,10 @@ type UiEventBindingsOptions = {
   resumeButton: HTMLButtonElement;
   ingameResumeButton: HTMLButtonElement | null;
   ingameLeaveButton: HTMLButtonElement | null;
+  ingameReturnLobbyButton: HTMLButtonElement | null;
   onCloseMenuOverlay: () => void;
   onLeaveMatchToLobbyList: () => void;
+  onReturnMatchToLobby: () => void;
   gyroRecalibrateButton: HTMLButtonElement | null;
   onGyroRecalibrate: () => void;
   mobileMenuButton: HTMLButtonElement | null;
@@ -36,6 +38,9 @@ export function bindUiEventHandlers(options: UiEventBindingsOptions) {
 
   options.ingameLeaveButton?.addEventListener('click', () => {
     options.onLeaveMatchToLobbyList();
+  });
+  options.ingameReturnLobbyButton?.addEventListener('click', () => {
+    options.onReturnMatchToLobby();
   });
 
   options.gyroRecalibrateButton?.addEventListener('click', () => {

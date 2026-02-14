@@ -633,6 +633,19 @@ function isWarpGoal(goalType: string | number | null): boolean {
   return normalized === 'G' || normalized === 'R';
 }
 
+function getWarpJumpCount(game: any, goalType: 'B' | 'G' | 'R'): number {
+  const preview = game?.course?.peekJumpCount?.({
+    flags: INFO_FLAGS.GOAL,
+    goalType,
+    timerCurr: game?.stageTimerFrames ?? 0,
+    u_currStageId: game?.stage?.stageId ?? game?.course?.currentStageId ?? 0,
+  });
+  if (typeof preview === 'number' && Number.isFinite(preview) && preview > 0) {
+    return Math.floor(preview);
+  }
+  return goalType === 'R' ? 3 : 2;
+}
+
 function func800802E0(timerFrames: number): number {
   if (timerFrames > 60) {
     const t = Math.abs(Math.sin(((60 - (timerFrames % 60)) & 0x3f) * (Math.PI / 128)));
@@ -906,17 +919,7 @@ export class HudRenderer {
         : 1;
       let warpMultiplier = 1;
       if (isWarpGoal(goalType)) {
-        const preview = game.course?.peekJumpCount?.({
-          flags: INFO_FLAGS.GOAL,
-          goalType,
-          timerCurr: game.stageTimerFrames ?? 0,
-          u_currStageId: game.stage?.stageId ?? 0,
-        });
-        if (typeof preview === 'number' && preview > 0) {
-          warpMultiplier = preview;
-        } else {
-          warpMultiplier = goalType === 'R' ? 3 : 2;
-        }
+        warpMultiplier = getWarpJumpCount(game, goalType);
       }
       const floorScore = clearScore * warpMultiplier * timeBonus;
       this.goalScoreInfo = {
@@ -1410,8 +1413,13 @@ export class HudRenderer {
 
       if (game && !(game.isBonusStageActive?.() ?? false) && isWarpGoal(goalInfo?.goalType ?? null)) {
         const floorInfo = game.course?.getFloorInfo?.();
-        const floorNum = floorInfo?.current ?? 1;
-        const warpText = `JUMP TO FLOOR ${floorNum}`;
+        const goalType = normalizeGoalType(goalInfo?.goalType ?? game.stage?.goals?.[0]?.type ?? 'B');
+        const currentFloor = floorInfo?.current ?? 1;
+        let destinationFloor = currentFloor + getWarpJumpCount(game, goalType);
+        if (typeof floorInfo?.total === 'number') {
+          destinationFloor = Math.min(floorInfo.total, destinationFloor);
+        }
+        const warpText = `JUMP TO FLOOR ${destinationFloor}`;
         for (const trail of this.warpTrails) {
           const color = `rgb(0, ${Math.min(255, Math.round(trail.addG))}, ${Math.min(255, Math.round(trail.addB))})`;
           drawText(

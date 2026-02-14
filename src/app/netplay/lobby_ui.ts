@@ -15,6 +15,7 @@ type LobbyUiDeps = {
   lobbyLeaveButton: HTMLButtonElement | null;
   lobbyPlayerList: HTMLElement | null;
   ingamePlayerList: HTMLElement | null;
+  ingameReturnLobbyButton: HTMLButtonElement | null;
   lobbyRoomInfo: HTMLElement | null;
   lobbyRoomStatus: HTMLElement | null;
   lobbyRoomNameInput: HTMLInputElement | null;
@@ -162,6 +163,9 @@ export class LobbyUiController {
       if (this.deps.ingamePlayerList) {
         this.deps.ingamePlayerList.innerHTML = '';
       }
+      if (this.deps.ingameReturnLobbyButton) {
+        this.deps.ingameReturnLobbyButton.classList.add('hidden');
+      }
       if (this.deps.lobbyRoomInfo) {
         this.deps.lobbyRoomInfo.textContent = '';
       }
@@ -219,6 +223,9 @@ export class LobbyUiController {
     }
 
     const inMatch = lobbyRoom.meta?.status === 'in_game' || this.deps.netplayHasCurrentCourse();
+    if (this.deps.ingameReturnLobbyButton) {
+      this.deps.ingameReturnLobbyButton.classList.toggle('hidden', !(isHost && inMatch));
+    }
     if (this.deps.lobbyChatPanel) {
       this.deps.lobbyChatPanel.classList.toggle('hidden', inMatch);
     }

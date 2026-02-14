@@ -253,6 +253,30 @@ export class Smb2Course {
     return Array.from(ids.values());
   }
 
+  peekJumpCount(_info?: {
+    flags: number;
+    goalType: string | null;
+    timerCurr: number;
+    u_currStageId: number;
+  }) {
+    if (this.currentIndex + 1 >= this.stageList.length) {
+      return null;
+    }
+    let step = 1;
+    if (this.mode === 'challenge' && _info?.goalType) {
+      const goalType = _info.goalType;
+      if (goalType === 'G' || goalType === 'g') {
+        step = 2;
+      } else if (goalType === 'R' || goalType === 'r') {
+        step = 3;
+      }
+    }
+    if (this.currentIndex + step >= this.stageList.length) {
+      return null;
+    }
+    return step;
+  }
+
   isBonusStage() {
     if (this.mode !== 'challenge') {
       return false;
