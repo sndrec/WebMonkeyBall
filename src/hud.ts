@@ -1,4 +1,6 @@
 import { GAME_SOURCES, INFO_FLAGS, type GameSource } from './shared/constants/index.js';
+import { getPackStageName } from './pack.js';
+import { getSmb2StageName } from './smb2_stage_names.js';
 
 const HUD_WIDTH = 640;
 const HUD_HEIGHT = 480;
@@ -44,6 +46,25 @@ type HudAssets = {
   bombCrack: HTMLImageElement;
   lvIcon: HTMLImageElement;
   bombParts: HTMLImageElement[];
+  smb2: {
+    bananaIcon: HTMLImageElement;
+    bananaFrame: HTMLImageElement;
+    monkeyFrame: HTMLImageElement;
+    monkeyPortrait: HTMLImageElement;
+    scoreFrame: HTMLImageElement;
+    scoreLabel: HTMLImageElement;
+    speedLabel: HTMLImageElement;
+    timeLabel: HTMLImageElement;
+    timerBall: HTMLImageElement;
+    timerFrame: HTMLImageElement;
+    stageFrame: HTMLImageElement;
+    stageIconStory: HTMLImageElement;
+    stageIconChallengeBeginner: HTMLImageElement;
+    stageIconChallengeAdvanced: HTMLImageElement;
+    stageIconChallengeExpert: HTMLImageElement;
+    stageIconChallengeMaster: HTMLImageElement;
+    playerBadge: HTMLImageElement;
+  } | null;
   fonts: {
     num24x37: SpriteFont;
     num12x19: SpriteFont;
@@ -54,6 +75,8 @@ type HudAssets = {
     asc16x16: SpriteFont;
   };
 };
+
+type HudSmb2Assets = NonNullable<HudAssets['smb2']>;
 
 type BannerState = {
   timer: number;
@@ -212,38 +235,58 @@ function hudAsset(path: string) {
   const origin = window.location.origin;
   const pathname = window.location.pathname;
   const base = pathname.includes('/web/') ? `${origin}/web/` : `${origin}/`;
-  return `${base}assets/hud/smb1/${path}`;
+  return `${base}${path}`;
 }
 
-const HUD_ASSET_PATHS = {
-  banana: hudAsset('bmp_com/012_banana_01.png'),
-  bananaBunch: hudAsset('bmp_com/085_banana_10.png'),
-  mph: hudAsset('bmp_com/088_game_icon_mph.png'),
-  goal: hudAsset('bmp_nml/004_game_goal.png'),
-  bomb: hudAsset('bmp_nml/000_icon_bombtimer.png'),
-  bombCrack: hudAsset('bmp_nml/016_icon_bomb_hibi.png'),
-  lvIcon: hudAsset('bmp_nml/001_icon_lv1234_j.png'),
+const SMB1_HUD_ASSET_PATHS = {
+  banana: hudAsset('assets/hud/smb1/bmp_com/012_banana_01.png'),
+  bananaBunch: hudAsset('assets/hud/smb1/bmp_com/085_banana_10.png'),
+  mph: hudAsset('assets/hud/smb1/bmp_com/088_game_icon_mph.png'),
+  goal: hudAsset('assets/hud/smb1/bmp_nml/004_game_goal.png'),
+  bomb: hudAsset('assets/hud/smb1/bmp_nml/000_icon_bombtimer.png'),
+  bombCrack: hudAsset('assets/hud/smb1/bmp_nml/016_icon_bomb_hibi.png'),
+  lvIcon: hudAsset('assets/hud/smb1/bmp_nml/001_icon_lv1234_j.png'),
   bombParts: [
-    hudAsset('bmp_nml/017_icon_bomb_part_a.png'),
-    hudAsset('bmp_nml/018_icon_bomb_part_b.png'),
-    hudAsset('bmp_nml/019_icon_bomb_part_c.png'),
-    hudAsset('bmp_nml/020_icon_bomb_part_d.png'),
-    hudAsset('bmp_nml/021_icon_bomb_part_e.png'),
-    hudAsset('bmp_nml/022_icon_bomb_part_f.png'),
-    hudAsset('bmp_nml/023_icon_bomb_part_g.png'),
-    hudAsset('bmp_nml/024_icon_bomb_part_h.png'),
-    hudAsset('bmp_nml/025_icon_bomb_part_i.png'),
-    hudAsset('bmp_nml/026_icon_bomb_part_j.png'),
+    hudAsset('assets/hud/smb1/bmp_nml/017_icon_bomb_part_a.png'),
+    hudAsset('assets/hud/smb1/bmp_nml/018_icon_bomb_part_b.png'),
+    hudAsset('assets/hud/smb1/bmp_nml/019_icon_bomb_part_c.png'),
+    hudAsset('assets/hud/smb1/bmp_nml/020_icon_bomb_part_d.png'),
+    hudAsset('assets/hud/smb1/bmp_nml/021_icon_bomb_part_e.png'),
+    hudAsset('assets/hud/smb1/bmp_nml/022_icon_bomb_part_f.png'),
+    hudAsset('assets/hud/smb1/bmp_nml/023_icon_bomb_part_g.png'),
+    hudAsset('assets/hud/smb1/bmp_nml/024_icon_bomb_part_h.png'),
+    hudAsset('assets/hud/smb1/bmp_nml/025_icon_bomb_part_i.png'),
+    hudAsset('assets/hud/smb1/bmp_nml/026_icon_bomb_part_j.png'),
   ],
   fonts: {
-    num24x37: hudAsset('bmp_nml/012_asc_ball26x38.png'),
-    num12x19: hudAsset('bmp_nml/013_asc_ball16x22.png'),
-    num22x22: hudAsset('bmp_nml/005_asc_ball22x22.png'),
-    asc20x20: hudAsset('bmp_nml/009_asc_ball20x20.png'),
-    asc32x32: hudAsset('bmp_nml/007_asc_tama32x32.png'),
-    asc72x64: hudAsset('bmp_com/080_asc_tama72x64_new.png'),
-    asc16x16: hudAsset('bmp_nml/006_asc_komo16x16.png'),
+    num24x37: hudAsset('assets/hud/smb1/bmp_nml/012_asc_ball26x38.png'),
+    num12x19: hudAsset('assets/hud/smb1/bmp_nml/013_asc_ball16x22.png'),
+    num22x22: hudAsset('assets/hud/smb1/bmp_nml/005_asc_ball22x22.png'),
+    asc20x20: hudAsset('assets/hud/smb1/bmp_nml/009_asc_ball20x20.png'),
+    asc32x32: hudAsset('assets/hud/smb1/bmp_nml/007_asc_tama32x32.png'),
+    asc72x64: hudAsset('assets/hud/smb1/bmp_com/080_asc_tama72x64_new.png'),
+    asc16x16: hudAsset('assets/hud/smb1/bmp_nml/006_asc_komo16x16.png'),
   },
+};
+
+const SMB2_HUD_ASSET_PATHS = {
+  bananaIcon: hudAsset('assets/hud/smb2/bmp_nml/501_banana_icon.png'),
+  bananaFrame: hudAsset('assets/hud/smb2/bmp_nml/502_banana_frame.png'),
+  monkeyFrame: hudAsset('assets/hud/smb2/bmp_nml/503_monkey_frame.png'),
+  monkeyPortrait: hudAsset('assets/hud/smb1/bmp_com/015_icon_ape_00.png'),
+  scoreFrame: hudAsset('assets/hud/smb2/bmp_nml/504_score_frame.png'),
+  stageFrame: hudAsset('assets/hud/smb2/bmp_nml/505_stage_frame.png'),
+  scoreLabel: hudAsset('assets/hud/smb2/bmp_nml/507_score_label.png'),
+  speedLabel: hudAsset('assets/hud/smb2/bmp_nml/509_speed_label.png'),
+  timeLabel: hudAsset('assets/hud/smb2/bmp_nml/50b_time_label.png'),
+  timerBall: hudAsset('assets/hud/smb2/bmp_nml/50c_timer_ball.png'),
+  timerFrame: hudAsset('assets/hud/smb2/bmp_nml/50f_timer_frame.png'),
+  stageIconStory: hudAsset('assets/hud/smb2/bmp_nml/512_story_icon.png'),
+  stageIconChallengeAdvanced: hudAsset('assets/hud/smb2/bmp_nml/513_challenge_advanced_icon.png'),
+  stageIconChallengeBeginner: hudAsset('assets/hud/smb2/bmp_nml/514_challenge_beginner_icon.png'),
+  stageIconChallengeExpert: hudAsset('assets/hud/smb2/bmp_nml/515_challenge_expert_icon.png'),
+  playerBadge: hudAsset('assets/hud/smb2/bmp_nml/516_player_badge.png'),
+  stageIconChallengeMaster: hudAsset('assets/hud/smb2/bmp_nml/517_challenge_master_icon.png'),
 };
 
 function loadImage(src: string): Promise<HTMLImageElement> {
@@ -333,6 +376,20 @@ function drawSprite(
   const dw = img.width * scale;
   const dh = img.height * scale;
   drawTintedImage(ctx, img, 0, 0, img.width, img.height, pos.x - dw / 2, pos.y - dh / 2, dw, dh, color, opacity);
+}
+
+function drawSpriteTopLeft(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  left: number,
+  top: number,
+  scale: number,
+  opacity = 1,
+  color: string | null = null,
+) {
+  const dw = img.width * scale;
+  const dh = img.height * scale;
+  drawTintedImage(ctx, img, 0, 0, img.width, img.height, left, top, dw, dh, color, opacity);
 }
 
 function drawSpriteSolidTint(
@@ -540,6 +597,69 @@ function padNumber(value: number, width: number): string {
   return `${' '.repeat(width - text.length)}${text}`;
 }
 
+function getSmb2HudMode(game: any): 'story' | 'challenge' {
+  const mode = game?.course?.mode;
+  if (mode === 'story') {
+    return 'story';
+  }
+  return 'challenge';
+}
+
+function getSmb2ChallengeDifficulty(game: any, floorInfo: any): 'beginner' | 'advanced' | 'expert' | 'master' {
+  const candidates = [
+    String(game?.course?.difficulty ?? '').toLowerCase(),
+    String(game?.course?.difficultyLabel ?? '').toLowerCase(),
+  ];
+  if (candidates.some((label) => label.includes('master'))) {
+    return 'master';
+  }
+  if (candidates.some((label) => label.includes('beginner'))) {
+    return 'beginner';
+  }
+  if (candidates.some((label) => label.includes('advanced'))) {
+    return 'advanced';
+  }
+  if (candidates.some((label) => label.includes('expert'))) {
+    return 'expert';
+  }
+  const index = Math.max(0, Math.min(3, Math.trunc(floorInfo?.difficultyIndex ?? 2)));
+  if (index === 0) {
+    return 'beginner';
+  }
+  if (index === 1) {
+    return 'advanced';
+  }
+  if (index >= 3) {
+    return 'master';
+  }
+  return 'expert';
+}
+
+function getSmb2StageLabel(game: any, floorInfo: any): string {
+  const stageId = Math.max(0, Math.trunc(game?.stage?.stageId ?? game?.course?.currentStageId ?? 0));
+  const packName = getPackStageName(stageId);
+  if (packName) {
+    return packName.toUpperCase().slice(0, 16);
+  }
+  const vanillaName = getSmb2StageName(stageId);
+  if (vanillaName) {
+    return vanillaName.toUpperCase().slice(0, 16);
+  }
+  const fallback = `FLOOR ${Math.max(1, Math.trunc(floorInfo?.current ?? 1))}`;
+  const stageLabelRaw = String(game?.course?.getStageLabel?.() ?? fallback).trim();
+  let stageLabel = stageLabelRaw;
+  if (stageLabel.startsWith('Story ')) {
+    stageLabel = stageLabel.slice('Story '.length);
+  } else if (stageLabel.startsWith('Challenge ')) {
+    stageLabel = stageLabel.slice('Challenge '.length);
+  }
+  stageLabel = stageLabel.toUpperCase();
+  if (stageLabel.length > 16) {
+    return stageLabel.slice(0, 16);
+  }
+  return stageLabel;
+}
+
 function drawGlyphRotatedTopLeft(
   ctx: CanvasRenderingContext2D,
   font: SpriteFont,
@@ -717,6 +837,7 @@ export class HudRenderer {
     if (!this.ctx) {
       return;
     }
+    const smb1AssetPaths = SMB1_HUD_ASSET_PATHS;
     const [
       banana,
       bananaBunch,
@@ -727,19 +848,19 @@ export class HudRenderer {
       lvIcon,
       ...rest
     ] = await Promise.all([
-      loadImage(HUD_ASSET_PATHS.banana),
-      loadImage(HUD_ASSET_PATHS.bananaBunch),
-      loadImage(HUD_ASSET_PATHS.mph),
-      loadImage(HUD_ASSET_PATHS.goal),
-      loadImage(HUD_ASSET_PATHS.bomb),
-      loadImage(HUD_ASSET_PATHS.bombCrack),
-      loadImage(HUD_ASSET_PATHS.lvIcon),
-      ...HUD_ASSET_PATHS.bombParts.map(loadImage),
-      ...Object.values(HUD_ASSET_PATHS.fonts).map(loadImage),
+      loadImage(smb1AssetPaths.banana),
+      loadImage(smb1AssetPaths.bananaBunch),
+      loadImage(smb1AssetPaths.mph),
+      loadImage(smb1AssetPaths.goal),
+      loadImage(smb1AssetPaths.bomb),
+      loadImage(smb1AssetPaths.bombCrack),
+      loadImage(smb1AssetPaths.lvIcon),
+      ...smb1AssetPaths.bombParts.map(loadImage),
+      ...Object.values(smb1AssetPaths.fonts).map(loadImage),
     ]);
 
-    const fontImages = rest.slice(HUD_ASSET_PATHS.bombParts.length) as HTMLImageElement[];
-    const fontKeys = Object.keys(HUD_ASSET_PATHS.fonts) as Array<keyof HudAssets['fonts']>;
+    const fontImages = rest.slice(smb1AssetPaths.bombParts.length) as HTMLImageElement[];
+    const fontKeys = Object.keys(smb1AssetPaths.fonts) as Array<keyof HudAssets['fonts']>;
     const fonts: HudAssets['fonts'] = {
       num24x37: { image: fontImages[fontKeys.indexOf('num24x37')], params: FONT_PARAMS.num24x37 },
       num12x19: { image: fontImages[fontKeys.indexOf('num12x19')], params: FONT_PARAMS.num12x19 },
@@ -750,6 +871,68 @@ export class HudRenderer {
       asc16x16: { image: fontImages[fontKeys.indexOf('asc16x16')], params: FONT_PARAMS.asc16x16 },
     };
 
+    let smb2Assets: HudAssets['smb2'] = null;
+    try {
+      const [
+        bananaIcon,
+        bananaFrame,
+        monkeyFrame,
+        monkeyPortrait,
+        scoreFrame,
+        stageFrame,
+        scoreLabel,
+        speedLabel,
+        timeLabel,
+        timerBall,
+        timerFrame,
+        stageIconStory,
+        stageIconChallengeAdvanced,
+        stageIconChallengeBeginner,
+        stageIconChallengeExpert,
+        playerBadge,
+        stageIconChallengeMaster,
+      ] = await Promise.all([
+        loadImage(SMB2_HUD_ASSET_PATHS.bananaIcon),
+        loadImage(SMB2_HUD_ASSET_PATHS.bananaFrame),
+        loadImage(SMB2_HUD_ASSET_PATHS.monkeyFrame),
+        loadImage(SMB2_HUD_ASSET_PATHS.monkeyPortrait),
+        loadImage(SMB2_HUD_ASSET_PATHS.scoreFrame),
+        loadImage(SMB2_HUD_ASSET_PATHS.stageFrame),
+        loadImage(SMB2_HUD_ASSET_PATHS.scoreLabel),
+        loadImage(SMB2_HUD_ASSET_PATHS.speedLabel),
+        loadImage(SMB2_HUD_ASSET_PATHS.timeLabel),
+        loadImage(SMB2_HUD_ASSET_PATHS.timerBall),
+        loadImage(SMB2_HUD_ASSET_PATHS.timerFrame),
+        loadImage(SMB2_HUD_ASSET_PATHS.stageIconStory),
+        loadImage(SMB2_HUD_ASSET_PATHS.stageIconChallengeAdvanced),
+        loadImage(SMB2_HUD_ASSET_PATHS.stageIconChallengeBeginner),
+        loadImage(SMB2_HUD_ASSET_PATHS.stageIconChallengeExpert),
+        loadImage(SMB2_HUD_ASSET_PATHS.playerBadge),
+        loadImage(SMB2_HUD_ASSET_PATHS.stageIconChallengeMaster),
+      ]);
+      smb2Assets = {
+        bananaIcon,
+        bananaFrame,
+        monkeyFrame,
+        monkeyPortrait,
+        scoreFrame,
+        scoreLabel,
+        speedLabel,
+        timeLabel,
+        timerBall,
+        timerFrame,
+        stageFrame,
+        stageIconStory,
+        stageIconChallengeBeginner,
+        stageIconChallengeAdvanced,
+        stageIconChallengeExpert,
+        stageIconChallengeMaster,
+        playerBadge,
+      };
+    } catch (err) {
+      console.warn('SMB2 HUD textures missing; falling back to SMB1 HUD skin.', err);
+    }
+
     this.assets = {
       banana,
       bananaBunch,
@@ -758,7 +941,8 @@ export class HudRenderer {
       bomb,
       bombCrack,
       lvIcon,
-      bombParts: rest.slice(0, HUD_ASSET_PATHS.bombParts.length) as HTMLImageElement[],
+      bombParts: rest.slice(0, smb1AssetPaths.bombParts.length) as HTMLImageElement[],
+      smb2: smb2Assets,
       fonts,
     };
     this.ready = true;
@@ -1131,6 +1315,33 @@ export class HudRenderer {
     }
   }
 
+  private isSmb2Hud(game: any): boolean {
+    if (!game) {
+      return false;
+    }
+    if (game?.ruleset?.id === 'smb2') {
+      return true;
+    }
+    return game?.gameSource === GAME_SOURCES.SMB2 || game?.gameSource === GAME_SOURCES.MB2WS;
+  }
+
+  private getSmb2StageIconAsset(smb2: HudSmb2Assets, game: any, floorInfo: any): HTMLImageElement {
+    if (getSmb2HudMode(game) === 'story') {
+      return smb2.stageIconStory;
+    }
+    const difficulty = getSmb2ChallengeDifficulty(game, floorInfo);
+    if (difficulty === 'beginner') {
+      return smb2.stageIconChallengeBeginner;
+    }
+    if (difficulty === 'advanced') {
+      return smb2.stageIconChallengeAdvanced;
+    }
+    if (difficulty === 'master') {
+      return smb2.stageIconChallengeMaster;
+    }
+    return smb2.stageIconChallengeExpert;
+  }
+
   render(game: any, dtSeconds: number) {
     if (!this.ctx || !this.assets || !this.ready) {
       return;
@@ -1158,63 +1369,171 @@ export class HudRenderer {
     const isBonusStage = game?.isBonusStageActive?.() ?? false;
     const floorInfo = game?.course?.getFloorInfo?.();
     const floorPrefix = floorInfo?.prefix ?? 'FLOOR';
-    const floorLabel = floorInfo ? `${floorPrefix} ${floorInfo.current}` : 'FLOOR 1';
+    const floorLabel = floorInfo ? `${floorPrefix} ${Math.max(1, Math.trunc(floorInfo.current ?? 1))}` : 'FLOOR 1';
     const floorColor = floorPrefix === 'EXTRA' ? '#ffe14d' : null;
+    const useSmb2Layout = this.isSmb2Hud(game) && Boolean(assets.smb2);
 
-    drawText(ctx, fonts.asc20x20, 'SCORE', { x: 108, y: 24 }, 1, null, 'center');
-    drawText(ctx, fonts.num22x22, score, { x: 196, y: 48 }, 1, null, 'right');
+    if (useSmb2Layout && assets.smb2) {
+      const smb2 = assets.smb2;
+      const hudMode = getSmb2HudMode(game);
+      const bananaCounterX = hudMode === 'challenge' ? 515 : 544;
+      const monkeyCounterX = hudMode === 'challenge' ? 559 : 584;
+      const bananaCounterY = 24;
+      const monkeyCounterY = 83;
+      const floorCurrent = Math.max(1, Math.trunc(floorInfo?.current ?? 1));
+      const world = Math.floor((floorCurrent - 1) / 10) + 1;
+      const storyStage = ((floorCurrent - 1) % 10) + 1;
+      const stageNumberText = hudMode === 'story' ? `${world}-${storyStage}` : String(floorCurrent);
+      const stageNameText = getSmb2StageLabel(game, floorInfo);
+      const iconImage = this.getSmb2StageIconAsset(smb2, game, floorInfo);
+      const challengeDifficulty = getSmb2ChallengeDifficulty(game, floorInfo);
+      const stageNumberX = 16 + (challengeDifficulty === 'beginner' ? 38 : 34);
+      const stageNumberWidth = measureText(fonts.num22x22, stageNumberText, 1);
+      const stageLabelX = stageNumberX + stageNumberWidth + 5;
+      const scoreText = score.padStart(7, '0');
+      const scoreTextX = 16 + smb2.scoreFrame.width;
+      const scoreTextY = 25;
 
-    drawSprite(ctx, assets.banana, { x: 428, y: 22 }, 0.2);
-    drawText(ctx, fonts.asc20x20, 'BANANA(S)', { x: 536, y: 24 }, 1, '#ffe66e', 'center');
-    drawText(ctx, fonts.num22x22, '/', { x: 518, y: 47 }, 1, '#ffe66e', 'center');
-    drawText(
-      ctx,
-      fonts.asc20x20,
-      `${String(bananasCollected).padStart(3, '0')} ${String(bananaTotal).padStart(3, '0')}`,
-      { x: 518, y: 48 },
-      1,
-      '#ffe66e',
-      'center',
-    );
+      drawSpriteTopLeft(ctx, smb2.scoreFrame, 16, 24, 1);
+      drawSpriteTopLeft(ctx, smb2.scoreLabel, 16, 24, 1);
+      drawTextAt(ctx, fonts.num22x22, scoreText, scoreTextX + 2, scoreTextY + 2, 1, '#000000', 0.5);
+      drawTextAt(ctx, fonts.num22x22, scoreText, scoreTextX, scoreTextY, 1, '#ffe66e');
 
-    // Lives counter hidden for now.
+      drawSpriteTopLeft(ctx, smb2.timerFrame, 320 - smb2.timerFrame.width / 2, 16, 1);
+      const timerBallScale = timeLeftRaw <= 600 ? 1 + func800802E0(timeLeft) : 1;
+      drawSprite(
+        ctx,
+        smb2.timerBall,
+        { x: 320, y: 56 + Math.sin(this.frameCounter * 0.04) * 1.5 },
+        timerBallScale,
+      );
 
-    if (timeLeftRaw > 0) {
-      const bombScale = timeLeftRaw <= 600 ? 1 + func800802E0(timeLeft) : 1;
-      drawSprite(ctx, assets.bomb, { x: 320, y: 68 }, BOMB_BASE_SCALE * bombScale);
-      if (timeLeftRaw <= 480) {
-        const crackOpacity = timeLeftRaw > 420 ? 1 - (timeLeftRaw - 420) / 60 : 1;
-        let crackColor: string | null = null;
-        if (timeLeftRaw < 240) {
-          const pulse = Math.abs(255 - (Math.floor(this.bombCrackPulse) % 510));
-          const blue = Math.max(128, pulse);
-          crackColor = `rgb(255, ${Math.round(pulse)}, ${Math.round((blue - 128) * 2)})`;
+      const secMetrics = textMetrics(fonts.num24x37, seconds, 1);
+      drawText(ctx, fonts.num24x37, seconds, { x: 322, y: 45 }, 1, '#000000', 'center', 'center', 0.5);
+      drawText(ctx, fonts.num24x37, seconds, { x: 320, y: 43 }, 1, '#ffe66e', 'center');
+      const centiText = `:${centis}`;
+      const centiMetrics = textMetrics(fonts.num12x19, centiText, 1);
+      const secLeft = 320 - secMetrics.width / 2;
+      const centiLeft = secLeft + secMetrics.width - 4;
+      const centiTop = 85 - centiMetrics.height;
+      drawTextAt(ctx, fonts.num12x19, centiText, centiLeft + 2, centiTop + 2, 1, '#000000', 0.5);
+      drawTextAt(ctx, fonts.num12x19, centiText, centiLeft, centiTop, 1, '#ff9d21');
+      drawSpriteTopLeft(ctx, smb2.timeLabel, 320 - smb2.timeLabel.width / 2, 16, 1);
+
+      const speedText = String(Math.min(999, Math.round(speedMph)));
+      drawTextAt(ctx, fonts.num22x22, speedText, 18, 412, 1, '#000000', 0.5);
+      drawTextAt(ctx, fonts.num22x22, speedText, 16, 410, 1, '#ffffff');
+      drawSpriteTopLeft(ctx, smb2.speedLabel, 40, 410, 1);
+
+      drawSpriteTopLeft(ctx, smb2.stageFrame, 16, 432, 1);
+      drawSprite(ctx, iconImage, { x: 34, y: 450 }, 1, 0.5, '#000000');
+      drawSprite(ctx, iconImage, { x: 32, y: 448 }, 1);
+      drawTextAt(ctx, fonts.num22x22, stageNumberText, stageNumberX + 3, 443, 1, '#000000', 0.5);
+      drawTextAt(ctx, fonts.num22x22, stageNumberText, stageNumberX, 440, 1, '#ffe66e');
+      drawTextAt(ctx, fonts.asc20x20, stageNameText, stageLabelX + 3, 443, 0.7, '#000000', 0.5);
+      drawTextAt(ctx, fonts.asc20x20, stageNameText, stageLabelX, 440, 0.7, '#ffe66e');
+
+      drawSpriteTopLeft(ctx, smb2.bananaFrame, bananaCounterX, bananaCounterY, 1);
+      drawSpriteTopLeft(ctx, smb2.bananaIcon, bananaCounterX - 2, bananaCounterY - 2, 1);
+      const bananasText = String(Math.max(0, Math.trunc(bananasCollected))).padStart(3, '0');
+      drawTextAt(ctx, fonts.num22x22, bananasText, bananaCounterX + 25, bananaCounterY + 3, 1, '#000000', 0.5);
+      drawTextAt(ctx, fonts.num22x22, bananasText, bananaCounterX + 23, bananaCounterY + 1, 1, '#ffe66e');
+
+      drawSprite(ctx, smb2.monkeyFrame, { x: monkeyCounterX, y: monkeyCounterY }, 1);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(monkeyCounterX, monkeyCounterY, 18, 0, Math.PI * 2);
+      ctx.clip();
+      drawSprite(ctx, smb2.monkeyPortrait, { x: monkeyCounterX, y: monkeyCounterY - 2 }, 0.27);
+      ctx.restore();
+      if (hudMode === 'challenge') {
+        const livesDisplay = Math.max(0, lives - 1);
+        drawSprite(ctx, smb2.monkeyFrame, { x: monkeyCounterX + 48, y: monkeyCounterY - 24 }, 0.71428);
+        drawText(ctx, fonts.asc16x16, 'X', { x: monkeyCounterX + 37, y: monkeyCounterY - 23 }, 1, '#000000', 'center', 'center', 0.5);
+        drawText(ctx, fonts.asc16x16, 'X', { x: monkeyCounterX + 35, y: monkeyCounterY - 25 }, 1, '#2f8cf0', 'center');
+        drawText(ctx, fonts.num22x22, String(livesDisplay), { x: monkeyCounterX + 50, y: monkeyCounterY - 22 }, 0.8, '#000000', 'center', 'center', 0.5);
+        drawText(ctx, fonts.num22x22, String(livesDisplay), { x: monkeyCounterX + 48, y: monkeyCounterY - 24 }, 0.8, '#ffe66e', 'center');
+      }
+    } else {
+      drawText(ctx, fonts.asc20x20, 'SCORE', { x: 108, y: 24 }, 1, null, 'center');
+      drawText(ctx, fonts.num22x22, score, { x: 196, y: 48 }, 1, null, 'right');
+
+      drawSprite(ctx, assets.banana, { x: 428, y: 22 }, 0.2);
+      drawText(ctx, fonts.asc20x20, 'BANANA(S)', { x: 536, y: 24 }, 1, '#ffe66e', 'center');
+      drawText(ctx, fonts.num22x22, '/', { x: 518, y: 47 }, 1, '#ffe66e', 'center');
+      drawText(
+        ctx,
+        fonts.asc20x20,
+        `${String(bananasCollected).padStart(3, '0')} ${String(bananaTotal).padStart(3, '0')}`,
+        { x: 518, y: 48 },
+        1,
+        '#ffe66e',
+        'center',
+      );
+
+      // Lives counter hidden for now.
+
+      if (timeLeftRaw > 0) {
+        const bombScale = timeLeftRaw <= 600 ? 1 + func800802E0(timeLeft) : 1;
+        drawSprite(ctx, assets.bomb, { x: 320, y: 68 }, BOMB_BASE_SCALE * bombScale);
+        if (timeLeftRaw <= 480) {
+          const crackOpacity = timeLeftRaw > 420 ? 1 - (timeLeftRaw - 420) / 60 : 1;
+          let crackColor: string | null = null;
+          if (timeLeftRaw < 240) {
+            const pulse = Math.abs(255 - (Math.floor(this.bombCrackPulse) % 510));
+            const blue = Math.max(128, pulse);
+            crackColor = `rgb(255, ${Math.round(pulse)}, ${Math.round((blue - 128) * 2)})`;
+          }
+          drawSprite(ctx, assets.bombCrack, { x: 320, y: 68 }, BOMB_BASE_SCALE * bombScale, crackOpacity, crackColor);
         }
-        drawSprite(ctx, assets.bombCrack, { x: 320, y: 68 }, BOMB_BASE_SCALE * bombScale, crackOpacity, crackColor);
+      }
+
+      const showIcon = floorInfo?.showDifficultyIcon ?? false;
+      const floorX = floorPrefix === 'MASTER' ? 32 : showIcon ? 72 : 32;
+      drawText(ctx, fonts.asc20x20, floorLabel, { x: floorX, y: 458 }, 1, floorColor, 'left');
+
+      const secMetrics = textMetrics(fonts.num24x37, seconds, 1);
+      const secLeft = 320 - secMetrics.width / 2;
+      const secTop = 85 - secMetrics.height;
+      drawTextAt(ctx, fonts.num24x37, seconds, secLeft, secTop, 1, null);
+      const centiMetrics = textMetrics(fonts.num12x19, `:${centis}`, 1);
+      const centiLeft = secLeft + secMetrics.width - 4;
+      const centiTop = 85 - centiMetrics.height;
+      drawTextAt(ctx, fonts.num12x19, `:${centis}`, centiLeft, centiTop, 1, null);
+
+      const speedText = String(Math.round(speedMph)).padStart(2, '0');
+      const rttValue = Math.max(0, Math.min(999, Math.round(game?.netplayRttMs ?? 0)));
+      const rttText = `${String(rttValue).padStart(3, '0')}ms`;
+      drawText(ctx, fonts.asc20x20, rttText, { x: 32, y: 404 }, 1, null, 'left');
+      drawText(ctx, fonts.asc20x20, speedText, { x: 32, y: 428 }, 1, null, 'left');
+      const speedWidth = measureText(fonts.asc20x20, speedText, 1);
+      const mphWidth = assets.mph.width * MPH_SCALE;
+      drawSprite(ctx, assets.mph, { x: 32 + speedWidth + mphWidth / 2 + 6, y: 428 }, MPH_SCALE);
+
+      if (floorInfo && floorInfo.showDifficultyIcon) {
+        const iconCell = 64;
+        const iconIndex = floorInfo.difficultyIconIndex ?? 1;
+        const sx = (iconIndex - 1) * iconCell;
+        const sy = iconCell * 1;
+        const scale = 0.5;
+        const iconX = 48;
+        const iconY = 458;
+        drawTintedImage(
+          ctx,
+          assets.lvIcon,
+          sx,
+          sy,
+          iconCell,
+          iconCell,
+          iconX - (iconCell * scale) * 0.5,
+          iconY - (iconCell * scale) * 0.5,
+          iconCell * scale,
+          iconCell * scale,
+          null,
+          1,
+        );
       }
     }
-
-    const showIcon = floorInfo?.showDifficultyIcon ?? false;
-    const floorX = floorPrefix === 'MASTER' ? 32 : showIcon ? 72 : 32;
-    drawText(ctx, fonts.asc20x20, floorLabel, { x: floorX, y: 458 }, 1, floorColor, 'left');
-
-    const secMetrics = textMetrics(fonts.num24x37, seconds, 1);
-    const secLeft = 320 - secMetrics.width / 2;
-    const secTop = 85 - secMetrics.height;
-    drawTextAt(ctx, fonts.num24x37, seconds, secLeft, secTop, 1, null);
-    const centiMetrics = textMetrics(fonts.num12x19, `:${centis}`, 1);
-    const centiLeft = secLeft + secMetrics.width - 4;
-    const centiTop = 85 - centiMetrics.height;
-    drawTextAt(ctx, fonts.num12x19, `:${centis}`, centiLeft, centiTop, 1, null);
-
-    const speedText = String(Math.round(speedMph)).padStart(2, '0');
-    const rttValue = Math.max(0, Math.min(999, Math.round(game?.netplayRttMs ?? 0)));
-    const rttText = `${String(rttValue).padStart(3, '0')}ms`;
-    drawText(ctx, fonts.asc20x20, rttText, { x: 32, y: 404 }, 1, null, 'left');
-    drawText(ctx, fonts.asc20x20, speedText, { x: 32, y: 428 }, 1, null, 'left');
-    const speedWidth = measureText(fonts.asc20x20, speedText, 1);
-    const mphWidth = assets.mph.width * MPH_SCALE;
-    drawSprite(ctx, assets.mph, { x: 32 + speedWidth + mphWidth / 2 + 6, y: 428 }, MPH_SCALE);
 
     if (isBonusStage && this.bonusBananaCounter > 0) {
       const counter = Math.min(60, Math.max(0, this.bonusBananaCounter));
@@ -1238,31 +1557,7 @@ export class HudRenderer {
       );
     }
 
-    if (floorInfo && floorInfo.showDifficultyIcon) {
-      const iconCell = 64;
-      const iconIndex = floorInfo.difficultyIconIndex ?? 1;
-      const sx = (iconIndex - 1) * iconCell;
-      const sy = iconCell * 1;
-      const scale = 0.5;
-      const iconX = 48;
-      const iconY = 458;
-      drawTintedImage(
-        ctx,
-        assets.lvIcon,
-        sx,
-        sy,
-        iconCell,
-        iconCell,
-        iconX - (iconCell * scale) * 0.5,
-        iconY - (iconCell * scale) * 0.5,
-        iconCell * scale,
-        iconCell * scale,
-        null,
-        1,
-      );
-    }
-
-    if (this.bombFragments.length > 0) {
+    if (this.bombFragments.length > 0 && !useSmb2Layout) {
       this.renderBombFragments(ctx, assets);
     }
 
