@@ -2221,7 +2221,7 @@ export class GameCore {
     for (let i = 0; i < this.stageRuntime.animGroups.length; i += 1) {
       const group = this.stageRuntime.animGroups[i];
       const out = this.interpolatedAnimGroupTransforms[i];
-      const prev = group.prevTransform ?? group.transform;
+      const prev = group.renderPrevTransform ?? group.prevTransform ?? group.transform;
       const curr = group.transform;
       for (let j = 0; j < 12; j += 1) {
         out[j] = prev[j] + (curr[j] - prev[j]) * alpha;

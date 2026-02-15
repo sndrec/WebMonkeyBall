@@ -107,6 +107,7 @@ export class StageRuntime {
     this.matrixStack = new MatrixStack();
     this.animBaseTransform = new Float32Array(12);
     this.animBasePrevTransform = new Float32Array(12);
+    this.animBaseRenderPrevTransform = new Float32Array(12);
     this.goalHoldOpen = false;
     this.switchesEnabled = true;
     this.advancePerf = {
@@ -148,12 +149,14 @@ export class StageRuntime {
           prevRot: { x: stageAg.initRot.x, y: stageAg.initRot.y, z: stageAg.initRot.z },
           transform: new Float32Array(12),
           prevTransform: new Float32Array(12),
+          renderPrevTransform: new Float32Array(12),
           animFrame: 0,
           playbackState: stageAg.initialPlaybackState ?? 0,
           seesawState: null,
         };
         this.matrixStack.fromIdentity();
         this.matrixStack.toMtx(info.transform);
+        this.matrixStack.toMtx(info.renderPrevTransform);
         this.matrixStack.translateNeg(stageAg.conveyorSpeed);
         this.matrixStack.toMtx(info.prevTransform);
         this.animGroups[i] = info;
@@ -273,6 +276,7 @@ export class StageRuntime {
       targetInfo.playbackState = (targetInfo.playbackState & ~7) | nextState;
       if (nextState === 1) {
         targetInfo.prevTransform.set(targetInfo.transform);
+        targetInfo.renderPrevTransform?.set(targetInfo.transform);
       }
     }
   }
@@ -370,6 +374,9 @@ export class StageRuntime {
         transform: cloneMat12(group.transform, true),
         prevTransform: cloneMat12(group.prevTransform, true),
       };
+      if (includeVisual && group.renderPrevTransform) {
+        out.renderPrevTransform = cloneMat12(group.renderPrevTransform, true);
+      }
       if (group.animFrame !== undefined) {
         out.animFrame = num(group.animFrame);
       }
@@ -565,6 +572,13 @@ export class StageRuntime {
       copyVec3(target.prevRot, source.prevRot);
       target.transform = copyMat12(target.transform, source.transform, true);
       target.prevTransform = copyMat12(target.prevTransform, source.prevTransform, true);
+      if (target.renderPrevTransform || source.renderPrevTransform) {
+        target.renderPrevTransform = copyMat12(
+          target.renderPrevTransform,
+          source.renderPrevTransform ?? source.prevTransform,
+          true,
+        );
+      }
       if (source.animFrame !== undefined) {
         target.animFrame = num(source.animFrame, target.animFrame ?? 0);
       }
@@ -997,6 +1011,9 @@ export class StageRuntime {
         }
       }
 
+      const renderPrevPosX = info.pos.x;
+      const renderPrevPosY = info.pos.y;
+      const renderPrevPosZ = info.pos.z;
       info.prevPos.x = info.pos.x - stageAg.conveyorSpeed.x;
       info.prevPos.y = info.pos.y - stageAg.conveyorSpeed.y;
       info.prevPos.z = info.pos.z - stageAg.conveyorSpeed.z;
@@ -1027,6 +1044,7 @@ export class StageRuntime {
 
       const baseTransform = this.animBaseTransform;
       const basePrevTransform = this.animBasePrevTransform;
+      const baseRenderPrevTransform = this.animBaseRenderPrevTransform;
 
       stack.fromTranslate(info.pos);
       stack.rotateZ(info.rot.z);
@@ -1046,6 +1064,15 @@ export class StageRuntime {
       stack.translateNeg(stageAg.origin);
       stack.toMtx(basePrevTransform);
 
+      stack.fromTranslateXYZ(renderPrevPosX, renderPrevPosY, renderPrevPosZ);
+      stack.rotateZ(info.prevRot.z);
+      stack.rotateY(info.prevRot.y);
+      stack.rotateX(info.prevRot.x - stageAg.initRot.x);
+      stack.rotateY(-stageAg.initRot.y);
+      stack.rotateZ(-stageAg.initRot.z);
+      stack.translateNeg(stageAg.origin);
+      stack.toMtx(baseRenderPrevTransform);
+
       if (info.seesawState) {
         tickSeesawState(info.seesawState);
         stack.fromMtx(baseTransform);
@@ -1059,9 +1086,17 @@ export class StageRuntime {
         stack.rotateZ(toS16(info.seesawState.prevAngle));
         stack.multRight(info.seesawState.invTransform);
         stack.toMtx(info.prevTransform);
+        if (info.renderPrevTransform) {
+          stack.fromMtx(baseRenderPrevTransform);
+          stack.multRight(info.seesawState.transform);
+          stack.rotateZ(toS16(info.seesawState.prevAngle));
+          stack.multRight(info.seesawState.invTransform);
+          stack.toMtx(info.renderPrevTransform);
+        }
       } else {
         info.transform.set(baseTransform);
         info.prevTransform.set(basePrevTransform);
+        info.renderPrevTransform?.set(baseRenderPrevTransform);
       }
     }
   }
