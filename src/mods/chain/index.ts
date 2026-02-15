@@ -39,15 +39,15 @@ const CHAIN_CONSTRAINT_ITERS = 6;
 const CHAIN_LEASH_CORRECTION = 0.0;
 const CHAIN_LEASH_MAX_STEP = 0.15;
 const CHAIN_LEASH_VEL_BLEND = 0.2;
-const CHAIN_ENDPOINT_SNAP = 0.95;
-const CHAIN_ENDPOINT_TRANSFER = 0.0;
-const CHAIN_ENDPOINT_TRANSFER_MAX_STEP = 0.16;
-const CHAIN_ENDPOINT_SEGMENT_TRANSFER = 2.5;
-const CHAIN_ENDPOINT_SEGMENT_MAX_STEP = 0.5;
+const CHAIN_ENDPOINT_SNAP = 1.0;
+const CHAIN_ENDPOINT_TRANSFER = 0.12;
+const CHAIN_ENDPOINT_TRANSFER_MAX_STEP = 0.2;
+const CHAIN_ENDPOINT_SEGMENT_TRANSFER = 1.0;
+const CHAIN_ENDPOINT_SEGMENT_MAX_STEP = 0.35;
 const CHAIN_ENDPOINT_POS_BLEND = 0.0;
 const CHAIN_ENDPOINT_PREV_BLEND = 0.9;
-const CHAIN_ENDPOINT_VEL_BLEND = 1.0;
-const CHAIN_ENDPOINT_COMMON_MODE_REJECT = 1.0;
+const CHAIN_ENDPOINT_VEL_BLEND = 0.45;
+const CHAIN_ENDPOINT_COMMON_MODE_REJECT = 0.6;
 const CHAIN_ENDPOINT_OTHER_BALL_BIAS = 0.5;
 const CHAIN_NODE_GRAVITY_FALLBACK = 0.009799992;
 const CHAIN_COLLISION_IMPULSE_SCALE = 0.5;
@@ -696,7 +696,7 @@ function anchorChainEndpointToBallSurface(
   const segDist = sqrt((segDx * segDx) + (segDy * segDy) + (segDz * segDz));
   const segStretch = Math.max(0, segDist - segmentRestLen);
   const segTautRatio = segmentRestLen > 1e-6
-    ? Math.min(1, segStretch / segmentRestLen)
+    ? Math.min(1, Math.max(0, ((segDist / segmentRestLen) - 0.85) / 0.15))
     : 0;
   let transferX = 0;
   let transferY = 0;
@@ -721,8 +721,9 @@ function anchorChainEndpointToBallSurface(
     transferZ += radialZ;
   }
 
-  if (segStretch > 1e-6 && segDist > 1e-6) {
-    const segPull = Math.min(CHAIN_ENDPOINT_SEGMENT_MAX_STEP, segStretch * CHAIN_ENDPOINT_SEGMENT_TRANSFER);
+  const segNearTautStretch = Math.max(0, segDist - (segmentRestLen * 0.98));
+  if (segNearTautStretch > 1e-6 && segDist > 1e-6) {
+    const segPull = Math.min(CHAIN_ENDPOINT_SEGMENT_MAX_STEP, segNearTautStretch * CHAIN_ENDPOINT_SEGMENT_TRANSFER);
     const invSegDist = 1 / segDist;
     transferX += segDx * invSegDist * segPull;
     transferY += segDy * invSegDist * segPull;
@@ -1251,52 +1252,34 @@ function equalizeLinkEndpointTransfers(
   };
 }
 
-function balanceLinkEndpointTransfers(
-  playerA: any,
-  playerB: any,
-  transferA: Vec3 | null,
-  transferB: Vec3 | null,
-): { transferA: Vec3 | null; transferB: Vec3 | null } {
-  if (!transferA && !transferB) {
-    return { transferA: null, transferB: null };
+function projectEndpointTransferToLocalAxis(
+  endpoint: ChainNodeState,
+  neighbor: ChainNodeState,
+  transfer: Vec3 | null,
+): Vec3 | null {
+  if (!transfer) {
+    return null;
   }
-  const dx = (Number.isFinite(playerB?.ball?.pos?.x) ? playerB.ball.pos.x : 0)
-    - (Number.isFinite(playerA?.ball?.pos?.x) ? playerA.ball.pos.x : 0);
-  const dy = (Number.isFinite(playerB?.ball?.pos?.y) ? playerB.ball.pos.y : 0)
-    - (Number.isFinite(playerA?.ball?.pos?.y) ? playerA.ball.pos.y : 0);
-  const dz = (Number.isFinite(playerB?.ball?.pos?.z) ? playerB.ball.pos.z : 0)
-    - (Number.isFinite(playerA?.ball?.pos?.z) ? playerA.ball.pos.z : 0);
-  const distSq = (dx * dx) + (dy * dy) + (dz * dz);
-  if (distSq <= 1e-8) {
-    return equalizeLinkEndpointTransfers(transferA, transferB);
+  const segX = neighbor.pos.x - endpoint.pos.x;
+  const segY = neighbor.pos.y - endpoint.pos.y;
+  const segZ = neighbor.pos.z - endpoint.pos.z;
+  const segLenSq = (segX * segX) + (segY * segY) + (segZ * segZ);
+  if (segLenSq <= 1e-10) {
+    return null;
   }
-  const dist = sqrt(distSq);
-  const invDist = 1 / dist;
-  const axisX = dx * invDist;
-  const axisY = dy * invDist;
-  const axisZ = dz * invDist;
-  const pullA = transferA
-    ? Math.max(0, (transferA.x * axisX) + (transferA.y * axisY) + (transferA.z * axisZ))
-    : 0;
-  const pullB = transferB
-    ? Math.max(0, -((transferB.x * axisX) + (transferB.y * axisY) + (transferB.z * axisZ)))
-    : 0;
-  const relAlong = ((Number.isFinite(playerB?.ball?.vel?.x) ? playerB.ball.vel.x : 0)
-      - (Number.isFinite(playerA?.ball?.vel?.x) ? playerA.ball.vel.x : 0)) * axisX
-    + ((Number.isFinite(playerB?.ball?.vel?.y) ? playerB.ball.vel.y : 0)
-      - (Number.isFinite(playerA?.ball?.vel?.y) ? playerA.ball.vel.y : 0)) * axisY
-    + ((Number.isFinite(playerB?.ball?.vel?.z) ? playerB.ball.vel.z : 0)
-      - (Number.isFinite(playerA?.ball?.vel?.z) ? playerA.ball.vel.z : 0)) * axisZ;
-  if (relAlong <= 1e-6) {
-    return { transferA: null, transferB: null };
-  }
-  const tension = Math.min(0.5 * (pullA + pullB), 0.5 * relAlong);
-  if (tension <= 1e-6) {
-    return { transferA: null, transferB: null };
+  const segLen = sqrt(segLenSq);
+  const invSegLen = 1 / segLen;
+  const dirX = segX * invSegLen;
+  const dirY = segY * invSegLen;
+  const dirZ = segZ * invSegLen;
+  const along = (transfer.x * dirX) + (transfer.y * dirY) + (transfer.z * dirZ);
+  if (Math.abs(along) <= 1e-6) {
+    return null;
   }
   return {
-    transferA: { x: axisX * tension, y: axisY * tension, z: axisZ * tension },
-    transferB: { x: -axisX * tension, y: -axisY * tension, z: -axisZ * tension },
+    x: dirX * along,
+    y: dirY * along,
+    z: dirZ * along,
   };
 }
 
@@ -1645,9 +1628,13 @@ function simulateChainedTogether(
         portalConstraint,
         link.portalFollowerId,
       );
-      const balancedTransfers = portalConstraint
-        ? equalizeLinkEndpointTransfers(transferA, transferB)
-        : balanceLinkEndpointTransfers(playerA, playerB, transferA, transferB);
+      const adjustedTransferA = portalConstraint
+        ? transferA
+        : projectEndpointTransferToLocalAxis(first, link.nodes[1], transferA);
+      const adjustedTransferB = portalConstraint
+        ? transferB
+        : projectEndpointTransferToLocalAxis(last, link.nodes[link.nodes.length - 2], transferB);
+      const balancedTransfers = equalizeLinkEndpointTransfers(adjustedTransferA, adjustedTransferB);
       if (balancedTransfers.transferA) {
         const pending = pendingBallTransfers.get(playerA.id) ?? { x: 0, y: 0, z: 0, endpoints: [] };
         pending.x += balancedTransfers.transferA.x;
