@@ -44,6 +44,7 @@ type LobbyUiDeps = {
   profileFallbackForPlayer: (playerId: number) => PlayerProfile;
   createAvatarElement: (profile: PlayerProfile, seed: number) => HTMLElement;
   buildRoomMeta: () => RoomMeta | null;
+  renderLobbyGameModeOptions: (mode: MultiplayerGameMode, raw: unknown, disabled: boolean) => void;
   updateProfileUi: () => void;
   updateChatUi: () => void;
   kickPlayerFromRoom: (playerId: number) => void;
@@ -181,6 +182,7 @@ export class LobbyUiController {
         this.deps.lobbyGameModeSelect.value = this.deps.modeStandard;
         this.deps.lobbyGameModeSelect.disabled = true;
       }
+      this.deps.renderLobbyGameModeOptions(this.deps.modeStandard, null, true);
       if (this.deps.lobbyLockToggle) {
         this.deps.lobbyLockToggle.checked = false;
         this.deps.lobbyLockToggle.disabled = true;
@@ -257,6 +259,7 @@ export class LobbyUiController {
       this.deps.lobbyGameModeSelect.value = gameMode;
       this.deps.lobbyGameModeSelect.disabled = !isHost;
     }
+    this.deps.renderLobbyGameModeOptions(gameMode, meta?.gameModeOptions, !isHost);
     if (this.deps.lobbyMaxPlayersSelect) {
       this.deps.lobbyMaxPlayersSelect.value = String(maxPlayers);
       for (const option of Array.from(this.deps.lobbyMaxPlayersSelect.options)) {

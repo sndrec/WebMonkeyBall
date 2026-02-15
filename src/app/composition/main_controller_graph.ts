@@ -97,6 +97,7 @@ export function createMainControllerGraph(args: any) {
     prefetchPackSlice,
     isNaomiStage,
     courseSelection,
+    gamemodeOptions,
     getLobbyStartDisabledReason,
     state,
     lobbyProfiles,
@@ -246,6 +247,10 @@ const peerSession = new PeerSessionController({
     state.netplayEnabled = enabled;
   },
   getRoomGameMode: (room) => roomMeta.getRoomGameMode(room),
+  getRoomGameModeOptions: (room, mode) => gamemodeOptions.getRoomMetaOptions(room?.meta, mode),
+  applyGameModeOptionsToGame: (mode, raw) => {
+    gamemodeOptions.applyOptionsToGame(game, mode, raw);
+  },
   applyLocalProfileToSession: () => {
     lobbyState.applyLocalProfileToSession();
   },
@@ -397,6 +402,8 @@ const lobbyState = new LobbyStateController({
   clampInt,
   getLobbyRoomGameMode: () => roomMeta.getLobbyRoomGameMode(),
   getLobbySelectedGameMode: () => roomMeta.getLobbySelectedGameMode(),
+  getDefaultGameModeOptions: (mode) => gamemodeOptions.getDefaultOptions(mode),
+  readLobbyGameModeOptionsFromInputs: (mode, fallbackRaw) => gamemodeOptions.readOptionsFromInputs(mode, fallbackRaw),
   chainedMaxPlayers: CHAINED_MAX_PLAYERS,
   lobbyMaxPlayers: LOBBY_MAX_PLAYERS,
   broadcastRoomUpdate: () => {
@@ -416,7 +423,7 @@ const lobbyState = new LobbyStateController({
     state.lobbyNameUpdateTimer = id;
   },
   sanitizeLobbyName,
-  applyGameMode: (mode, maxPlayers, collisionEnabled, infiniteTimeEnabled) => {
+  applyGameMode: (mode, maxPlayers, collisionEnabled, infiniteTimeEnabled, gameModeOptionsRaw) => {
     game.maxPlayers = maxPlayers;
     if (collisionEnabled !== undefined) {
       game.playerCollisionEnabled = collisionEnabled;
@@ -425,6 +432,7 @@ const lobbyState = new LobbyStateController({
       game.infiniteTimeEnabled = infiniteTimeEnabled;
     }
     game.setMultiplayerGameMode(mode);
+    gamemodeOptions.applyOptionsToGame(game, mode, gameModeOptionsRaw);
     if (state.netplayState) {
       state.netplayState.currentGameMode = mode;
     }
@@ -622,6 +630,9 @@ lobbyUiController = new LobbyUiController({
   lobbyRoomStatus,
   lobbyRoomNameInput,
   lobbyGameModeSelect,
+  renderLobbyGameModeOptions: (mode, raw, disabled) => {
+    gamemodeOptions.render(mode, raw, disabled);
+  },
   lobbyMaxPlayersSelect,
   lobbyCollisionToggle,
   lobbyInfiniteTimeToggle,
@@ -715,7 +726,10 @@ netplayMessageFlow = new NetplayMessageFlowController({
   endMatchToLobby: () => {
     matchFlow.endMatchToLobby();
   },
+  getLobbyRoom: () => state.lobbyRoom,
   getRoomGameMode: (room) => roomMeta.getRoomGameMode(room),
+  getRoomGameModeOptions: (room, mode) => gamemodeOptions.getRoomMetaOptions(room?.meta, mode),
+  applyGameModeOptionsToGame: (mode, raw) => gamemodeOptions.applyOptionsToGame(game, mode, raw),
   modeChained: MULTIPLAYER_MODE_CHAINED,
   chainedMaxPlayers: CHAINED_MAX_PLAYERS,
   normalizeMultiplayerGameMode,
@@ -881,6 +895,10 @@ matchStartFlow = new MatchStartFlowController({
   getNetplayState: () => state.netplayState,
   getHostRelay: () => state.hostRelay,
   getLobbyRoomGameMode: () => roomMeta.getLobbyRoomGameMode(),
+  getLobbyRoomGameModeOptions: () => gamemodeOptions.getRoomMetaOptions(
+    state.lobbyRoom?.meta,
+    roomMeta.getLobbyRoomGameMode(),
+  ),
   getLobbyStartDisabledReason: (isHost, mode) => lobbyUiController?.getLobbyStartDisabledReason(isHost, mode) ?? '',
   updateLobbyUi: () => {
     lobbyUiController?.updateLobbyUi();

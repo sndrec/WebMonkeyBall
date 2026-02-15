@@ -1,6 +1,12 @@
 import type { Game, MultiplayerGameMode } from '../../game.js';
 import type { GameSource } from '../../shared/constants/index.js';
-import type { ClientToHostMessage, HostToClientMessage, PlayerProfile, RoomInfo } from '../../netcode_protocol.js';
+import type {
+  ClientToHostMessage,
+  HostToClientMessage,
+  PlayerProfile,
+  RoomGameModeOptions,
+  RoomInfo,
+} from '../../netcode_protocol.js';
 
 type MessageFlowDeps = {
   game: Game;
@@ -28,7 +34,10 @@ type MessageFlowDeps = {
   updateLobbyUi: () => void;
   appendChatMessage: (playerId: number, text: string) => void;
   endMatchToLobby: () => void;
+  getLobbyRoom: () => RoomInfo | null;
   getRoomGameMode: (room: RoomInfo | null | undefined) => MultiplayerGameMode;
+  getRoomGameModeOptions: (room: RoomInfo | null | undefined, mode: MultiplayerGameMode) => RoomGameModeOptions;
+  applyGameModeOptionsToGame: (mode: MultiplayerGameMode, raw: unknown) => RoomGameModeOptions;
   modeChained: MultiplayerGameMode;
   chainedMaxPlayers: number;
   normalizeMultiplayerGameMode: (mode: unknown) => MultiplayerGameMode;
@@ -267,6 +276,7 @@ export class NetplayMessageFlowController {
     }
     if (msg.type === 'room_update') {
       const mode = this.deps.getRoomGameMode(msg.room);
+      const modeOptions = this.deps.getRoomGameModeOptions(msg.room, mode);
       const cappedMaxPlayers = mode === this.deps.modeChained
         ? Math.min(msg.room.settings.maxPlayers, this.deps.chainedMaxPlayers)
         : msg.room.settings.maxPlayers;
@@ -275,6 +285,7 @@ export class NetplayMessageFlowController {
       this.deps.game.playerCollisionEnabled = msg.room.settings.collisionEnabled;
       this.deps.game.infiniteTimeEnabled = !!(msg.room.settings.infiniteTimeEnabled ?? false);
       this.deps.game.setMultiplayerGameMode(mode);
+      this.deps.applyGameModeOptionsToGame(mode, modeOptions);
       if (this.deps.getNetplayState()) {
         this.deps.getNetplayState().currentGameMode = mode;
       }
@@ -283,12 +294,16 @@ export class NetplayMessageFlowController {
       return;
     }
     if (msg.type === 'start') {
+      const mode = this.deps.normalizeMultiplayerGameMode(msg.gameMode);
+      const fallbackRoom = this.deps.getLobbyRoom();
+      const modeOptions = msg.gameModeOptions
+        ?? this.deps.getRoomGameModeOptions(fallbackRoom, mode);
       const currentState = this.deps.getNetplayState();
       if (currentState) {
         currentState.stageSeq = msg.stageSeq;
         currentState.currentCourse = msg.course;
         currentState.currentGameSource = msg.gameSource;
-        currentState.currentGameMode = this.deps.normalizeMultiplayerGameMode(msg.gameMode);
+        currentState.currentGameMode = mode;
         currentState.awaitingSnapshot = false;
         currentState.expectedHashes.clear();
         currentState.hashHistory.clear();
@@ -300,7 +315,8 @@ export class NetplayMessageFlowController {
       this.deps.setPendingSnapshot(null);
       this.deps.setActiveGameSource(msg.gameSource);
       this.deps.game.setGameSource(msg.gameSource);
-      this.deps.game.setMultiplayerGameMode(this.deps.normalizeMultiplayerGameMode(msg.gameMode));
+      this.deps.game.setMultiplayerGameMode(mode);
+      this.deps.applyGameModeOptionsToGame(mode, modeOptions);
       this.deps.game.stageBasePath = msg.stageBasePath ?? this.deps.getStageBasePath(msg.gameSource);
       this.deps.setCurrentSmb2LikeMode(msg.gameSource !== 'smb1' && msg.course?.mode ? msg.course.mode : null);
       void this.deps.startStage(msg.course);

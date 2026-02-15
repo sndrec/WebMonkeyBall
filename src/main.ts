@@ -44,6 +44,7 @@ import { ChatUiController } from './app/netplay/chat_ui.js';
 import type { NetplayConnectionStateController } from './app/netplay/connection_state.js';
 import { createNetplayDebugState } from './app/netplay/debug_state.js';
 import { createNetplayDebugOverlay } from './app/netplay/debug_overlay.js';
+import { GamemodeOptionsController } from './app/netplay/gamemode_options.js';
 import type { LobbyHeartbeatController } from './app/netplay/heartbeat.js';
 import type { LobbyBrowserController } from './app/netplay/lobby_browser.js';
 import { bindLobbyEventHandlers } from './app/netplay/lobby_bindings.js';
@@ -228,6 +229,7 @@ export function runMainApp() {
     lobbyCollisionToggle,
     lobbyInfiniteTimeToggle,
     lobbyLockToggle,
+    lobbyGamemodeOptionsRoot,
     lobbyStageButton,
     lobbyStageInfo,
     lobbyStageActions,
@@ -253,6 +255,29 @@ export function runMainApp() {
   
   const packSelection = new PackSelectionController({ gameSourceSelect, packStatus });
   const netplayDebugOverlay = createNetplayDebugOverlay(document.body);
+  const registeredGamemodes = modRegistry.listGamemodes();
+  if (lobbyGameModeSelect) {
+    const currentValue = lobbyGameModeSelect.value;
+    lobbyGameModeSelect.innerHTML = '';
+    for (const gamemode of registeredGamemodes) {
+      const option = document.createElement('option');
+      option.value = gamemode.id;
+      option.textContent = gamemode.label;
+      lobbyGameModeSelect.appendChild(option);
+    }
+    if (lobbyGameModeSelect.options.length === 0) {
+      const fallbackOption = document.createElement('option');
+      fallbackOption.value = 'standard';
+      fallbackOption.textContent = 'Standard';
+      lobbyGameModeSelect.appendChild(fallbackOption);
+    }
+    const hasCurrent = Array.from(lobbyGameModeSelect.options).some((option) => option.value === currentValue);
+    lobbyGameModeSelect.value = hasCurrent ? currentValue : 'standard';
+  }
+  const gamemodeOptions = new GamemodeOptionsController({
+    gamemodes: registeredGamemodes,
+    lobbyGamemodeOptionsRoot,
+  });
   
   const defaultChallengeOptions = Array.from(smb2ChallengeSelect?.options ?? []).map((option) => ({
     value: option.value,
@@ -802,6 +827,7 @@ export function runMainApp() {
       lobbyRoomInfo,
       lobbyRoomStatus,
       lobbyGameModeSelect,
+      lobbyGamemodeOptionsRoot,
       lobbyChatPanel,
       lobbyStartButton,
       levelSelectOpenButton,
@@ -846,6 +872,7 @@ export function runMainApp() {
       prefetchPackSlice,
       isNaomiStage,
       courseSelection,
+      gamemodeOptions,
       getLobbyStartDisabledReason: (isHost: boolean, mode: MultiplayerGameMode) => (
         lobbyUiController?.getLobbyStartDisabledReason(isHost, mode) ?? ''
       ),
@@ -978,6 +1005,8 @@ export function runMainApp() {
     lobbyNameInput,
     getLobbyRoom: () => lobbyRoom,
     sanitizeLobbyName,
+    getDefaultGameModeOptions: (mode) => gamemodeOptions.getDefaultOptions(mode),
+    normalizeGameModeOptions: (mode, raw) => gamemodeOptions.normalizeOptions(mode, raw, true),
   });
   
   const leaderboardSessionFlow = new LeaderboardSessionController({
@@ -1551,6 +1580,7 @@ export function runMainApp() {
     lobbyJoinButton,
     lobbyLeaveButton,
     lobbyGameModeSelect,
+    lobbyGamemodeOptionsRoot,
     lobbyMaxPlayersSelect,
     lobbyCollisionToggle,
     lobbyInfiniteTimeToggle,

@@ -2,6 +2,7 @@ import type { AudioManager } from '../../audio.js';
 import type { Game, MultiplayerGameMode } from '../../game.js';
 import { GAME_SOURCES, type GameSource } from '../../shared/constants/index.js';
 import type { LeaderboardsClient } from '../../leaderboards.js';
+import type { RoomGameModeOptions } from '../../netcode_protocol.js';
 
 type StartFlowDeps = {
   game: Game;
@@ -13,6 +14,7 @@ type StartFlowDeps = {
   getNetplayState: () => any | null;
   getHostRelay: () => { broadcast: (msg: any) => void } | null;
   getLobbyRoomGameMode: () => MultiplayerGameMode;
+  getLobbyRoomGameModeOptions: () => RoomGameModeOptions;
   getLobbyStartDisabledReason: (isHost: boolean, mode: MultiplayerGameMode) => string;
   updateLobbyUi: () => void;
   resolveSelectedGameSource: () => { gameSource: GameSource };
@@ -123,6 +125,7 @@ export class MatchStartFlowController {
     netplayState.currentGameMode = this.deps.normalizeMultiplayerGameMode(
       netplayState.currentGameMode ?? this.deps.game.getMultiplayerGameMode(),
     );
+    const gameModeOptions = this.deps.getLobbyRoomGameModeOptions();
     netplayState.stageSeq += 1;
     this.deps.promotePendingSpawns(netplayState.stageSeq);
     hostRelay.broadcast({
@@ -130,6 +133,7 @@ export class MatchStartFlowController {
       stageSeq: netplayState.stageSeq,
       gameSource: activeGameSource,
       gameMode: netplayState.currentGameMode,
+      gameModeOptions: Object.keys(gameModeOptions).length > 0 ? gameModeOptions : undefined,
       course: config,
       stageBasePath: this.deps.getStageBasePath(activeGameSource),
     });

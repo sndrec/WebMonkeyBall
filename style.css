@@ -752,6 +752,12 @@ body.gameplay-active {
   cursor: not-allowed;
 }
 
+.lobby-gamemode-options {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
 .avatar {
   width: 32px;
   height: 32px;

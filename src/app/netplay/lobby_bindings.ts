@@ -4,6 +4,7 @@ type LobbyBindingsOptions = {
   lobbyJoinButton: HTMLButtonElement | null;
   lobbyLeaveButton: HTMLButtonElement | null;
   lobbyGameModeSelect: HTMLSelectElement | null;
+  lobbyGamemodeOptionsRoot: HTMLElement | null;
   lobbyMaxPlayersSelect: HTMLSelectElement | null;
   lobbyCollisionToggle: HTMLInputElement | null;
   lobbyInfiniteTimeToggle: HTMLInputElement | null;
@@ -59,6 +60,9 @@ export function bindLobbyEventHandlers(options: LobbyBindingsOptions) {
   });
   options.lobbyGameModeSelect?.addEventListener('change', () => {
     options.onApplyLobbyGameModeFromInputs();
+  });
+  options.lobbyGamemodeOptionsRoot?.addEventListener('change', () => {
+    options.onApplyLobbySettingsFromInputs();
   });
   options.lobbyMaxPlayersSelect?.addEventListener('change', () => {
     options.onApplyLobbySettingsFromInputs();

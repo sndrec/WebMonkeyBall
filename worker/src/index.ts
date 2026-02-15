@@ -19,6 +19,8 @@ type RoomSettings = {
 type RoomMeta = {
   status: "lobby" | "in_game";
   gameSource?: "smb1" | "smb2" | "mb2ws";
+  gameMode?: "standard" | "chained_together";
+  gameModeOptions?: Record<string, string | number | boolean>;
   courseLabel?: string;
   stageLabel?: string;
   stageId?: number;
@@ -330,6 +332,7 @@ function sanitizeMeta(input?: Partial<RoomMeta>): RoomMeta {
   const status = input?.status === "in_game" ? "in_game" : "lobby";
   const source =
     input?.gameSource === "smb2" || input?.gameSource === "mb2ws" ? input.gameSource : "smb1";
+  const gameMode = input?.gameMode === "chained_together" ? "chained_together" : "standard";
   const courseLabelRaw = typeof input?.courseLabel === "string" ? input.courseLabel.slice(0, 64) : "";
   const stageLabelRaw = typeof input?.stageLabel === "string" ? input.stageLabel.slice(0, 64) : "";
   const roomNameRaw = typeof input?.roomName === "string" ? input.roomName.slice(0, 64) : "";
@@ -337,9 +340,35 @@ function sanitizeMeta(input?: Partial<RoomMeta>): RoomMeta {
   const stageLabel = stageLabelRaw.trim() ? stageLabelRaw.trim() : undefined;
   const roomName = roomNameRaw.trim() ? roomNameRaw.trim() : undefined;
   const stageId = Number.isFinite(input?.stageId) ? Number(input?.stageId) : undefined;
+  const gameModeOptions: Record<string, string | number | boolean> = {};
+  if (input?.gameModeOptions && typeof input.gameModeOptions === "object" && !Array.isArray(input.gameModeOptions)) {
+    for (const [keyRaw, valueRaw] of Object.entries(input.gameModeOptions)) {
+      const key = typeof keyRaw === "string" ? keyRaw.trim().slice(0, 48) : "";
+      if (!key) {
+        continue;
+      }
+      const sanitizedKey = key.replace(/[^A-Za-z0-9_\-]/g, "");
+      if (!sanitizedKey) {
+        continue;
+      }
+      if (typeof valueRaw === "boolean") {
+        gameModeOptions[sanitizedKey] = valueRaw;
+        continue;
+      }
+      if (typeof valueRaw === "number" && Number.isFinite(valueRaw)) {
+        gameModeOptions[sanitizedKey] = Math.max(-1000000, Math.min(1000000, valueRaw));
+        continue;
+      }
+      if (typeof valueRaw === "string") {
+        gameModeOptions[sanitizedKey] = valueRaw.slice(0, 64);
+      }
+    }
+  }
   return {
     status,
     gameSource: source,
+    gameMode,
+    gameModeOptions: Object.keys(gameModeOptions).length > 0 ? gameModeOptions : undefined,
     courseLabel,
     stageLabel,
     stageId,
@@ -512,7 +541,13 @@ export class Lobby implements DurableObject {
         hostToken,
         courseId,
         settings,
-        meta: sanitizeMeta({ status: "lobby", gameSource: "smb1", courseLabel: courseId }),
+        meta: sanitizeMeta({
+          status: "lobby",
+          gameSource: "smb1",
+          gameMode: "standard",
+          courseLabel: courseId,
+          ...(body.meta ?? {}),
+        }),
         createdAt,
         lastActiveAt: createdAt,
         players: {

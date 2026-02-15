@@ -45,6 +45,19 @@ export class ModRegistry {
     if (this.gamemodes.has(entry.id)) {
       throw new Error(`Gamemode already registered: ${entry.id}`);
     }
+    if (Array.isArray(entry.options)) {
+      const keys = new Set<string>();
+      for (const option of entry.options) {
+        const key = typeof option?.key === 'string' ? option.key.trim() : '';
+        if (!key) {
+          throw new Error(`Gamemode option key missing for mode: ${entry.id}`);
+        }
+        if (keys.has(key)) {
+          throw new Error(`Duplicate gamemode option key '${key}' for mode: ${entry.id}`);
+        }
+        keys.add(key);
+      }
+    }
     this.gamemodes.set(entry.id, entry);
   }
 

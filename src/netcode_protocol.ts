@@ -10,10 +10,15 @@ export type RoomSettings = {
   locked: boolean;
 };
 
+export type RoomGameModeOptionValue = string | number | boolean;
+
+export type RoomGameModeOptions = Record<string, RoomGameModeOptionValue>;
+
 export type RoomMeta = {
   status: 'lobby' | 'in_game';
   gameSource?: GameSource;
   gameMode?: 'standard' | 'chained_together';
+  gameModeOptions?: RoomGameModeOptions;
   courseLabel?: string;
   stageLabel?: string;
   stageId?: number;
@@ -146,6 +151,7 @@ export type StartMatchMessage = {
   stageSeq: number;
   gameSource: GameSource;
   gameMode?: 'standard' | 'chained_together';
+  gameModeOptions?: RoomGameModeOptions;
   course: any;
   stageBasePath?: string;
   lateJoin?: boolean;

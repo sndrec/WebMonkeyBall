@@ -1,8 +1,13 @@
 import { HostRelay, ClientPeer, createHostOffer, applyHostSignal } from '../../netplay.js';
 import type { Game, MultiplayerGameMode } from '../../game.js';
-import type { RoomInfo, PlayerProfile, ClientToHostMessage, HostToClientMessage } from '../../netcode_protocol.js';
+import type {
+  RoomInfo,
+  RoomGameModeOptions,
+  PlayerProfile,
+  ClientToHostMessage,
+  HostToClientMessage,
+} from '../../netcode_protocol.js';
 import type { GameSource } from '../../shared/constants/index.js';
-import type { QuantizedInput } from '../../determinism.js';
 
 type NetplayState = {
   role: 'host' | 'client';
@@ -39,6 +44,8 @@ type PeerSessionDeps = {
   getNetplayState: () => NetplayState | null;
   setNetplayEnabled: (enabled: boolean) => void;
   getRoomGameMode: (room: RoomInfo | null | undefined) => MultiplayerGameMode;
+  getRoomGameModeOptions: (room: RoomInfo | null | undefined, mode: MultiplayerGameMode) => RoomGameModeOptions;
+  applyGameModeOptionsToGame: (mode: MultiplayerGameMode, raw: unknown) => RoomGameModeOptions;
   applyLocalProfileToSession: () => void;
   normalizeMultiplayerGameMode: (mode: unknown) => MultiplayerGameMode;
   shouldJoinAsSpectator: () => boolean;
@@ -98,6 +105,7 @@ export class PeerSessionController {
     this.deps.setNetplayEnabled(true);
     const state = this.deps.ensureNetplayState('host');
     const roomMode = this.deps.getRoomGameMode(room);
+    const roomModeOptions = this.deps.getRoomGameModeOptions(room, roomMode);
     state.currentGameMode = roomMode;
     this.deps.game.setLocalPlayerId(room.hostId);
     this.deps.applyLocalProfileToSession();
@@ -109,6 +117,7 @@ export class PeerSessionController {
     this.deps.game.playerCollisionEnabled = room.settings.collisionEnabled;
     this.deps.game.infiniteTimeEnabled = !!(room.settings.infiniteTimeEnabled ?? false);
     this.deps.game.setMultiplayerGameMode(roomMode);
+    this.deps.applyGameModeOptionsToGame(roomMode, roomModeOptions);
     this.deps.game.allowCourseAdvance = true;
 
     const hostRelay = new HostRelay((playerId, msg) => {
@@ -170,11 +179,14 @@ export class PeerSessionController {
         hostRelay.sendTo(playerId, { type: 'player_profile', playerId: id, profile });
       }
       if (liveState.currentCourse && liveState.currentGameSource) {
+        const liveMode = this.deps.normalizeMultiplayerGameMode(liveState.currentGameMode);
+        const liveModeOptions = this.deps.getRoomGameModeOptions(this.deps.getLobbyRoom() ?? nextRoom, liveMode);
         hostRelay.sendTo(playerId, {
           type: 'start',
           stageSeq: liveState.stageSeq,
           gameSource: liveState.currentGameSource,
-          gameMode: this.deps.normalizeMultiplayerGameMode(liveState.currentGameMode),
+          gameMode: liveMode,
+          gameModeOptions: Object.keys(liveModeOptions).length > 0 ? liveModeOptions : undefined,
           course: liveState.currentCourse,
           stageBasePath: this.deps.getStageBasePath(liveState.currentGameSource),
           lateJoin: joinAsSpectator,
@@ -248,6 +260,7 @@ export class PeerSessionController {
     this.deps.setNetplayEnabled(true);
     const state = this.deps.ensureNetplayState('client');
     const roomMode = this.deps.getRoomGameMode(room);
+    const roomModeOptions = this.deps.getRoomGameModeOptions(room, roomMode);
     state.currentGameMode = roomMode;
     this.deps.game.setLocalPlayerId(playerId);
     this.deps.applyLocalProfileToSession();
@@ -259,6 +272,7 @@ export class PeerSessionController {
     this.deps.game.playerCollisionEnabled = room.settings.collisionEnabled;
     this.deps.game.infiniteTimeEnabled = !!(room.settings.infiniteTimeEnabled ?? false);
     this.deps.game.setMultiplayerGameMode(roomMode);
+    this.deps.applyGameModeOptionsToGame(roomMode, roomModeOptions);
     this.deps.game.allowCourseAdvance = false;
     this.deps.game.addPlayer(room.hostId, { spectator: false });
 

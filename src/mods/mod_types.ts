@@ -1,6 +1,35 @@
 import type { GamemodeId, ModId, PackId, ParserId, RulesetId } from '../shared/ids.js';
 import type { ModRenderPrimitive } from './render_primitives.js';
 
+export type GamemodeOptionPrimitive = string | number | boolean;
+
+export type GamemodeOptionDefinition =
+  | {
+    kind: 'number';
+    key: string;
+    label: string;
+    defaultValue: number;
+    min?: number;
+    max?: number;
+    step?: number;
+    description?: string;
+  }
+  | {
+    kind: 'boolean';
+    key: string;
+    label: string;
+    defaultValue: boolean;
+    description?: string;
+  }
+  | {
+    kind: 'select';
+    key: string;
+    label: string;
+    defaultValue: string;
+    choices: Array<{ value: string; label: string }>;
+    description?: string;
+  };
+
 export type ModHooks = {
   onStageLoad?: (ctx: {
     game: unknown;
@@ -78,6 +107,7 @@ export type GamemodeRegistration = {
   id: GamemodeId;
   label: string;
   description?: string;
+  options?: GamemodeOptionDefinition[];
 };
 
 export type ModModule = {

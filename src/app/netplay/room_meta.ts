@@ -1,6 +1,6 @@
 import type { MultiplayerGameMode } from '../../game.js';
 import { GAME_SOURCES, type GameSource } from '../../shared/constants/index.js';
-import type { RoomInfo, RoomMeta } from '../../netcode_protocol.js';
+import type { RoomGameModeOptions, RoomInfo, RoomMeta } from '../../netcode_protocol.js';
 import { formatCourseMeta } from './presence_format.js';
 
 export function normalizeMultiplayerGameMode(mode: unknown): MultiplayerGameMode {
@@ -24,6 +24,8 @@ type RoomMetaDeps = {
   lobbyNameInput: HTMLInputElement | null;
   getLobbyRoom: () => RoomInfo | null;
   sanitizeLobbyName: (value: string) => string | undefined;
+  getDefaultGameModeOptions: (mode: MultiplayerGameMode) => RoomGameModeOptions;
+  normalizeGameModeOptions: (mode: MultiplayerGameMode, raw: unknown) => RoomGameModeOptions;
 };
 
 export class RoomMetaController {
@@ -66,6 +68,7 @@ export class RoomMetaController {
     const stageId = this.deps.getCurrentStageId();
     const status = netplayState.currentCourse ? 'in_game' : 'lobby';
     const gameMode = normalizeMultiplayerGameMode(netplayState.currentGameMode ?? this.getLobbySelectedGameMode());
+    const gameModeOptions = this.deps.normalizeGameModeOptions(gameMode, this.deps.getLobbyRoom()?.meta?.gameModeOptions);
     const roomName = this.deps.sanitizeLobbyName(
       this.deps.lobbyRoomNameInput?.value ?? this.deps.getLobbyRoom()?.meta?.roomName ?? '',
     );
@@ -73,6 +76,7 @@ export class RoomMetaController {
       status,
       gameSource,
       gameMode,
+      gameModeOptions: Object.keys(gameModeOptions).length > 0 ? gameModeOptions : undefined,
       courseLabel: labels.courseLabel,
       stageLabel: labels.stageLabel,
       stageId,
@@ -92,10 +96,12 @@ export class RoomMetaController {
     const labels = formatCourseMeta(gameSource, course);
     const roomName = this.deps.sanitizeLobbyName(this.deps.lobbyNameInput?.value ?? '');
     const gameMode = this.getLobbySelectedGameMode();
+    const gameModeOptions = this.deps.getDefaultGameModeOptions(gameMode);
     return {
       status: 'lobby',
       gameSource,
       gameMode,
+      gameModeOptions: Object.keys(gameModeOptions).length > 0 ? gameModeOptions : undefined,
       courseLabel: labels.courseLabel,
       stageLabel: labels.stageLabel,
       roomName: roomName ?? undefined,

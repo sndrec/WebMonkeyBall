@@ -1,6 +1,6 @@
 import type { Game } from '../../game.js';
 import type { HostRelay, ClientPeer } from '../../netplay.js';
-import type { PlayerProfile } from '../../netcode_protocol.js';
+import type { PlayerProfile, RoomGameModeOptions } from '../../netcode_protocol.js';
 
 type LobbyStateDeps = {
   game: Game;
@@ -29,6 +29,8 @@ type LobbyStateDeps = {
   clampInt: (value: number, min: number, max: number) => number;
   getLobbyRoomGameMode: () => any;
   getLobbySelectedGameMode: () => any;
+  getDefaultGameModeOptions: (mode: any) => RoomGameModeOptions;
+  readLobbyGameModeOptionsFromInputs: (mode: any, fallbackRaw: unknown) => RoomGameModeOptions;
   chainedMaxPlayers: number;
   lobbyMaxPlayers: number;
   broadcastRoomUpdate: () => void;
@@ -40,7 +42,13 @@ type LobbyStateDeps = {
   getLobbyNameUpdateTimer: () => number | null;
   setLobbyNameUpdateTimer: (id: number | null) => void;
   sanitizeLobbyName: (value: string) => string | undefined;
-  applyGameMode: (mode: any, maxPlayers: number, collisionEnabled?: boolean, infiniteTimeEnabled?: boolean) => void;
+  applyGameMode: (
+    mode: any,
+    maxPlayers: number,
+    collisionEnabled?: boolean,
+    infiniteTimeEnabled?: boolean,
+    gameModeOptions?: RoomGameModeOptions,
+  ) => void;
 };
 
 export class LobbyStateController {
@@ -119,6 +127,7 @@ export class LobbyStateController {
       ? !!this.deps.lobbyInfiniteTimeToggle.checked
       : !!(lobbyRoom.settings.infiniteTimeEnabled ?? false);
     const locked = this.deps.lobbyLockToggle ? !!this.deps.lobbyLockToggle.checked : lobbyRoom.settings.locked;
+    const gameModeOptions = this.deps.readLobbyGameModeOptionsFromInputs(mode, lobbyRoom.meta?.gameModeOptions);
     lobbyRoom.settings = {
       ...lobbyRoom.settings,
       maxPlayers: nextMax,
@@ -126,7 +135,13 @@ export class LobbyStateController {
       infiniteTimeEnabled,
       locked,
     };
-    this.deps.applyGameMode(mode, nextMax, collisionEnabled, infiniteTimeEnabled);
+    const baseMeta = this.deps.buildRoomMeta() ?? lobbyRoom.meta ?? { status: 'lobby' };
+    lobbyRoom.meta = {
+      ...baseMeta,
+      gameMode: mode,
+      gameModeOptions: Object.keys(gameModeOptions).length > 0 ? gameModeOptions : undefined,
+    };
+    this.deps.applyGameMode(mode, nextMax, collisionEnabled, infiniteTimeEnabled, gameModeOptions);
     if (this.deps.lobbyMaxPlayersSelect) {
       this.deps.lobbyMaxPlayersSelect.value = String(nextMax);
     }
@@ -147,9 +162,14 @@ export class LobbyStateController {
       ...lobbyRoom.settings,
       maxPlayers: nextMax,
     };
-    this.deps.applyGameMode(mode, nextMax);
+    const gameModeOptions = this.deps.getDefaultGameModeOptions(mode);
+    this.deps.applyGameMode(mode, nextMax, undefined, undefined, gameModeOptions);
     const baseMeta = this.deps.buildRoomMeta() ?? lobbyRoom.meta ?? { status: 'lobby' };
-    lobbyRoom.meta = { ...baseMeta, gameMode: mode };
+    lobbyRoom.meta = {
+      ...baseMeta,
+      gameMode: mode,
+      gameModeOptions: Object.keys(gameModeOptions).length > 0 ? gameModeOptions : undefined,
+    };
     if (this.deps.lobbyMaxPlayersSelect) {
       this.deps.lobbyMaxPlayersSelect.value = String(nextMax);
     }

@@ -10,5 +10,14 @@ export function createDefaultModRegistry(): ModRegistry {
 }
 
 export { ModRegistry } from './mod_registry.js';
-export type { ModManifest, ModModule, RulesetRegistration, ParserRegistration, GamemodeRegistration, ModHooks } from './mod_types.js';
+export type {
+  ModManifest,
+  ModModule,
+  RulesetRegistration,
+  ParserRegistration,
+  GamemodeRegistration,
+  GamemodeOptionDefinition,
+  GamemodeOptionPrimitive,
+  ModHooks,
+} from './mod_types.js';
 export { loadModModule } from './mod_loader.js';

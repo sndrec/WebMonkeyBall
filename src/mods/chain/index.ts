@@ -25,7 +25,11 @@ const CHAIN_MOD_MANIFEST: ModManifest = {
 };
 
 const CHAIN_MAX_PLAYERS = 4;
-const CHAIN_LINK_LENGTH = 2.0;
+const CHAIN_LENGTH_OPTION_KEY = 'chainLength';
+const CHAIN_LINK_LENGTH_DEFAULT = 2.0;
+const CHAIN_LINK_LENGTH_MIN = 1.0;
+const CHAIN_LINK_LENGTH_MAX = 4.0;
+const CHAIN_LINK_LENGTH_STEP = 0.1;
 const CHAIN_SEGMENTS = 10;
 const CHAIN_SPAWN_SPACING = 1.5;
 const CHAIN_NODE_RADIUS = 0.25;
@@ -195,6 +199,22 @@ function isChainedTogetherMode(game: any): boolean {
     return false;
   }
   return !!game.session?.isMultiplayer?.(game);
+}
+
+function clampChainLinkLength(value: number): number {
+  if (!Number.isFinite(value)) {
+    return CHAIN_LINK_LENGTH_DEFAULT;
+  }
+  return Math.max(CHAIN_LINK_LENGTH_MIN, Math.min(CHAIN_LINK_LENGTH_MAX, value));
+}
+
+function getChainLinkLength(game: any): number {
+  const rawValue = (game as any)?.multiplayerGameModeOptions?.[CHAIN_LENGTH_OPTION_KEY];
+  if (rawValue === undefined || rawValue === null) {
+    return CHAIN_LINK_LENGTH_DEFAULT;
+  }
+  const parsed = typeof rawValue === 'number' ? rawValue : Number(rawValue);
+  return clampChainLinkLength(parsed);
 }
 
 function hasBallDropStarted(game: any): boolean {
@@ -613,12 +633,12 @@ function anchorChainEndpointToBallSurface(
   endpoint: ChainNodeState,
   neighbor: ChainNodeState,
   ball: any,
+  segmentRestLen: number,
   snap = 1,
   transferToBall = false,
   neighborToEndpoint: Float32Array | null = null,
 ): Vec3 | null {
   const radius = Math.max(0.01, ball.currRadius ?? 0.5);
-  const segmentRestLen = CHAIN_LINK_LENGTH / CHAIN_SEGMENTS;
   const preDx = endpoint.pos.x - ball.pos.x;
   const preDy = endpoint.pos.y - ball.pos.y;
   const preDz = endpoint.pos.z - ball.pos.z;
@@ -756,8 +776,9 @@ function syncChainTopology(game: any, state: ChainState, players: any[], forceRe
       : createInitialChainNodes(playerA.ball.pos, playerB.ball.pos);
     const first = nodes[0];
     const last = nodes[nodes.length - 1];
-    anchorChainEndpointToBallSurface(first, nodes[1], playerA.ball, 1);
-    anchorChainEndpointToBallSurface(last, nodes[nodes.length - 2], playerB.ball, 1);
+    const segmentRestLen = CHAIN_LINK_LENGTH_DEFAULT / CHAIN_SEGMENTS;
+    anchorChainEndpointToBallSurface(first, nodes[1], playerA.ball, segmentRestLen, 1);
+    anchorChainEndpointToBallSurface(last, nodes[nodes.length - 2], playerB.ball, segmentRestLen, 1);
     nextLinks.push({
       id: linkId >>> 0,
       playerAId: playerA.id,
@@ -814,7 +835,7 @@ function applyChainNodeCollision(
   node.animGroupId = phys.animGroupId ?? 0;
 }
 
-function applyChainLeashCorrection(ballA: any, ballB: any) {
+function applyChainLeashCorrection(ballA: any, ballB: any, chainLinkLength: number) {
   const dx = ballB.pos.x - ballA.pos.x;
   const dy = ballB.pos.y - ballA.pos.y;
   const dz = ballB.pos.z - ballA.pos.z;
@@ -823,10 +844,10 @@ function applyChainLeashCorrection(ballA: any, ballB: any) {
     return;
   }
   const dist = sqrt(distSq);
-  if (dist <= CHAIN_LINK_LENGTH) {
+  if (dist <= chainLinkLength) {
     return;
   }
-  const over = dist - CHAIN_LINK_LENGTH;
+  const over = dist - chainLinkLength;
   const pull = Math.min(CHAIN_LEASH_MAX_STEP, over * CHAIN_LEASH_CORRECTION);
   if (pull <= 1e-6) {
     return;
@@ -1170,6 +1191,7 @@ function anchorLinkEndpoints(
   link: ChainLinkState,
   playerA: any,
   playerB: any,
+  segmentRestLen: number,
   snap: number,
   transferToBall = false,
   reverseOrder = false,
@@ -1204,6 +1226,7 @@ function anchorLinkEndpoints(
       first,
       link.nodes[1],
       ballAForChain,
+      segmentRestLen,
       snap,
       allowTransferA,
       firstNeighborToEndpoint,
@@ -1212,6 +1235,7 @@ function anchorLinkEndpoints(
       last,
       link.nodes[link.nodes.length - 2],
       ballBForChain,
+      segmentRestLen,
       snap,
       allowTransferB,
       lastNeighborToEndpoint,
@@ -1221,6 +1245,7 @@ function anchorLinkEndpoints(
       last,
       link.nodes[link.nodes.length - 2],
       ballBForChain,
+      segmentRestLen,
       snap,
       allowTransferB,
       lastNeighborToEndpoint,
@@ -1229,6 +1254,7 @@ function anchorLinkEndpoints(
       first,
       link.nodes[1],
       ballAForChain,
+      segmentRestLen,
       snap,
       allowTransferA,
       firstNeighborToEndpoint,
@@ -1274,11 +1300,12 @@ function simulateChainedTogether(
   );
   const stageFormat = game.stageRuntime.stage?.format ?? game.stage?.format ?? 'smb1';
   const animGroups = game.stageRuntime.animGroups;
+  const chainLinkLength = getChainLinkLength(game);
   const substeps = Math.max(1, CHAIN_SUBSTEPS);
   const substepDamping = Math.pow(CHAIN_NODE_DAMPING, 1 / substeps);
   const substepGravity = CHAIN_NODE_GRAVITY / substeps;
   const substepImpulseScale = 1 / substeps;
-  const segmentRestLen = CHAIN_LINK_LENGTH / CHAIN_SEGMENTS;
+  const segmentRestLen = chainLinkLength / CHAIN_SEGMENTS;
   const collisionImpulseByPlayer = buildCollisionImpulseByPlayer(state, players);
   const teleportedPlayerIds = new Set<number>();
   for (const event of wormholeTeleports) {
@@ -1415,6 +1442,7 @@ function simulateChainedTogether(
           link,
           playerA,
           playerB,
+          segmentRestLen,
           CHAIN_ENDPOINT_SNAP,
           false,
           reverseEndpoints,
@@ -1446,7 +1474,7 @@ function simulateChainedTogether(
         continue;
       }
       if (CHAIN_LEASH_CORRECTION > 0) {
-        applyChainLeashCorrection(playerA.ball, playerB.ball);
+        applyChainLeashCorrection(playerA.ball, playerB.ball, chainLinkLength);
       }
     }
 
@@ -1463,6 +1491,7 @@ function simulateChainedTogether(
         link,
         playerA,
         playerB,
+        segmentRestLen,
         CHAIN_ENDPOINT_SNAP,
         true,
         reverseEndpoints,
@@ -1637,7 +1666,7 @@ function deserializePortalStates(source: SavedChainPortalState[] | undefined): M
   return out;
 }
 
-function buildChainHash(state: ChainState): number {
+function buildChainHash(state: ChainState, chainLinkLength: number): number {
   const f32 = new Float32Array(1);
   const u32 = new Uint32Array(f32.buffer);
   const hashU32 = (hash: number, value: number) => {
@@ -1657,6 +1686,7 @@ function buildChainHash(state: ChainState): number {
     return h;
   };
   let h = 0x811c9dc5;
+  h = hashF32(h, chainLinkLength);
   h = hashU32(h, state.links.length);
   for (const link of state.links) {
     h = hashU32(h, link.id);
@@ -1808,7 +1838,7 @@ function buildChainHooks(): ModHooks {
       if (!isChainedTogetherMode(game)) {
         return;
       }
-      return buildChainHash(getChainState(game as object));
+      return buildChainHash(getChainState(game as object), getChainLinkLength(game));
     },
     onResolveSpawnPosition: ({ game, player, activePlayers, startPos, startRotY, defaultPos }) => {
       if (!isChainedTogetherMode(game)) {
@@ -1954,6 +1984,20 @@ function buildChainHooks(): ModHooks {
 
 export function registerChainMod(registry: ModRegistry): void {
   registry.registerManifest(CHAIN_MOD_MANIFEST);
-  registry.registerGamemode({ id: 'chained_together', label: 'Chained Together' });
+  registry.registerGamemode({
+    id: 'chained_together',
+    label: 'Chained Together',
+    options: [
+      {
+        kind: 'number',
+        key: CHAIN_LENGTH_OPTION_KEY,
+        label: 'Chain Length',
+        defaultValue: CHAIN_LINK_LENGTH_DEFAULT,
+        min: CHAIN_LINK_LENGTH_MIN,
+        max: CHAIN_LINK_LENGTH_MAX,
+        step: CHAIN_LINK_LENGTH_STEP,
+      },
+    ],
+  });
   registry.registerHooks(buildChainHooks());
 }
