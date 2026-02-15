@@ -4,6 +4,7 @@ import { mat3, mat4, vec3 } from 'gl-matrix';
 import {
   BALL_FLAGS,
   BALL_STATES,
+  COLI_FLAGS,
   INFO_FLAGS,
 } from '../../shared/constants/index.js';
 import type { Vec3 } from '../../shared/types.js';
@@ -28,21 +29,24 @@ const CHAIN_LINK_LENGTH = 2.0;
 const CHAIN_SEGMENTS = 10;
 const CHAIN_SPAWN_SPACING = 1.5;
 const CHAIN_NODE_RADIUS = 0.25;
-const CHAIN_NODE_DAMPING = 0.992;
-const CHAIN_NODE_GRAVITY = 0.0035;
+const CHAIN_NODE_DAMPING = 0.995;
+const CHAIN_NODE_GRAVITY = 0.0028;
 const CHAIN_SUBSTEPS = 2;
-const CHAIN_CONSTRAINT_ITERS = 2;
+const CHAIN_CONSTRAINT_ITERS = 3;
 const CHAIN_LEASH_CORRECTION = 0.0;
 const CHAIN_LEASH_MAX_STEP = 0.15;
 const CHAIN_LEASH_VEL_BLEND = 0.2;
 const CHAIN_ENDPOINT_SNAP = 0.9;
-const CHAIN_ENDPOINT_TRANSFER = 0.6;
-const CHAIN_ENDPOINT_TRANSFER_MAX_STEP = 0.1;
-const CHAIN_ENDPOINT_SEGMENT_TRANSFER = 0.9;
-const CHAIN_ENDPOINT_SEGMENT_MAX_STEP = 0.12;
+const CHAIN_ENDPOINT_TRANSFER = 0.75;
+const CHAIN_ENDPOINT_TRANSFER_MAX_STEP = 0.16;
+const CHAIN_ENDPOINT_SEGMENT_TRANSFER = 1.05;
+const CHAIN_ENDPOINT_SEGMENT_MAX_STEP = 0.18;
 const CHAIN_ENDPOINT_POS_BLEND = 0.5;
 const CHAIN_ENDPOINT_PREV_BLEND = 0.9;
-const CHAIN_ENDPOINT_VEL_BLEND = 0.1;
+const CHAIN_ENDPOINT_VEL_BLEND = 0.22;
+const CHAIN_COLLISION_IMPULSE_SCALE = 1.0;
+const CHAIN_COLLISION_IMPULSE_MAX = 0.6;
+const CHAIN_COLLISION_NEIGHBOR_BLEND = 0.6;
 const CHAIN_RIBBON_WIDTH = 0.1;
 const CHAIN_RIBBON_TEXTURE = 'src/mods/chain/chain.png';
 const CHAIN_PORTAL_SEAM_MAX_CORRECTION = 0.2;
@@ -107,6 +111,7 @@ type ChainState = {
   links: ChainLinkState[];
   topologyKey: string;
   portalByPlayer: Map<number, ChainPortalPlayerState>;
+  preStepVelByPlayer: Map<number, Vec3>;
   faceOnlyCollisionOptions: {
     trianglePhaseMask: number;
     includePrimitives: boolean;
@@ -150,6 +155,7 @@ function getChainState(game: object): ChainState {
       links: [],
       topologyKey: '',
       portalByPlayer: new Map<number, ChainPortalPlayerState>(),
+      preStepVelByPlayer: new Map<number, Vec3>(),
       faceOnlyCollisionOptions: {
         trianglePhaseMask: STAGE_COLLISION_TRI_PHASE_FACE,
         includePrimitives: true,
@@ -979,6 +985,153 @@ function scaleVec3(v: Vec3, scale: number): Vec3 {
   return { x: v.x * scale, y: v.y * scale, z: v.z * scale };
 }
 
+function readVec3OrFallback(source: any, fallback: Vec3): Vec3 {
+  const x = Number.isFinite(source?.x) ? source.x : fallback.x;
+  const y = Number.isFinite(source?.y) ? source.y : fallback.y;
+  const z = Number.isFinite(source?.z) ? source.z : fallback.z;
+  return { x, y, z };
+}
+
+function normalizeVec3OrFallback(source: Vec3, fallback: Vec3): Vec3 {
+  const len = sqrt((source.x * source.x) + (source.y * source.y) + (source.z * source.z));
+  if (len > 1e-6) {
+    const invLen = 1 / len;
+    return {
+      x: source.x * invLen,
+      y: source.y * invLen,
+      z: source.z * invLen,
+    };
+  }
+  return { x: fallback.x, y: fallback.y, z: fallback.z };
+}
+
+function buildCollisionImpulseByPlayer(state: ChainState, players: any[]): Map<number, Vec3> {
+  const impulseByPlayer = new Map<number, Vec3>();
+  for (const player of players) {
+    const playerId = toNonNegativeInt(player?.id);
+    if (playerId === null) {
+      continue;
+    }
+    const preStepVel = state.preStepVelByPlayer.get(playerId);
+    if (!preStepVel) {
+      continue;
+    }
+    const ball = player?.ball;
+    if (!ball) {
+      continue;
+    }
+    const lastColiFlags = Number.isFinite(ball?.audio?.lastColiFlags) ? ball.audio.lastColiFlags : 0;
+    if ((lastColiFlags & COLI_FLAGS.OCCURRED) === 0) {
+      continue;
+    }
+    let impulseX = (Number.isFinite(ball.vel?.x) ? ball.vel.x : 0) - preStepVel.x;
+    let impulseY = (Number.isFinite(ball.vel?.y) ? ball.vel.y : 0) - preStepVel.y;
+    let impulseZ = (Number.isFinite(ball.vel?.z) ? ball.vel.z : 0) - preStepVel.z;
+    const impulseLen = sqrt((impulseX * impulseX) + (impulseY * impulseY) + (impulseZ * impulseZ));
+    if (impulseLen <= 1e-6) {
+      continue;
+    }
+    const scaledMaxLen = CHAIN_COLLISION_IMPULSE_MAX / Math.max(1e-6, CHAIN_COLLISION_IMPULSE_SCALE);
+    if (impulseLen > scaledMaxLen) {
+      const clampScale = scaledMaxLen / impulseLen;
+      impulseX *= clampScale;
+      impulseY *= clampScale;
+      impulseZ *= clampScale;
+    }
+    impulseByPlayer.set(playerId, {
+      x: impulseX * CHAIN_COLLISION_IMPULSE_SCALE,
+      y: impulseY * CHAIN_COLLISION_IMPULSE_SCALE,
+      z: impulseZ * CHAIN_COLLISION_IMPULSE_SCALE,
+    });
+  }
+  return impulseByPlayer;
+}
+
+function applyImpulseToNode(node: ChainNodeState, impulse: Vec3, scale: number) {
+  if (scale <= 1e-6) {
+    return;
+  }
+  const impulseX = impulse.x * scale;
+  const impulseY = impulse.y * scale;
+  const impulseZ = impulse.z * scale;
+  node.prevPos.x -= impulseX;
+  node.prevPos.y -= impulseY;
+  node.prevPos.z -= impulseZ;
+  if (node.renderPrevPos) {
+    node.renderPrevPos.x -= impulseX;
+    node.renderPrevPos.y -= impulseY;
+    node.renderPrevPos.z -= impulseZ;
+  }
+}
+
+function mapImpulseIntoLinkSpace(
+  impulse: Vec3,
+  link: ChainLinkState,
+  endpoint: 'A' | 'B',
+  portalConstraint: ChainPortalConstraint | null,
+  portalFollowerId: number | null,
+): Vec3 {
+  if (!portalConstraint) {
+    return impulse;
+  }
+  const followerId = toNonNegativeInt(portalFollowerId);
+  if (followerId === link.playerAId && endpoint === 'B') {
+    vec3.set(portalConstraintVecA, impulse.x, impulse.y, impulse.z);
+    vec3.transformMat3(portalConstraintVecA, portalConstraintVecA, portalConstraint.bToALinear);
+    return { x: portalConstraintVecA[0], y: portalConstraintVecA[1], z: portalConstraintVecA[2] };
+  }
+  if (followerId === link.playerBId && endpoint === 'A') {
+    vec3.set(portalConstraintVecA, impulse.x, impulse.y, impulse.z);
+    vec3.transformMat3(portalConstraintVecA, portalConstraintVecA, portalConstraint.aToBLinear);
+    return { x: portalConstraintVecA[0], y: portalConstraintVecA[1], z: portalConstraintVecA[2] };
+  }
+  return impulse;
+}
+
+function applyCollisionImpulseToLinkEndpoints(
+  link: ChainLinkState,
+  impulseByPlayer: Map<number, Vec3>,
+  portalConstraint: ChainPortalConstraint | null,
+  portalFollowerId: number | null,
+  scale: number,
+) {
+  if (scale <= 1e-6 || link.nodes.length < 2) {
+    return;
+  }
+  const endpointAImpulse = impulseByPlayer.get(link.playerAId) ?? null;
+  const endpointBImpulse = impulseByPlayer.get(link.playerBId) ?? null;
+  if (!endpointAImpulse && !endpointBImpulse) {
+    return;
+  }
+  const first = link.nodes[0];
+  const firstNeighbor = link.nodes[1];
+  const last = link.nodes[link.nodes.length - 1];
+  const lastNeighbor = link.nodes[link.nodes.length - 2];
+
+  if (endpointAImpulse) {
+    const impulseInLinkSpace = mapImpulseIntoLinkSpace(
+      endpointAImpulse,
+      link,
+      'A',
+      portalConstraint,
+      portalFollowerId,
+    );
+    applyImpulseToNode(first, impulseInLinkSpace, scale);
+    applyImpulseToNode(firstNeighbor, impulseInLinkSpace, scale * CHAIN_COLLISION_NEIGHBOR_BLEND);
+  }
+  if (endpointBImpulse) {
+    const impulseInLinkSpace = mapImpulseIntoLinkSpace(
+      endpointBImpulse,
+      link,
+      'B',
+      portalConstraint,
+      portalFollowerId,
+    );
+    applyImpulseToNode(last, impulseInLinkSpace, scale);
+    applyImpulseToNode(lastNeighbor, impulseInLinkSpace, scale * CHAIN_COLLISION_NEIGHBOR_BLEND);
+  }
+}
+
 function equalizeLinkEndpointTransfers(
   transferA: Vec3 | null,
   transferB: Vec3 | null,
@@ -1115,12 +1268,18 @@ function simulateChainedTogether(
     playerMap.set(player.id, player);
   }
   const gravity = game.world?.gravity ?? { x: 0, y: -1, z: 0 };
+  const normalizedGravity = normalizeVec3OrFallback(
+    readVec3OrFallback(gravity, { x: 0, y: -1, z: 0 }),
+    { x: 0, y: -1, z: 0 },
+  );
   const stageFormat = game.stageRuntime.stage?.format ?? game.stage?.format ?? 'smb1';
   const animGroups = game.stageRuntime.animGroups;
   const substeps = Math.max(1, CHAIN_SUBSTEPS);
   const substepDamping = Math.pow(CHAIN_NODE_DAMPING, 1 / substeps);
   const substepGravity = CHAIN_NODE_GRAVITY / substeps;
+  const substepImpulseScale = 1 / substeps;
   const segmentRestLen = CHAIN_LINK_LENGTH / CHAIN_SEGMENTS;
+  const collisionImpulseByPlayer = buildCollisionImpulseByPlayer(state, players);
   const teleportedPlayerIds = new Set<number>();
   for (const event of wormholeTeleports) {
     const eventPlayerId = toNonNegativeInt(event?.playerId);
@@ -1153,8 +1312,57 @@ function simulateChainedTogether(
   }
   for (let substep = 0; substep < substeps; substep += 1) {
     for (const link of state.links) {
+      const playerA = playerMap.get(link.playerAId);
+      const playerB = playerMap.get(link.playerBId);
+      let gravityAX = Number.isFinite(playerA?.world?.gravity?.x) ? playerA.world.gravity.x : normalizedGravity.x;
+      let gravityAY = Number.isFinite(playerA?.world?.gravity?.y) ? playerA.world.gravity.y : normalizedGravity.y;
+      let gravityAZ = Number.isFinite(playerA?.world?.gravity?.z) ? playerA.world.gravity.z : normalizedGravity.z;
+      let gravityBX = Number.isFinite(playerB?.world?.gravity?.x) ? playerB.world.gravity.x : normalizedGravity.x;
+      let gravityBY = Number.isFinite(playerB?.world?.gravity?.y) ? playerB.world.gravity.y : normalizedGravity.y;
+      let gravityBZ = Number.isFinite(playerB?.world?.gravity?.z) ? playerB.world.gravity.z : normalizedGravity.z;
+      const gravityALen = sqrt((gravityAX * gravityAX) + (gravityAY * gravityAY) + (gravityAZ * gravityAZ));
+      if (gravityALen > 1e-6) {
+        const invGravityALen = 1 / gravityALen;
+        gravityAX *= invGravityALen;
+        gravityAY *= invGravityALen;
+        gravityAZ *= invGravityALen;
+      } else {
+        gravityAX = normalizedGravity.x;
+        gravityAY = normalizedGravity.y;
+        gravityAZ = normalizedGravity.z;
+      }
+      const gravityBLen = sqrt((gravityBX * gravityBX) + (gravityBY * gravityBY) + (gravityBZ * gravityBZ));
+      if (gravityBLen > 1e-6) {
+        const invGravityBLen = 1 / gravityBLen;
+        gravityBX *= invGravityBLen;
+        gravityBY *= invGravityBLen;
+        gravityBZ *= invGravityBLen;
+      } else {
+        gravityBX = normalizedGravity.x;
+        gravityBY = normalizedGravity.y;
+        gravityBZ = normalizedGravity.z;
+      }
+      const blendDenom = Math.max(1, link.nodes.length - 2);
       for (let i = 1; i < link.nodes.length - 1; i += 1) {
         const node = link.nodes[i];
+        const blendT = (i - 1) / blendDenom;
+        const blendInv = 1 - blendT;
+        let blendGravityX = (gravityAX * blendInv) + (gravityBX * blendT);
+        let blendGravityY = (gravityAY * blendInv) + (gravityBY * blendT);
+        let blendGravityZ = (gravityAZ * blendInv) + (gravityBZ * blendT);
+        const blendGravityLen = sqrt(
+          (blendGravityX * blendGravityX) + (blendGravityY * blendGravityY) + (blendGravityZ * blendGravityZ),
+        );
+        if (blendGravityLen > 1e-6) {
+          const invBlendGravityLen = 1 / blendGravityLen;
+          blendGravityX *= invBlendGravityLen;
+          blendGravityY *= invBlendGravityLen;
+          blendGravityZ *= invBlendGravityLen;
+        } else {
+          blendGravityX = normalizedGravity.x;
+          blendGravityY = normalizedGravity.y;
+          blendGravityZ = normalizedGravity.z;
+        }
         const oldX = node.pos.x;
         const oldY = node.pos.y;
         const oldZ = node.pos.z;
@@ -1164,9 +1372,9 @@ function simulateChainedTogether(
         node.prevPos.x = oldX;
         node.prevPos.y = oldY;
         node.prevPos.z = oldZ;
-        node.pos.x = oldX + velX + (gravity.x * substepGravity);
-        node.pos.y = oldY + velY + (gravity.y * substepGravity);
-        node.pos.z = oldZ + velZ + (gravity.z * substepGravity);
+        node.pos.x = oldX + velX + (blendGravityX * substepGravity);
+        node.pos.y = oldY + velY + (blendGravityY * substepGravity);
+        node.pos.z = oldZ + velZ + (blendGravityZ * substepGravity);
       }
     }
 
@@ -1213,6 +1421,15 @@ function simulateChainedTogether(
           portalConstraint,
           link.portalFollowerId,
         );
+        if (iter === 0 && collisionImpulseByPlayer.size > 0) {
+          applyCollisionImpulseToLinkEndpoints(
+            link,
+            collisionImpulseByPlayer,
+            portalConstraint,
+            link.portalFollowerId,
+            substepImpulseScale,
+          );
+        }
         // Alternate which sweep runs last so one endpoint doesn't get a persistent "last write" advantage.
         const reverseSolveFirst = ((substep + iter) & 1) === 1;
         solveChainSegmentConstraints(link.nodes, segmentRestLen, reverseSolveFirst, portalConstraint);
@@ -1555,6 +1772,7 @@ function buildChainHooks(): ModHooks {
       state.links = [];
       state.topologyKey = '';
       state.portalByPlayer.clear();
+      state.preStepVelByPlayer.clear();
     },
     onSaveState: ({ game, modState }) => {
       if (!isChainedTogetherMode(game)) {
@@ -1578,11 +1796,13 @@ function buildChainHooks(): ModHooks {
         state.links = [];
         state.topologyKey = '';
         state.portalByPlayer.clear();
+        state.preStepVelByPlayer.clear();
         return;
       }
       state.links = Array.isArray(saved.links) ? cloneChainLinks(saved.links) : [];
       state.topologyKey = saved.topologyKey ?? '';
       state.portalByPlayer = deserializePortalStates(saved.portalStates);
+      state.preStepVelByPlayer.clear();
     },
     onDeterminismHash: ({ game }) => {
       if (!isChainedTogetherMode(game)) {
@@ -1610,6 +1830,24 @@ function buildChainHooks(): ModHooks {
         z: startPos.z + (rightZ * offset),
       };
     },
+    onBeforeSimTick: ({ game }) => {
+      if (!isChainedTogetherMode(game)) {
+        return;
+      }
+      const state = getChainState(game as object);
+      state.preStepVelByPlayer.clear();
+    },
+    onBallUpdate: ({ game, playerId, ball }) => {
+      if (!isChainedTogetherMode(game)) {
+        return;
+      }
+      const state = getChainState(game as object);
+      state.preStepVelByPlayer.set(playerId, {
+        x: Number.isFinite((ball as any)?.vel?.x) ? (ball as any).vel.x : 0,
+        y: Number.isFinite((ball as any)?.vel?.y) ? (ball as any).vel.y : 0,
+        z: Number.isFinite((ball as any)?.vel?.z) ? (ball as any).vel.z : 0,
+      });
+    },
     onAfterBallStep: ({
       game,
       players,
@@ -1634,6 +1872,7 @@ function buildChainHooks(): ModHooks {
         state.topologyKey = '';
         state.portalByPlayer.clear();
       }
+      state.preStepVelByPlayer.clear();
       updateChainedTogetherFalloutState(game, sortedPlayers, isBonusStage, resultReplayActive, stageInputEnabled);
       const localPlayer = game.getLocalPlayer?.();
       const replayFalloutActive = game.activeResultReplay?.kind === 'fallout';
