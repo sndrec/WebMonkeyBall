@@ -4,7 +4,6 @@ import { mat3, mat4, vec3 } from 'gl-matrix';
 import {
   BALL_FLAGS,
   BALL_STATES,
-  COLI_FLAGS,
   INFO_FLAGS,
 } from '../../shared/constants/index.js';
 import type { Vec3 } from '../../shared/types.js';
@@ -52,6 +51,13 @@ const CHAIN_ENDPOINT_OTHER_BALL_BIAS = 0.5;
 const CHAIN_NODE_GRAVITY_FALLBACK = 0.009799992;
 const CHAIN_COLLISION_IMPULSE_SCALE = 0.5;
 const CHAIN_COLLISION_IMPULSE_MAX = 4.0;
+const CHAIN_AIRBORNE_ORBIT_TAUT_RATIO = 0.97;
+const CHAIN_AIRBORNE_ORBIT_SOFT_SPEED = 0.1;
+const CHAIN_AIRBORNE_ORBIT_DAMP_GAIN = 0.025;
+const CHAIN_AIRBORNE_ORBIT_DAMP_MAX = 0.005;
+const CHAIN_AIRBORNE_CLACKER_SOFT_SPEED = 0.04;
+const CHAIN_AIRBORNE_CLACKER_DAMP_GAIN = 0.225;
+const CHAIN_AIRBORNE_CLACKER_DAMP_MAX = 0.045;
 const CHAIN_RIBBON_WIDTH = 0.1;
 const CHAIN_RIBBON_TEXTURE = 'src/mods/chain/chain.png';
 const CHAIN_PORTAL_SEAM_MAX_CORRECTION = 0.2;
@@ -1101,8 +1107,8 @@ function buildCollisionImpulseByPlayer(state: ChainState, players: any[]): Map<n
     if (!ball) {
       continue;
     }
-    const lastColiFlags = Number.isFinite(ball?.audio?.lastColiFlags) ? ball.audio.lastColiFlags : 0;
-    if ((lastColiFlags & COLI_FLAGS.OCCURRED) === 0) {
+    const ballFlags = Number.isFinite(ball?.flags) ? ball.flags : 0;
+    if ((ballFlags & BALL_FLAGS.FLAG_00) === 0) {
       continue;
     }
     let impulseX = (Number.isFinite(ball.vel?.x) ? ball.vel.x : 0) - preStepVel.x;
@@ -1281,6 +1287,88 @@ function projectEndpointTransferToLocalAxis(
     y: dirY * along,
     z: dirZ * along,
   };
+}
+
+function dampAirborneOrbitVelocity(ballA: any, ballB: any, chainLinkLength: number) {
+  const flagsA = Number.isFinite(ballA?.flags) ? ballA.flags : 0;
+  const flagsB = Number.isFinite(ballB?.flags) ? ballB.flags : 0;
+  if ((flagsA & BALL_FLAGS.FLAG_00) !== 0 || (flagsB & BALL_FLAGS.FLAG_00) !== 0) {
+    return;
+  }
+
+  const dx = (Number.isFinite(ballB?.pos?.x) ? ballB.pos.x : 0) - (Number.isFinite(ballA?.pos?.x) ? ballA.pos.x : 0);
+  const dy = (Number.isFinite(ballB?.pos?.y) ? ballB.pos.y : 0) - (Number.isFinite(ballA?.pos?.y) ? ballA.pos.y : 0);
+  const dz = (Number.isFinite(ballB?.pos?.z) ? ballB.pos.z : 0) - (Number.isFinite(ballA?.pos?.z) ? ballA.pos.z : 0);
+  const distSq = (dx * dx) + (dy * dy) + (dz * dz);
+  if (distSq <= 1e-8) {
+    return;
+  }
+  const dist = sqrt(distSq);
+  if (dist < chainLinkLength * CHAIN_AIRBORNE_ORBIT_TAUT_RATIO) {
+    return;
+  }
+  const invDist = 1 / dist;
+  const ux = dx * invDist;
+  const uy = dy * invDist;
+  const uz = dz * invDist;
+
+  const rvx = (Number.isFinite(ballB?.vel?.x) ? ballB.vel.x : 0) - (Number.isFinite(ballA?.vel?.x) ? ballA.vel.x : 0);
+  const rvy = (Number.isFinite(ballB?.vel?.y) ? ballB.vel.y : 0) - (Number.isFinite(ballA?.vel?.y) ? ballA.vel.y : 0);
+  const rvz = (Number.isFinite(ballB?.vel?.z) ? ballB.vel.z : 0) - (Number.isFinite(ballA?.vel?.z) ? ballA.vel.z : 0);
+  const radialSpeed = (rvx * ux) + (rvy * uy) + (rvz * uz);
+  const tanX = rvx - (radialSpeed * ux);
+  const tanY = rvy - (radialSpeed * uy);
+  const tanZ = rvz - (radialSpeed * uz);
+  const tanSpeed = sqrt((tanX * tanX) + (tanY * tanY) + (tanZ * tanZ));
+  let removeX = 0;
+  let removeY = 0;
+  let removeZ = 0;
+  if (tanSpeed > CHAIN_AIRBORNE_ORBIT_SOFT_SPEED) {
+    const dampStep = Math.min(
+      CHAIN_AIRBORNE_ORBIT_DAMP_MAX,
+      tanSpeed,
+      (tanSpeed - CHAIN_AIRBORNE_ORBIT_SOFT_SPEED) * CHAIN_AIRBORNE_ORBIT_DAMP_GAIN,
+    );
+    if (dampStep > 1e-6) {
+      const invTanSpeed = 1 / tanSpeed;
+      removeX += tanX * invTanSpeed * dampStep;
+      removeY += tanY * invTanSpeed * dampStep;
+      removeZ += tanZ * invTanSpeed * dampStep;
+    }
+  }
+  const radialAbsSpeed = Math.abs(radialSpeed);
+  if (radialAbsSpeed > CHAIN_AIRBORNE_CLACKER_SOFT_SPEED) {
+    const radialDampStep = Math.min(
+      CHAIN_AIRBORNE_CLACKER_DAMP_MAX,
+      radialAbsSpeed,
+      (radialAbsSpeed - CHAIN_AIRBORNE_CLACKER_SOFT_SPEED) * CHAIN_AIRBORNE_CLACKER_DAMP_GAIN,
+    );
+    if (radialDampStep > 1e-6) {
+      const radialDir = radialSpeed >= 0 ? 1 : -1;
+      removeX += ux * radialDir * radialDampStep;
+      removeY += uy * radialDir * radialDampStep;
+      removeZ += uz * radialDir * radialDampStep;
+    }
+  }
+  const removeLenSq = (removeX * removeX) + (removeY * removeY) + (removeZ * removeZ);
+  if (removeLenSq <= 1e-12) {
+    return;
+  }
+
+  const radiusA = Number.isFinite(ballA?.currRadius) ? Math.max(0.01, ballA.currRadius) : 0.5;
+  const radiusB = Number.isFinite(ballB?.currRadius) ? Math.max(0.01, ballB.currRadius) : 0.5;
+  const massA = radiusA * radiusA * radiusA;
+  const massB = radiusB * radiusB * radiusB;
+  const invMassSum = 1 / Math.max(1e-6, massA + massB);
+  const shareA = massB * invMassSum;
+  const shareB = massA * invMassSum;
+
+  ballA.vel.x += removeX * shareA;
+  ballA.vel.y += removeY * shareA;
+  ballA.vel.z += removeZ * shareA;
+  ballB.vel.x -= removeX * shareB;
+  ballB.vel.y -= removeY * shareB;
+  ballB.vel.z -= removeZ * shareB;
 }
 
 function createBallProxyInSpace(ball: any, transform: Float32Array, animGroupId: number) {
@@ -1663,6 +1751,18 @@ function simulateChainedTogether(
         { x: transferState.x, y: transferState.y, z: transferState.z },
         transferState.endpoints,
       );
+    }
+
+    for (const link of state.links) {
+      const playerA = playerMap.get(link.playerAId);
+      const playerB = playerMap.get(link.playerBId);
+      if (!playerA || !playerB) {
+        continue;
+      }
+      if (portalConstraintByLink.get(link)) {
+        continue;
+      }
+      dampAirborneOrbitVelocity(playerA.ball, playerB.ball, chainLinkLength);
     }
   }
 }
