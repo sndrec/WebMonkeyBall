@@ -12,6 +12,7 @@ export interface Env {
 type RoomSettings = {
   maxPlayers: number;
   collisionEnabled: boolean;
+  infiniteTimeEnabled: boolean;
   locked: boolean;
 };
 
@@ -320,6 +321,7 @@ function sanitizeSettings(input?: Partial<RoomSettings>): RoomSettings {
   return {
     maxPlayers,
     collisionEnabled: !!(input?.collisionEnabled ?? true),
+    infiniteTimeEnabled: !!(input?.infiniteTimeEnabled ?? false),
     locked: !!(input?.locked ?? false),
   };
 }
@@ -349,7 +351,7 @@ function publicRoomInfo(room: RoomRecord) {
   const { hostToken: _hostToken, players: _players, ...rest } = room;
   return {
     ...rest,
-    settings: room.settings ?? sanitizeSettings(),
+    settings: sanitizeSettings(room.settings),
     playerCount: roomPlayerCount(room),
     meta: room.meta ?? sanitizeMeta({}),
   };
@@ -551,7 +553,7 @@ export class Lobby implements DurableObject {
       }
       const room = this.data.rooms[roomId];
       room.players = room.players ?? {};
-      room.settings = room.settings ?? sanitizeSettings();
+      room.settings = sanitizeSettings(room.settings);
       const requestedPlayerId = Number(body.playerId ?? 0);
       const requestedToken = typeof body.token === "string" ? body.token : null;
       if (requestedPlayerId && requestedToken) {

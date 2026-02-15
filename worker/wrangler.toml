@@ -15,7 +15,7 @@ new_sqlite_classes = ["Lobby", "Room"]
 [[d1_databases]]
 binding = "LEADERBOARDS_DB"
 database_name = "webmonkeyball-leaderboards"
-database_id = "CHANGE_ME"
+database_id = "ae11c0c0-2e30-4fc4-8a5a-c6635b680bb2"
 
 [[r2_buckets]]
 binding = "REPLAYS"

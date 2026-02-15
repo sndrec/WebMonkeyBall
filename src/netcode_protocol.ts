@@ -6,6 +6,7 @@ export type PlayerId = number;
 export type RoomSettings = {
   maxPlayers: number;
   collisionEnabled: boolean;
+  infiniteTimeEnabled: boolean;
   locked: boolean;
 };
 

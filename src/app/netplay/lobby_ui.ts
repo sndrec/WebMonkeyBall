@@ -22,6 +22,7 @@ type LobbyUiDeps = {
   lobbyGameModeSelect: HTMLSelectElement | null;
   lobbyMaxPlayersSelect: HTMLSelectElement | null;
   lobbyCollisionToggle: HTMLInputElement | null;
+  lobbyInfiniteTimeToggle: HTMLInputElement | null;
   lobbyLockToggle: HTMLInputElement | null;
   lobbyChatPanel: HTMLElement | null;
   lobbyStartButton: HTMLButtonElement | null;
@@ -184,6 +185,10 @@ export class LobbyUiController {
         this.deps.lobbyLockToggle.checked = false;
         this.deps.lobbyLockToggle.disabled = true;
       }
+      if (this.deps.lobbyInfiniteTimeToggle) {
+        this.deps.lobbyInfiniteTimeToggle.checked = false;
+        this.deps.lobbyInfiniteTimeToggle.disabled = true;
+      }
       if (this.deps.lobbyChatPanel) {
         this.deps.lobbyChatPanel.classList.add('hidden');
       }
@@ -264,6 +269,9 @@ export class LobbyUiController {
     if (this.deps.lobbyCollisionToggle) {
       this.deps.lobbyCollisionToggle.checked = !!(lobbyRoom.settings?.collisionEnabled ?? true);
     }
+    if (this.deps.lobbyInfiniteTimeToggle) {
+      this.deps.lobbyInfiniteTimeToggle.checked = !!(lobbyRoom.settings?.infiniteTimeEnabled ?? false);
+    }
     if (this.deps.lobbyLockToggle) {
       this.deps.lobbyLockToggle.checked = !!(lobbyRoom.settings?.locked ?? false);
     }
@@ -272,6 +280,9 @@ export class LobbyUiController {
     }
     if (this.deps.lobbyCollisionToggle) {
       this.deps.lobbyCollisionToggle.disabled = !isHost;
+    }
+    if (this.deps.lobbyInfiniteTimeToggle) {
+      this.deps.lobbyInfiniteTimeToggle.disabled = !isHost;
     }
     if (this.deps.lobbyLockToggle) {
       this.deps.lobbyLockToggle.disabled = !isHost;

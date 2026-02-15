@@ -23,6 +23,7 @@ type LobbyStateDeps = {
   isHost: () => boolean;
   lobbyMaxPlayersSelect: HTMLSelectElement | null;
   lobbyCollisionToggle: HTMLInputElement | null;
+  lobbyInfiniteTimeToggle: HTMLInputElement | null;
   lobbyLockToggle: HTMLInputElement | null;
   lobbyRoomNameInput: HTMLInputElement | null;
   clampInt: (value: number, min: number, max: number) => number;
@@ -39,7 +40,7 @@ type LobbyStateDeps = {
   getLobbyNameUpdateTimer: () => number | null;
   setLobbyNameUpdateTimer: (id: number | null) => void;
   sanitizeLobbyName: (value: string) => string | undefined;
-  applyGameMode: (mode: any, maxPlayers: number, collisionEnabled?: boolean) => void;
+  applyGameMode: (mode: any, maxPlayers: number, collisionEnabled?: boolean, infiniteTimeEnabled?: boolean) => void;
 };
 
 export class LobbyStateController {
@@ -114,14 +115,18 @@ export class LobbyStateController {
     const maxPlayersCap = mode === 'chained_together' ? this.deps.chainedMaxPlayers : this.deps.lobbyMaxPlayers;
     const nextMax = this.deps.clampInt(requestedMax, minPlayers, maxPlayersCap);
     const collisionEnabled = this.deps.lobbyCollisionToggle ? !!this.deps.lobbyCollisionToggle.checked : lobbyRoom.settings.collisionEnabled;
+    const infiniteTimeEnabled = this.deps.lobbyInfiniteTimeToggle
+      ? !!this.deps.lobbyInfiniteTimeToggle.checked
+      : !!(lobbyRoom.settings.infiniteTimeEnabled ?? false);
     const locked = this.deps.lobbyLockToggle ? !!this.deps.lobbyLockToggle.checked : lobbyRoom.settings.locked;
     lobbyRoom.settings = {
       ...lobbyRoom.settings,
       maxPlayers: nextMax,
       collisionEnabled,
+      infiniteTimeEnabled,
       locked,
     };
-    this.deps.applyGameMode(mode, nextMax, collisionEnabled);
+    this.deps.applyGameMode(mode, nextMax, collisionEnabled, infiniteTimeEnabled);
     if (this.deps.lobbyMaxPlayersSelect) {
       this.deps.lobbyMaxPlayersSelect.value = String(nextMax);
     }

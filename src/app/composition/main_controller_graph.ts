@@ -46,6 +46,7 @@ export function createMainControllerGraph(args: any) {
     sanitizeProfile,
     lobbyMaxPlayersSelect,
     lobbyCollisionToggle,
+    lobbyInfiniteTimeToggle,
     lobbyLockToggle,
     lobbyRoomNameInput,
     clampInt,
@@ -390,6 +391,7 @@ const lobbyState = new LobbyStateController({
   isHost: () => state.netplayState?.role === 'host',
   lobbyMaxPlayersSelect,
   lobbyCollisionToggle,
+  lobbyInfiniteTimeToggle,
   lobbyLockToggle,
   lobbyRoomNameInput,
   clampInt,
@@ -414,10 +416,13 @@ const lobbyState = new LobbyStateController({
     state.lobbyNameUpdateTimer = id;
   },
   sanitizeLobbyName,
-  applyGameMode: (mode, maxPlayers, collisionEnabled) => {
+  applyGameMode: (mode, maxPlayers, collisionEnabled, infiniteTimeEnabled) => {
     game.maxPlayers = maxPlayers;
     if (collisionEnabled !== undefined) {
       game.playerCollisionEnabled = collisionEnabled;
+    }
+    if (infiniteTimeEnabled !== undefined) {
+      game.infiniteTimeEnabled = infiniteTimeEnabled;
     }
     game.setMultiplayerGameMode(mode);
     if (state.netplayState) {
@@ -619,6 +624,7 @@ lobbyUiController = new LobbyUiController({
   lobbyGameModeSelect,
   lobbyMaxPlayersSelect,
   lobbyCollisionToggle,
+  lobbyInfiniteTimeToggle,
   lobbyLockToggle,
   lobbyChatPanel,
   lobbyStartButton,

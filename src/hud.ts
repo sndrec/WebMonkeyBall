@@ -1639,14 +1639,17 @@ export class HudRenderer {
       }
     }
 
-    if (game?.stageTimeLimitFrames > 0) {
+    const infiniteTimeActive = !!game?.isInfiniteTimeActive?.();
+    if (!infiniteTimeActive && game?.stageTimeLimitFrames > 0) {
       const timeLeft = game.stageTimeLimitFrames - game.stageTimerFrames;
       if (timeLeft === HURRY_UP_FRAMES) {
         this.beginBanner(this.hurryBanner);
       }
     }
 
-    const timeLeft = game?.stageTimeLimitFrames ? game.stageTimeLimitFrames - game.stageTimerFrames : null;
+    const timeLeft = !infiniteTimeActive && game?.stageTimeLimitFrames
+      ? game.stageTimeLimitFrames - game.stageTimerFrames
+      : null;
     if (timeLeft !== null && timeLeft <= 0 && (this.lastTimeLeft ?? 1) > 0) {
       this.spawnBombFragments();
     }
@@ -1658,6 +1661,12 @@ export class HudRenderer {
 
     if (timeLeft !== null && timeLeft < 240 && timeLeft > 0) {
       this.bombCrackPulse += 40 - (timeLeft * 40) / 240;
+    }
+    if (infiniteTimeActive) {
+      this.bombCrackPulse = 0;
+      if (this.bombFragments.length > 0) {
+        this.bombFragments = [];
+      }
     }
 
     if (this.floorIntroActive) {
@@ -1803,6 +1812,7 @@ export class HudRenderer {
     const floorLabel = floorInfo ? `${floorPrefix} ${Math.max(1, Math.trunc(floorInfo.current ?? 1))}` : 'FLOOR 1';
     const floorColor = floorPrefix === 'EXTRA' ? '#ffe14d' : null;
     const useSmb2Layout = this.isSmb2Hud(game) && Boolean(assets.smb2);
+    const infiniteTimeActive = !!game?.isInfiniteTimeActive?.();
 
     if (useSmb2Layout && assets.smb2) {
       const smb2 = assets.smb2;
@@ -1832,19 +1842,21 @@ export class HudRenderer {
       drawTextAt(ctx, smb2Fonts.numScore, scoreText, scoreTextX + 2, scoreTextY + 2, 1, '#000000', 0.5);
       drawTextAt(ctx, smb2Fonts.numScore, scoreText, scoreTextX, scoreTextY, 1, null);
 
-      drawSpriteTopLeft(ctx, smb2.timerFrame, 320 - smb2.timerFrame.width / 2, 16, 1);
-      const timerBallScale = timeLeftRaw <= 600 ? 1 + func800802E0(timeLeft) : 1;
-      drawSprite(
-        ctx,
-        smb2.timerBall,
-        { x: 320, y: 56 + Math.sin(this.frameCounter * 0.04) * 1.5 },
-        timerBallScale,
-      );
+      if (!infiniteTimeActive) {
+        drawSpriteTopLeft(ctx, smb2.timerFrame, 320 - smb2.timerFrame.width / 2, 16, 1);
+        const timerBallScale = timeLeftRaw <= 600 ? 1 + func800802E0(timeLeft) : 1;
+        drawSprite(
+          ctx,
+          smb2.timerBall,
+          { x: 320, y: 56 + Math.sin(this.frameCounter * 0.04) * 1.5 },
+          timerBallScale,
+        );
 
-      const centiText = `:${centis}`;
-      drawText(ctx, smb2Fonts.numTime, seconds, { x: 320, y: 43 }, 1, null, 'center', 'top');
-      drawText(ctx, smb2Fonts.numTimeSmall, centiText, { x: 315, y: 83 }, 1, null, 'center', 'top');
-      drawSpriteTopLeft(ctx, smb2.timeLabel, 320 - smb2.timeLabel.width / 2, 16, 1);
+        const centiText = `:${centis}`;
+        drawText(ctx, smb2Fonts.numTime, seconds, { x: 320, y: 43 }, 1, null, 'center', 'top');
+        drawText(ctx, smb2Fonts.numTimeSmall, centiText, { x: 315, y: 83 }, 1, null, 'center', 'top');
+        drawSpriteTopLeft(ctx, smb2.timeLabel, 320 - smb2.timeLabel.width / 2, 16, 1);
+      }
 
       const speedText = String(Math.min(999, Math.round(speedMph))).padStart(3, ' ');
       drawTextAt(ctx, smb2Fonts.numSpeed, speedText, 18, 412, 1, '#000000', 0.5);
@@ -1917,18 +1929,20 @@ export class HudRenderer {
 
       // Lives counter hidden for now.
 
-      if (timeLeftRaw > 0) {
-        const bombScale = timeLeftRaw <= 600 ? 1 + func800802E0(timeLeft) : 1;
-        drawSprite(ctx, assets.bomb, { x: 320, y: 68 }, BOMB_BASE_SCALE * bombScale);
-        if (timeLeftRaw <= 480) {
-          const crackOpacity = timeLeftRaw > 420 ? 1 - (timeLeftRaw - 420) / 60 : 1;
-          let crackColor: string | null = null;
-          if (timeLeftRaw < 240) {
-            const pulse = Math.abs(255 - (Math.floor(this.bombCrackPulse) % 510));
-            const blue = Math.max(128, pulse);
-            crackColor = `rgb(255, ${Math.round(pulse)}, ${Math.round((blue - 128) * 2)})`;
+      if (!infiniteTimeActive) {
+        if (timeLeftRaw > 0) {
+          const bombScale = timeLeftRaw <= 600 ? 1 + func800802E0(timeLeft) : 1;
+          drawSprite(ctx, assets.bomb, { x: 320, y: 68 }, BOMB_BASE_SCALE * bombScale);
+          if (timeLeftRaw <= 480) {
+            const crackOpacity = timeLeftRaw > 420 ? 1 - (timeLeftRaw - 420) / 60 : 1;
+            let crackColor: string | null = null;
+            if (timeLeftRaw < 240) {
+              const pulse = Math.abs(255 - (Math.floor(this.bombCrackPulse) % 510));
+              const blue = Math.max(128, pulse);
+              crackColor = `rgb(255, ${Math.round(pulse)}, ${Math.round((blue - 128) * 2)})`;
+            }
+            drawSprite(ctx, assets.bombCrack, { x: 320, y: 68 }, BOMB_BASE_SCALE * bombScale, crackOpacity, crackColor);
           }
-          drawSprite(ctx, assets.bombCrack, { x: 320, y: 68 }, BOMB_BASE_SCALE * bombScale, crackOpacity, crackColor);
         }
       }
 
@@ -1936,14 +1950,16 @@ export class HudRenderer {
       const floorX = floorPrefix === 'MASTER' ? 32 : showIcon ? 72 : 32;
       drawText(ctx, fonts.asc20x20, floorLabel, { x: floorX, y: 458 }, 1, floorColor, 'left');
 
-      const secMetrics = textMetrics(fonts.num24x37, seconds, 1);
-      const secLeft = 320 - secMetrics.width / 2;
-      const secTop = 85 - secMetrics.height;
-      drawTextAt(ctx, fonts.num24x37, seconds, secLeft, secTop, 1, null);
-      const centiMetrics = textMetrics(fonts.num12x19, `:${centis}`, 1);
-      const centiLeft = secLeft + secMetrics.width - 4;
-      const centiTop = 85 - centiMetrics.height;
-      drawTextAt(ctx, fonts.num12x19, `:${centis}`, centiLeft, centiTop, 1, null);
+      if (!infiniteTimeActive) {
+        const secMetrics = textMetrics(fonts.num24x37, seconds, 1);
+        const secLeft = 320 - secMetrics.width / 2;
+        const secTop = 85 - secMetrics.height;
+        drawTextAt(ctx, fonts.num24x37, seconds, secLeft, secTop, 1, null);
+        const centiMetrics = textMetrics(fonts.num12x19, `:${centis}`, 1);
+        const centiLeft = secLeft + secMetrics.width - 4;
+        const centiTop = 85 - centiMetrics.height;
+        drawTextAt(ctx, fonts.num12x19, `:${centis}`, centiLeft, centiTop, 1, null);
+      }
 
       const speedText = String(Math.round(speedMph)).padStart(2, '0');
       const rttValue = Math.max(0, Math.min(999, Math.round(game?.netplayRttMs ?? 0)));

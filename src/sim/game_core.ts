@@ -307,6 +307,7 @@ export class GameCore {
   public localPlayerId: number;
   public maxPlayers: number;
   public playerCollisionEnabled: boolean;
+  public infiniteTimeEnabled: boolean;
   public noCollidePairs: Set<string>;
   public cameraController: GameplayCamera | null;
   public multiplayerGameMode: MultiplayerGameMode;
@@ -444,6 +445,7 @@ export class GameCore {
     this.localPlayerId = 0;
     this.maxPlayers = 8;
     this.playerCollisionEnabled = true;
+    this.infiniteTimeEnabled = false;
     this.noCollidePairs = new Set();
     this.cameraController = null;
     this.multiplayerGameMode = 'standard';
@@ -553,6 +555,10 @@ export class GameCore {
 
   getMultiplayerGameMode(): MultiplayerGameMode {
     return this.multiplayerGameMode;
+  }
+
+  isInfiniteTimeActive() {
+    return this.infiniteTimeEnabled && this.session.isMultiplayer(this);
   }
 
   setInputFeed(feed: QuantizedStick[] | null) {
@@ -882,6 +888,7 @@ export class GameCore {
     };
     let h = 0x811c9dc5;
     h = hashU32(h, this.multiplayerGameMode === 'chained_together' ? 1 : 0);
+    h = hashU32(h, this.infiniteTimeEnabled ? 1 : 0);
     if (this.modHooks.length > 0) {
       for (const hooks of this.modHooks) {
         const handler = hooks?.onDeterminismHash;
@@ -983,6 +990,7 @@ export class GameCore {
       pendingAdvance: this.pendingAdvance,
       goalReplayStartArmed: this.goalReplayStartArmed,
       multiplayerGameMode: this.multiplayerGameMode,
+      infiniteTimeEnabled: this.infiniteTimeEnabled,
       world: this.world ? cloneWorldState(this.world) : null,
       players: this.players.map((player) => ({
         id: player.id,
@@ -1168,6 +1176,9 @@ export class GameCore {
     this.pendingAdvance = !!state.pendingAdvance;
     this.goalReplayStartArmed = !!state.goalReplayStartArmed;
     this.multiplayerGameMode = this.normalizeMultiplayerGameMode(state.multiplayerGameMode);
+    if (state.infiniteTimeEnabled !== undefined) {
+      this.infiniteTimeEnabled = !!state.infiniteTimeEnabled;
+    }
     this.hudGoalEventTick = Number.isFinite(state.hudGoalEventTick) ? state.hudGoalEventTick : -1;
     this.hudRingoutEventTick = Number.isFinite(state.hudRingoutEventTick) ? state.hudRingoutEventTick : -1;
     if (state.world && this.world) {
@@ -3083,6 +3094,9 @@ export class GameCore {
   }
 
   beginTimeoverSequence(isBonusStage: boolean) {
+    if (this.isInfiniteTimeActive()) {
+      return;
+    }
     const localPlayer = this.getLocalPlayer();
     const localBall = localPlayer?.ball ?? null;
     if (!localBall || this.timeoverTimerFrames > 0) {
@@ -3608,8 +3622,12 @@ export class GameCore {
         : 'Stage';
     }
     if (this.hud.timer) {
-      const timeLeft = Math.max(0, this.stageTimeLimitFrames - this.stageTimerFrames);
-      this.hud.timer.textContent = formatTimer(timeLeft);
+      if (this.isInfiniteTimeActive()) {
+        this.hud.timer.textContent = '';
+      } else {
+        const timeLeft = Math.max(0, this.stageTimeLimitFrames - this.stageTimerFrames);
+        this.hud.timer.textContent = formatTimer(timeLeft);
+      }
     }
     if (this.hud.score) {
       this.hud.score.textContent = formatScore(this.score);
@@ -3749,6 +3767,7 @@ export class GameCore {
         const simPlayers = this.getPlayersSorted();
         const isSinglePlayer = this.session.isSinglePlayer(this);
         const isMultiplayer = this.session.isMultiplayer(this);
+        const infiniteTimeActive = this.isInfiniteTimeActive();
         this.emitModHook('onBeforeSimTick', { game: this, tick: this.simTick });
         const resultReplayActive = this.activeResultReplay !== null;
         const replayFalloutActive = this.activeResultReplay?.kind === 'fallout';
@@ -4016,7 +4035,7 @@ export class GameCore {
           : (!this.paused && stageInputEnabled);
         if (timerShouldRun) {
           this.stageTimerFrames += 1;
-          if (this.stageTimeLimitFrames > 0) {
+          if (!infiniteTimeActive && this.stageTimeLimitFrames > 0) {
             const timeLeft = this.stageTimeLimitFrames - this.stageTimerFrames;
             if (timeLeft === HURRY_UP_FRAMES && !this.hurryUpAnnouncerPlayed) {
               if (allowAudio) {

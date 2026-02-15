@@ -273,6 +273,7 @@ export class NetplayMessageFlowController {
       msg.room.settings.maxPlayers = cappedMaxPlayers;
       this.deps.game.maxPlayers = cappedMaxPlayers;
       this.deps.game.playerCollisionEnabled = msg.room.settings.collisionEnabled;
+      this.deps.game.infiniteTimeEnabled = !!(msg.room.settings.infiniteTimeEnabled ?? false);
       this.deps.game.setMultiplayerGameMode(mode);
       if (this.deps.getNetplayState()) {
         this.deps.getNetplayState().currentGameMode = mode;

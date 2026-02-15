@@ -107,6 +107,7 @@ export class PeerSessionController {
     room.settings.maxPlayers = cappedMaxPlayers;
     this.deps.game.maxPlayers = cappedMaxPlayers;
     this.deps.game.playerCollisionEnabled = room.settings.collisionEnabled;
+    this.deps.game.infiniteTimeEnabled = !!(room.settings.infiniteTimeEnabled ?? false);
     this.deps.game.setMultiplayerGameMode(roomMode);
     this.deps.game.allowCourseAdvance = true;
 
@@ -256,6 +257,7 @@ export class PeerSessionController {
     room.settings.maxPlayers = cappedMaxPlayers;
     this.deps.game.maxPlayers = cappedMaxPlayers;
     this.deps.game.playerCollisionEnabled = room.settings.collisionEnabled;
+    this.deps.game.infiniteTimeEnabled = !!(room.settings.infiniteTimeEnabled ?? false);
     this.deps.game.setMultiplayerGameMode(roomMode);
     this.deps.game.allowCourseAdvance = false;
     this.deps.game.addPlayer(room.hostId, { spectator: false });

@@ -170,6 +170,7 @@ export class NetplayConnectionStateController {
       this.deps.game.setPlayerInputFeed(player.id, null);
     }
     this.deps.game.allowCourseAdvance = true;
+    this.deps.game.infiniteTimeEnabled = false;
     this.deps.game.setMultiplayerGameMode(this.deps.modeStandard);
     this.stopLobbyHeartbeat();
     if (!preserveLobby) {
