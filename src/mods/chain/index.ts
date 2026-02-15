@@ -33,24 +33,25 @@ const CHAIN_LINK_LENGTH_STEP = 0.1;
 const CHAIN_SEGMENTS = 10;
 const CHAIN_SPAWN_SPACING = 1.5;
 const CHAIN_NODE_RADIUS = 0.25;
-const CHAIN_NODE_DAMPING = 0.995;
-const CHAIN_NODE_GRAVITY = 0.0028;
+const CHAIN_NODE_DAMPING = 1.0;
 const CHAIN_SUBSTEPS = 2;
-const CHAIN_CONSTRAINT_ITERS = 3;
+const CHAIN_CONSTRAINT_ITERS = 6;
 const CHAIN_LEASH_CORRECTION = 0.0;
 const CHAIN_LEASH_MAX_STEP = 0.15;
 const CHAIN_LEASH_VEL_BLEND = 0.2;
-const CHAIN_ENDPOINT_SNAP = 0.9;
-const CHAIN_ENDPOINT_TRANSFER = 0.75;
+const CHAIN_ENDPOINT_SNAP = 0.95;
+const CHAIN_ENDPOINT_TRANSFER = 0.0;
 const CHAIN_ENDPOINT_TRANSFER_MAX_STEP = 0.16;
-const CHAIN_ENDPOINT_SEGMENT_TRANSFER = 1.05;
-const CHAIN_ENDPOINT_SEGMENT_MAX_STEP = 0.18;
-const CHAIN_ENDPOINT_POS_BLEND = 0.5;
+const CHAIN_ENDPOINT_SEGMENT_TRANSFER = 2.5;
+const CHAIN_ENDPOINT_SEGMENT_MAX_STEP = 0.5;
+const CHAIN_ENDPOINT_POS_BLEND = 0.0;
 const CHAIN_ENDPOINT_PREV_BLEND = 0.9;
-const CHAIN_ENDPOINT_VEL_BLEND = 0.22;
-const CHAIN_COLLISION_IMPULSE_SCALE = 1.0;
-const CHAIN_COLLISION_IMPULSE_MAX = 0.6;
-const CHAIN_COLLISION_NEIGHBOR_BLEND = 0.6;
+const CHAIN_ENDPOINT_VEL_BLEND = 1.0;
+const CHAIN_ENDPOINT_COMMON_MODE_REJECT = 1.0;
+const CHAIN_ENDPOINT_OTHER_BALL_BIAS = 0.5;
+const CHAIN_NODE_GRAVITY_FALLBACK = 0.009799992;
+const CHAIN_COLLISION_IMPULSE_SCALE = 0.5;
+const CHAIN_COLLISION_IMPULSE_MAX = 4.0;
 const CHAIN_RIBBON_WIDTH = 0.1;
 const CHAIN_RIBBON_TEXTURE = 'src/mods/chain/chain.png';
 const CHAIN_PORTAL_SEAM_MAX_CORRECTION = 0.2;
@@ -605,17 +606,36 @@ function getChainEndpointTarget(
   neighbor: ChainNodeState,
   ball: any,
   usePrev: boolean,
+  neighborToEndpoint: Float32Array | null = null,
+  otherBall: any = null,
 ): Vec3 {
   const center = usePrev ? ball.prevPos : ball.pos;
   const radius = Math.max(0.01, ball.currRadius ?? 0.5);
-  let dx = endpoint.pos.x - ball.pos.x;
-  let dy = endpoint.pos.y - ball.pos.y;
-  let dz = endpoint.pos.z - ball.pos.z;
+  let neighborX = usePrev ? neighbor.prevPos.x : neighbor.pos.x;
+  let neighborY = usePrev ? neighbor.prevPos.y : neighbor.pos.y;
+  let neighborZ = usePrev ? neighbor.prevPos.z : neighbor.pos.z;
+  if (neighborToEndpoint) {
+    vec3.set(portalConstraintVecA, neighborX, neighborY, neighborZ);
+    vec3.transformMat4(portalConstraintVecA, portalConstraintVecA, neighborToEndpoint);
+    neighborX = portalConstraintVecA[0];
+    neighborY = portalConstraintVecA[1];
+    neighborZ = portalConstraintVecA[2];
+  }
+  let dx = neighborX - center.x;
+  let dy = neighborY - center.y;
+  let dz = neighborZ - center.z;
+  if (otherBall) {
+    const otherCenter = usePrev ? otherBall.prevPos : otherBall.pos;
+    dx += (otherCenter.x - center.x) * CHAIN_ENDPOINT_OTHER_BALL_BIAS;
+    dy += (otherCenter.y - center.y) * CHAIN_ENDPOINT_OTHER_BALL_BIAS;
+    dz += (otherCenter.z - center.z) * CHAIN_ENDPOINT_OTHER_BALL_BIAS;
+  }
   let len = sqrt((dx * dx) + (dy * dy) + (dz * dz));
   if (len <= 1e-6) {
-    dx = neighbor.pos.x - ball.pos.x;
-    dy = neighbor.pos.y - ball.pos.y;
-    dz = neighbor.pos.z - ball.pos.z;
+    const endpointSource = usePrev ? endpoint.prevPos : endpoint.pos;
+    dx = endpointSource.x - center.x;
+    dy = endpointSource.y - center.y;
+    dz = endpointSource.z - center.z;
     len = sqrt((dx * dx) + (dy * dy) + (dz * dz));
   }
   if (len <= 1e-6) {
@@ -637,6 +657,7 @@ function anchorChainEndpointToBallSurface(
   snap = 1,
   transferToBall = false,
   neighborToEndpoint: Float32Array | null = null,
+  otherBall: any = null,
 ): Vec3 | null {
   const radius = Math.max(0.01, ball.currRadius ?? 0.5);
   const preDx = endpoint.pos.x - ball.pos.x;
@@ -644,8 +665,8 @@ function anchorChainEndpointToBallSurface(
   const preDz = endpoint.pos.z - ball.pos.z;
   const preDist = sqrt((preDx * preDx) + (preDy * preDy) + (preDz * preDz));
   const preStretch = Math.max(0, preDist - radius);
-  const targetPos = getChainEndpointTarget(endpoint, neighbor, ball, false);
-  const targetPrevPos = getChainEndpointTarget(endpoint, neighbor, ball, true);
+  const targetPos = getChainEndpointTarget(endpoint, neighbor, ball, false, neighborToEndpoint, otherBall);
+  const targetPrevPos = getChainEndpointTarget(endpoint, neighbor, ball, true, neighborToEndpoint, otherBall);
   const corrX = (targetPos.x - endpoint.pos.x) * snap;
   const corrY = (targetPos.y - endpoint.pos.y) * snap;
   const corrZ = (targetPos.z - endpoint.pos.z) * snap;
@@ -674,12 +695,17 @@ function anchorChainEndpointToBallSurface(
   }
   const segDist = sqrt((segDx * segDx) + (segDy * segDy) + (segDz * segDz));
   const segStretch = Math.max(0, segDist - segmentRestLen);
+  const segTautRatio = segmentRestLen > 1e-6
+    ? Math.min(1, segStretch / segmentRestLen)
+    : 0;
   let transferX = 0;
   let transferY = 0;
   let transferZ = 0;
 
-  if (preStretch > 1e-6) {
-    const stretchRatio = Math.min(1, preStretch / radius);
+  if (preStretch > 1e-6 && segTautRatio > 1e-6) {
+    // Only feed endpoint correction back into the ball when the adjacent
+    // segment is taut; otherwise this behaves like artificial drag.
+    const stretchRatio = Math.min(1, preStretch / radius) * segTautRatio;
     let radialX = -corrX * CHAIN_ENDPOINT_TRANSFER * stretchRatio;
     let radialY = -corrY * CHAIN_ENDPOINT_TRANSFER * stretchRatio;
     let radialZ = -corrZ * CHAIN_ENDPOINT_TRANSFER * stretchRatio;
@@ -814,7 +840,7 @@ function applyChainNodeCollision(
   phys.vel.z = phys.pos.z - phys.prevPos.z;
   phys.radius = CHAIN_NODE_RADIUS;
   phys.gravityAccel = 0;
-  phys.restitution = 0.25;
+  phys.restitution = 0.75;
   phys.hardestColiSpeed = 0;
   phys.hardestColiAnimGroupId = 0;
   phys.friction = 0.01;
@@ -902,6 +928,10 @@ function solveChainSegmentConstraint(
     return;
   }
   const dist = sqrt(distSq);
+  if (dist <= segmentRestLen) {
+    // Rope-like behavior: allow slack/compression and only resist extension.
+    return;
+  }
   const diff = (dist - segmentRestLen) / dist;
   const half = diff * 0.5;
   let corrAx = dx * half;
@@ -998,14 +1028,6 @@ function collideChainInteriorNodes(
   }
 }
 
-function vec3Length(v: Vec3): number {
-  return sqrt((v.x * v.x) + (v.y * v.y) + (v.z * v.z));
-}
-
-function scaleVec3(v: Vec3, scale: number): Vec3 {
-  return { x: v.x * scale, y: v.y * scale, z: v.z * scale };
-}
-
 function readVec3OrFallback(source: any, fallback: Vec3): Vec3 {
   const x = Number.isFinite(source?.x) ? source.x : fallback.x;
   const y = Number.isFinite(source?.y) ? source.y : fallback.y;
@@ -1024,6 +1046,43 @@ function normalizeVec3OrFallback(source: Vec3, fallback: Vec3): Vec3 {
     };
   }
   return { x: fallback.x, y: fallback.y, z: fallback.z };
+}
+
+function getBallGravityAccel(ball: any): number {
+  let accel = Number.isFinite(ball?.accel) ? ball.accel : CHAIN_NODE_GRAVITY_FALLBACK;
+  if (!Number.isFinite(accel)) {
+    accel = CHAIN_NODE_GRAVITY_FALLBACK;
+  }
+  accel = Math.max(0, accel);
+  if (ball?.flags & BALL_FLAGS.FLAG_09) {
+    return -accel;
+  }
+  if (ball?.flags & BALL_FLAGS.FLAG_08) {
+    return 0;
+  }
+  return accel;
+}
+
+function integrateChainNode(
+  node: ChainNodeState,
+  gravityX: number,
+  gravityY: number,
+  gravityZ: number,
+  gravityAccelStep: number,
+  damping: number,
+) {
+  const oldX = node.pos.x;
+  const oldY = node.pos.y;
+  const oldZ = node.pos.z;
+  const velX = (node.pos.x - node.prevPos.x) * damping;
+  const velY = (node.pos.y - node.prevPos.y) * damping;
+  const velZ = (node.pos.z - node.prevPos.z) * damping;
+  node.prevPos.x = oldX;
+  node.prevPos.y = oldY;
+  node.prevPos.z = oldZ;
+  node.pos.x = oldX + velX + (gravityX * gravityAccelStep);
+  node.pos.y = oldY + velY + (gravityY * gravityAccelStep);
+  node.pos.z = oldZ + velZ + (gravityZ * gravityAccelStep);
 }
 
 function buildCollisionImpulseByPlayer(state: ChainState, players: any[]): Map<number, Vec3> {
@@ -1068,20 +1127,20 @@ function buildCollisionImpulseByPlayer(state: ChainState, players: any[]): Map<n
   return impulseByPlayer;
 }
 
-function applyImpulseToNode(node: ChainNodeState, impulse: Vec3, scale: number) {
+function applyImpulseToNode(node: ChainNodeState, impulseX: number, impulseY: number, impulseZ: number, scale: number) {
   if (scale <= 1e-6) {
     return;
   }
-  const impulseX = impulse.x * scale;
-  const impulseY = impulse.y * scale;
-  const impulseZ = impulse.z * scale;
-  node.prevPos.x -= impulseX;
-  node.prevPos.y -= impulseY;
-  node.prevPos.z -= impulseZ;
+  const scaledImpulseX = impulseX * scale;
+  const scaledImpulseY = impulseY * scale;
+  const scaledImpulseZ = impulseZ * scale;
+  node.prevPos.x -= scaledImpulseX;
+  node.prevPos.y -= scaledImpulseY;
+  node.prevPos.z -= scaledImpulseZ;
   if (node.renderPrevPos) {
-    node.renderPrevPos.x -= impulseX;
-    node.renderPrevPos.y -= impulseY;
-    node.renderPrevPos.z -= impulseZ;
+    node.renderPrevPos.x -= scaledImpulseX;
+    node.renderPrevPos.y -= scaledImpulseY;
+    node.renderPrevPos.z -= scaledImpulseZ;
   }
 }
 
@@ -1109,7 +1168,7 @@ function mapImpulseIntoLinkSpace(
   return impulse;
 }
 
-function applyCollisionImpulseToLinkEndpoints(
+function applyCollisionImpulseToLinkNodes(
   link: ChainLinkState,
   impulseByPlayer: Map<number, Vec3>,
   portalConstraint: ChainPortalConstraint | null,
@@ -1124,32 +1183,35 @@ function applyCollisionImpulseToLinkEndpoints(
   if (!endpointAImpulse && !endpointBImpulse) {
     return;
   }
-  const first = link.nodes[0];
-  const firstNeighbor = link.nodes[1];
-  const last = link.nodes[link.nodes.length - 1];
-  const lastNeighbor = link.nodes[link.nodes.length - 2];
-
-  if (endpointAImpulse) {
-    const impulseInLinkSpace = mapImpulseIntoLinkSpace(
-      endpointAImpulse,
-      link,
-      'A',
-      portalConstraint,
-      portalFollowerId,
-    );
-    applyImpulseToNode(first, impulseInLinkSpace, scale);
-    applyImpulseToNode(firstNeighbor, impulseInLinkSpace, scale * CHAIN_COLLISION_NEIGHBOR_BLEND);
-  }
-  if (endpointBImpulse) {
-    const impulseInLinkSpace = mapImpulseIntoLinkSpace(
-      endpointBImpulse,
-      link,
-      'B',
-      portalConstraint,
-      portalFollowerId,
-    );
-    applyImpulseToNode(last, impulseInLinkSpace, scale);
-    applyImpulseToNode(lastNeighbor, impulseInLinkSpace, scale * CHAIN_COLLISION_NEIGHBOR_BLEND);
+  const impulseA = endpointAImpulse
+    ? mapImpulseIntoLinkSpace(endpointAImpulse, link, 'A', portalConstraint, portalFollowerId)
+    : null;
+  const impulseB = endpointBImpulse
+    ? mapImpulseIntoLinkSpace(endpointBImpulse, link, 'B', portalConstraint, portalFollowerId)
+    : null;
+  const lastIndex = Math.max(1, link.nodes.length - 1);
+  for (let i = 0; i < link.nodes.length; i += 1) {
+    const t = i / lastIndex;
+    const blendA = 1 - t;
+    const blendB = t;
+    let impulseX = 0;
+    let impulseY = 0;
+    let impulseZ = 0;
+    if (impulseA) {
+      impulseX += impulseA.x * blendA;
+      impulseY += impulseA.y * blendA;
+      impulseZ += impulseA.z * blendA;
+    }
+    if (impulseB) {
+      impulseX += impulseB.x * blendB;
+      impulseY += impulseB.y * blendB;
+      impulseZ += impulseB.z * blendB;
+    }
+    const impulseLenSq = (impulseX * impulseX) + (impulseY * impulseY) + (impulseZ * impulseZ);
+    if (impulseLenSq <= 1e-10) {
+      continue;
+    }
+    applyImpulseToNode(link.nodes[i], impulseX, impulseY, impulseZ, scale);
   }
 }
 
@@ -1160,15 +1222,81 @@ function equalizeLinkEndpointTransfers(
   if (!transferA || !transferB) {
     return { transferA, transferB };
   }
-  const lenA = vec3Length(transferA);
-  const lenB = vec3Length(transferB);
-  if (lenA <= 1e-6 || lenB <= 1e-6) {
+  const dot = (transferA.x * transferB.x) + (transferA.y * transferB.y) + (transferA.z * transferB.z);
+  if (dot <= 0) {
+    // Opposing endpoint transfers represent real chain tension; keep them.
     return { transferA, transferB };
   }
-  const targetLen = (lenA + lenB) * 0.5;
+  // Same-direction endpoint transfer is mostly common-mode drag. Reject most,
+  // but keep a little so the chain does not feel too disconnected.
+  const commonModeReject = CHAIN_ENDPOINT_COMMON_MODE_REJECT;
+  const netX = transferA.x + transferB.x;
+  const netY = transferA.y + transferB.y;
+  const netZ = transferA.z + transferB.z;
+  const balancedA = {
+    x: transferA.x - (netX * 0.5 * commonModeReject),
+    y: transferA.y - (netY * 0.5 * commonModeReject),
+    z: transferA.z - (netZ * 0.5 * commonModeReject),
+  };
+  const balancedB = {
+    x: transferB.x - (netX * 0.5 * commonModeReject),
+    y: transferB.y - (netY * 0.5 * commonModeReject),
+    z: transferB.z - (netZ * 0.5 * commonModeReject),
+  };
+  const lenASq = (balancedA.x * balancedA.x) + (balancedA.y * balancedA.y) + (balancedA.z * balancedA.z);
+  const lenBSq = (balancedB.x * balancedB.x) + (balancedB.y * balancedB.y) + (balancedB.z * balancedB.z);
   return {
-    transferA: scaleVec3(transferA, targetLen / lenA),
-    transferB: scaleVec3(transferB, targetLen / lenB),
+    transferA: lenASq > 1e-10 ? balancedA : null,
+    transferB: lenBSq > 1e-10 ? balancedB : null,
+  };
+}
+
+function balanceLinkEndpointTransfers(
+  playerA: any,
+  playerB: any,
+  transferA: Vec3 | null,
+  transferB: Vec3 | null,
+): { transferA: Vec3 | null; transferB: Vec3 | null } {
+  if (!transferA && !transferB) {
+    return { transferA: null, transferB: null };
+  }
+  const dx = (Number.isFinite(playerB?.ball?.pos?.x) ? playerB.ball.pos.x : 0)
+    - (Number.isFinite(playerA?.ball?.pos?.x) ? playerA.ball.pos.x : 0);
+  const dy = (Number.isFinite(playerB?.ball?.pos?.y) ? playerB.ball.pos.y : 0)
+    - (Number.isFinite(playerA?.ball?.pos?.y) ? playerA.ball.pos.y : 0);
+  const dz = (Number.isFinite(playerB?.ball?.pos?.z) ? playerB.ball.pos.z : 0)
+    - (Number.isFinite(playerA?.ball?.pos?.z) ? playerA.ball.pos.z : 0);
+  const distSq = (dx * dx) + (dy * dy) + (dz * dz);
+  if (distSq <= 1e-8) {
+    return equalizeLinkEndpointTransfers(transferA, transferB);
+  }
+  const dist = sqrt(distSq);
+  const invDist = 1 / dist;
+  const axisX = dx * invDist;
+  const axisY = dy * invDist;
+  const axisZ = dz * invDist;
+  const pullA = transferA
+    ? Math.max(0, (transferA.x * axisX) + (transferA.y * axisY) + (transferA.z * axisZ))
+    : 0;
+  const pullB = transferB
+    ? Math.max(0, -((transferB.x * axisX) + (transferB.y * axisY) + (transferB.z * axisZ)))
+    : 0;
+  const relAlong = ((Number.isFinite(playerB?.ball?.vel?.x) ? playerB.ball.vel.x : 0)
+      - (Number.isFinite(playerA?.ball?.vel?.x) ? playerA.ball.vel.x : 0)) * axisX
+    + ((Number.isFinite(playerB?.ball?.vel?.y) ? playerB.ball.vel.y : 0)
+      - (Number.isFinite(playerA?.ball?.vel?.y) ? playerA.ball.vel.y : 0)) * axisY
+    + ((Number.isFinite(playerB?.ball?.vel?.z) ? playerB.ball.vel.z : 0)
+      - (Number.isFinite(playerA?.ball?.vel?.z) ? playerA.ball.vel.z : 0)) * axisZ;
+  if (relAlong <= 1e-6) {
+    return { transferA: null, transferB: null };
+  }
+  const tension = Math.min(0.5 * (pullA + pullB), 0.5 * relAlong);
+  if (tension <= 1e-6) {
+    return { transferA: null, transferB: null };
+  }
+  return {
+    transferA: { x: axisX * tension, y: axisY * tension, z: axisZ * tension },
+    transferB: { x: -axisX * tension, y: -axisY * tension, z: -axisZ * tension },
   };
 }
 
@@ -1230,6 +1358,7 @@ function anchorLinkEndpoints(
       snap,
       allowTransferA,
       firstNeighborToEndpoint,
+      ballBForChain,
     );
     transferB = anchorChainEndpointToBallSurface(
       last,
@@ -1239,6 +1368,7 @@ function anchorLinkEndpoints(
       snap,
       allowTransferB,
       lastNeighborToEndpoint,
+      ballAForChain,
     );
   } else {
     transferB = anchorChainEndpointToBallSurface(
@@ -1249,6 +1379,7 @@ function anchorLinkEndpoints(
       snap,
       allowTransferB,
       lastNeighborToEndpoint,
+      ballAForChain,
     );
     transferA = anchorChainEndpointToBallSurface(
       first,
@@ -1258,6 +1389,7 @@ function anchorLinkEndpoints(
       snap,
       allowTransferA,
       firstNeighborToEndpoint,
+      ballBForChain,
     );
   }
   if (transferA && transferAToRealLinear) {
@@ -1303,7 +1435,6 @@ function simulateChainedTogether(
   const chainLinkLength = getChainLinkLength(game);
   const substeps = Math.max(1, CHAIN_SUBSTEPS);
   const substepDamping = Math.pow(CHAIN_NODE_DAMPING, 1 / substeps);
-  const substepGravity = CHAIN_NODE_GRAVITY / substeps;
   const substepImpulseScale = 1 / substeps;
   const segmentRestLen = chainLinkLength / CHAIN_SEGMENTS;
   const collisionImpulseByPlayer = buildCollisionImpulseByPlayer(state, players);
@@ -1347,6 +1478,8 @@ function simulateChainedTogether(
       let gravityBX = Number.isFinite(playerB?.world?.gravity?.x) ? playerB.world.gravity.x : normalizedGravity.x;
       let gravityBY = Number.isFinite(playerB?.world?.gravity?.y) ? playerB.world.gravity.y : normalizedGravity.y;
       let gravityBZ = Number.isFinite(playerB?.world?.gravity?.z) ? playerB.world.gravity.z : normalizedGravity.z;
+      const gravityAccelA = getBallGravityAccel(playerA?.ball);
+      const gravityAccelB = getBallGravityAccel(playerB?.ball);
       const gravityALen = sqrt((gravityAX * gravityAX) + (gravityAY * gravityAY) + (gravityAZ * gravityAZ));
       if (gravityALen > 1e-6) {
         const invGravityALen = 1 / gravityALen;
@@ -1369,6 +1502,16 @@ function simulateChainedTogether(
         gravityBY = normalizedGravity.y;
         gravityBZ = normalizedGravity.z;
       }
+      const endpointGravityAccelA = gravityAccelA / substeps;
+      const endpointGravityAccelB = gravityAccelB / substeps;
+      integrateChainNode(
+        link.nodes[0],
+        gravityAX,
+        gravityAY,
+        gravityAZ,
+        endpointGravityAccelA,
+        substepDamping,
+      );
       const blendDenom = Math.max(1, link.nodes.length - 2);
       for (let i = 1; i < link.nodes.length - 1; i += 1) {
         const node = link.nodes[i];
@@ -1390,19 +1533,23 @@ function simulateChainedTogether(
           blendGravityY = normalizedGravity.y;
           blendGravityZ = normalizedGravity.z;
         }
-        const oldX = node.pos.x;
-        const oldY = node.pos.y;
-        const oldZ = node.pos.z;
-        const velX = (node.pos.x - node.prevPos.x) * substepDamping;
-        const velY = (node.pos.y - node.prevPos.y) * substepDamping;
-        const velZ = (node.pos.z - node.prevPos.z) * substepDamping;
-        node.prevPos.x = oldX;
-        node.prevPos.y = oldY;
-        node.prevPos.z = oldZ;
-        node.pos.x = oldX + velX + (blendGravityX * substepGravity);
-        node.pos.y = oldY + velY + (blendGravityY * substepGravity);
-        node.pos.z = oldZ + velZ + (blendGravityZ * substepGravity);
+        integrateChainNode(
+          node,
+          blendGravityX,
+          blendGravityY,
+          blendGravityZ,
+          ((gravityAccelA * blendInv) + (gravityAccelB * blendT)) / substeps,
+          substepDamping,
+        );
       }
+      integrateChainNode(
+        link.nodes[link.nodes.length - 1],
+        gravityBX,
+        gravityBY,
+        gravityBZ,
+        endpointGravityAccelB,
+        substepDamping,
+      );
     }
 
     const portalConstraintByLink = new Map<ChainLinkState, ChainPortalConstraint | null>();
@@ -1450,7 +1597,7 @@ function simulateChainedTogether(
           link.portalFollowerId,
         );
         if (iter === 0 && collisionImpulseByPlayer.size > 0) {
-          applyCollisionImpulseToLinkEndpoints(
+          applyCollisionImpulseToLinkNodes(
             link,
             collisionImpulseByPlayer,
             portalConstraint,
@@ -1499,8 +1646,8 @@ function simulateChainedTogether(
         link.portalFollowerId,
       );
       const balancedTransfers = portalConstraint
-        ? { transferA, transferB }
-        : equalizeLinkEndpointTransfers(transferA, transferB);
+        ? equalizeLinkEndpointTransfers(transferA, transferB)
+        : balanceLinkEndpointTransfers(playerA, playerB, transferA, transferB);
       if (balancedTransfers.transferA) {
         const pending = pendingBallTransfers.get(playerA.id) ?? { x: 0, y: 0, z: 0, endpoints: [] };
         pending.x += balancedTransfers.transferA.x;

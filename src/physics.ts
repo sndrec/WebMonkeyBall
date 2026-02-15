@@ -377,7 +377,8 @@ export function resolveBallBallCollision(ballA, ballB) {
   if (relVel >= 0) {
     return;
   }
-  const restitution = (ballA.restitution + ballB.restitution) * 0.5;
+  // Player-vs-player collisions use fully elastic response.
+  const restitution = 1.0;
   const impulse = -((1 + restitution) * relVel) * 0.5;
   ballA.vel.x -= impulse * nx;
   ballA.vel.y -= impulse * ny;
