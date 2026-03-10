@@ -301,6 +301,7 @@ export class BallPreviewController {
     ballAppearance.hemi2Color = appearance.hemi2Color;
     ballAppearance.hemi1Texture = appearance.hemi1Texture;
     ballAppearance.hemi2Texture = appearance.hemi2Texture;
+    ballAppearance.playerBillboardTexture = appearance.playerBillboardTexture;
     this.spinRadians += (deltaMs / 1000) * PREVIEW_BALL_SPIN_RADIANS_PER_SECOND;
     if (this.spinRadians > (Math.PI * 2)) {
       this.spinRadians -= Math.PI * 2;

@@ -53,11 +53,11 @@ import type {
 } from "./Render.js";
 import * as SD from "./Stagedef.js";
 import { BgInfos, StageId, StageInfo } from "./StageInfo.js";
-import { MkbTime } from "./Utils.js";
+import {getMat4RotY, MkbTime} from "./Utils.js";
 import { AnimGroup } from "./AnimGroup.js";
 import { Lighting, LightingGroups } from "./Lighting.js";
 import { CommonModelID } from "./ModelInfo.js";
-import { GAME_SOURCES } from "../../shared/constants/index.js";
+import {BALL_STATES, GAME_SOURCES, S16_TO_RAD} from "../../shared/constants/index.js";
 import {
     BALL_HEMI1_DEFAULT_COLOR,
     BALL_HEMI2_DEFAULT_COLOR,
@@ -68,6 +68,7 @@ import { S16_TO_RADIANS } from "./Utils.js";
 import { Vec3Zero, transformVec3Mat4w0, transformVec3Mat4w1 } from "../MathHelpers.js";
 import { TevLayerInst } from "./TevLayer.js";
 import { BONUS_WAVE_MODEL_NAME, BONUS_WAVE_VERTEX_GLOBAL, createBonusWaveMaterialHacks } from "./BonusWave.js";
+import {raycastStageDown} from "../../collision";
 
 // Immutable parsed stage definition
 export type StageData = {
@@ -120,7 +121,11 @@ export type BallRenderState = {
         hemi2Color?: string;
         hemi1Texture?: string;
         hemi2Texture?: string;
+        playerBillboardTexture?: string;
     };
+    apeYaw: number;
+    speed: number;
+    goaled: boolean;
 };
 
 export type GoalTimerDigits = {
@@ -142,7 +147,7 @@ const SHADOW_FADE_SCALE = 0.2;
 const SHADOW_PARAMS_WORDS = 40;
 const SHADOW_UBO_INDEX = 1;
 const STREAK_VERTEX_SIZE = 24;
-const BALL_TEXTURE_MAX_DIM = 512;
+const BALL_TEXTURE_MAX_DIM = 1024;
 const BALL_HEMI_Y_ROT_180 = mat4.fromYRotation(mat4.create(), Math.PI);
 const BALL_COLOR_GAIN_EPSILON = 0.001;
 const BALL_COLOR_GAIN_MAX = 20.0;
@@ -240,6 +245,7 @@ const scratchRevolutionAgFromWorld = mat4.create();
 const scratchRevolutionCameraWorld = vec3.create();
 const scratchRevolutionCameraLocal = vec3.create();
 const scratchRevolutionBallLocal = vec3.create();
+const BALL_PLAYER_CHAR_BILLBOARD_MODEL = "gb_grad"; // This model is offset by 0,1,1 in common.gma!
 
 function coligridLookupStagedef(animGroup: SD.AnimGroup, x: number, z: number): number[] | null {
     const stepX = animGroup.gridStepX;
@@ -870,6 +876,15 @@ class BallInst {
     private hemi2Color: [number, number, number] = [1, 1, 1];
     private hemi1Texture?: string;
     private hemi2Texture?: string;
+    private playerBillboardTexture?: string;
+    private playerBillboardModel: ModelInst;
+    private spritesheetFrameCountX = 4;
+    private spritesheetFrameCountY = 3;
+    private lastApeYaw = 0;
+    private lastSpeed = 0;
+    private hasGoaled = false;
+    private animTimer = 0;
+    private currentAnimFrame = 0;
 
     constructor(
         modelCache: ModelCache,
@@ -908,6 +923,7 @@ class BallInst {
         }
         writeRgbFromHex(this.hemi1Color, this.hemi1ColorHex);
         writeRgbFromHex(this.hemi2Color, this.hemi2ColorHex);
+        this.playerBillboardModel = modelCache.getModel(BALL_PLAYER_CHAR_BILLBOARD_MODEL, GmaSrc.Common);
     }
 
     private computeSlotColorGains(model: ModelInst): [number, number, number] {
@@ -962,6 +978,7 @@ class BallInst {
         }
         this.hemi1Texture = typeof appearance?.hemi1Texture === "string" ? appearance.hemi1Texture : undefined;
         this.hemi2Texture = typeof appearance?.hemi2Texture === "string" ? appearance.hemi2Texture : undefined;
+        this.playerBillboardTexture = typeof appearance?.playerBillboardTexture === "string" ? appearance.playerBillboardTexture : undefined;
     }
 
     public setState(state: BallRenderState | null): void {
@@ -974,6 +991,9 @@ class BallInst {
         quat.set(this.rotation, state.orientation.x, state.orientation.y, state.orientation.z, state.orientation.w);
         const scale = state.radius / BALL_BASE_RADIUS;
         vec3.set(this.scale, scale, scale, scale);
+        this.lastSpeed = state.speed;
+        this.lastApeYaw = state.apeYaw;
+        this.hasGoaled = state.goaled;
         this.updateAppearance(state);
     }
 
@@ -1019,6 +1039,151 @@ class BallInst {
             rp.textureOverride = textureOverride;
             rp.textureOverrideForceTex0 = textureOverride !== null;
             slot.model.prepareToRender(ctx, rp);
+        }
+
+        // Player texture billboard
+        if (this.playerBillboardTexture && this.visible) {
+            const renderParams = scratchRenderParams;
+            renderParams.reset();
+            renderParams.lighting = state.lighting;
+
+            const viewFromWorld = ctx.viewFromWorld ?? ctx.viewerInput.camera.viewMatrix;
+
+            mat4.copy(renderParams.viewFromModel, viewFromWorld);
+            mat4.translate(renderParams.viewFromModel, renderParams.viewFromModel, this.pos);
+
+            // Billboard
+            const cameraRotY = getMat4RotY(ctx.viewerInput.camera.worldMatrix);
+            mat4.rotateY(renderParams.viewFromModel, renderParams.viewFromModel, cameraRotY);
+
+            // Adjust since our model isn't centered in the ball.
+            // Y value may need to be tweaked depending on height
+            mat4.translate(renderParams.viewFromModel, renderParams.viewFromModel, vec3.fromValues(0, -0.4, 0.33));
+
+            // Scale may need to be tweaked depending on height
+            const scale = 0.333;
+            mat4.scale(renderParams.viewFromModel, renderParams.viewFromModel, [scale, scale, -scale]);
+            
+            // Apply player billboard texture
+            const customTexture = this.resolveTextureMapping(this.playerBillboardTexture);
+            if (customTexture && customTexture.gfxTexture && customTexture.gfxSampler) {
+                renderParams.textureOverride = customTexture;
+                renderParams.textureOverrideForceTex0 = true;
+
+                if (customTexture.width > 0 && customTexture.height > 0 &&
+                    (this.spritesheetFrameCountX > 1 || this.spritesheetFrameCountY > 1)) {
+
+                    const apeYawRad = this.lastApeYaw * S16_TO_RAD;
+                    //console.log(`Ape yaw: ${apeYawRad*(180/Math.PI)}, camera angle: ${cameraRotY*(180/Math.PI)} speed: ${this.lastSpeed}`);
+                    let apeRelativeToCamRad = apeYawRad - cameraRotY;
+                    apeRelativeToCamRad = Math.atan2(Math.sin(apeRelativeToCamRad), Math.cos(apeRelativeToCamRad));
+                    const apeRelativeToCamDeg = apeRelativeToCamRad * (180 / Math.PI);
+                    //console.log(`Ape yaw: ${apeRelativeToCamDeg} deg`);
+
+                    const forwardThreshold = 7.5; // +- angle to determine whether or not we're going forward
+                    const backThreshold = 50.0; // +- angle to determine whether or not we're going backward
+
+                    const minimumSpeed = 0.02; // minimum speed ~2mph
+                    const maxSpeed = 0.35; // Full animation speed at 0.5m/frame - ~53mph
+
+                    // 4x3 grid has the following layout (I = idle, M = moving, B = backwards, F = forwards, R = right) (X = falling, G = goaled)
+                    // IB, MB1, MB2, IF
+                    // MF1, MF2, IR, MR1
+                    // MR2, X1, X2, G
+                    // this layout was taken from taronuke's mawaru gold marble rolling minigame because I don't know how to sprite sheet!
+
+                    let baseFrame: number;
+                    let isMirrored = false;
+                    let isFalling = false;
+
+                    // Has goaled (OVERRIDES EVERYTHING ELSE - INCLUDING ANIMATION
+                    if (this.hasGoaled) {
+                        baseFrame = 11;
+                    }
+                    // Are we falling, or going way too fast (>200mph)?
+                    else if (this.lastSpeed > 1.5 || !state.raycastStageDown(this.pos)) {
+                        baseFrame = 9;
+                        isFalling = true;
+                    }
+                    // Forward - also if we're going too fast, just assume that we're going forwards
+                    // This is because apeyaw is unreliable above the max speed. TODO: a better way?
+                    else if ( (apeRelativeToCamDeg >= -forwardThreshold && apeRelativeToCamDeg <= forwardThreshold) || this.lastSpeed >= maxSpeed) {
+                        baseFrame = 3;
+                    }
+                    // Backwards
+                    else if (apeRelativeToCamDeg > backThreshold || apeRelativeToCamDeg < -backThreshold) {
+                        baseFrame = 0;
+                    }
+                    // Left
+                    else if (apeRelativeToCamDeg > forwardThreshold && apeRelativeToCamDeg <= backThreshold) {
+                        baseFrame = 6;
+                        isMirrored = true;
+                    }
+                    // Right
+                    else {
+                        baseFrame = 6;
+                    }
+
+                    const speedRatio = Math.min(this.lastSpeed, maxSpeed) / maxSpeed;
+                    const framesPerSwitch = Math.max(15, Math.round(60.0 * (1.0 - speedRatio)));
+
+                    this.animTimer += 1;
+                    if (this.animTimer >= framesPerSwitch) {
+                        this.animTimer = 0;
+                        this.currentAnimFrame = this.currentAnimFrame === 0 ? 1 : 0;
+                    }
+
+                    let animFrameOffset = 0;
+
+                    // Idle or goaled - ignore animation
+                    if (!isFalling && (this.lastSpeed < minimumSpeed || this.hasGoaled)) {
+                        animFrameOffset = baseFrame;
+                    }
+                    // Falling animation doesn't have an idle frame
+                    else if (isFalling) {
+                        animFrameOffset = baseFrame + this.currentAnimFrame;
+                    }
+                    else {
+                        animFrameOffset = baseFrame + this.currentAnimFrame+1;
+                    }
+
+                    //console.log(`I: ${frameIndexWithAnim} S: ${this.lastSpeed}, FPS: ${framesPerSwitch}, AF: ${this.currentAnimFrame}, AT: ${this.animTimer}`);
+
+                    let frameU: number;
+                    let frameV: number;
+                    let uOffset: number;
+                    let vOffset: number;
+                    let uSize: number;
+                    let vSize: number;
+
+                    if (isMirrored) {
+                        frameU = animFrameOffset % this.spritesheetFrameCountX;
+                        frameV = Math.floor(animFrameOffset / this.spritesheetFrameCountX);
+                        uOffset = (frameU + 1) / this.spritesheetFrameCountX;
+                        vOffset = (frameV) / this.spritesheetFrameCountY;
+                        uSize = -1.0 / this.spritesheetFrameCountX;
+                        vSize = 1.0 / this.spritesheetFrameCountY;
+                    }
+                    else {
+                        frameU = animFrameOffset % this.spritesheetFrameCountX;
+                        frameV = Math.floor(animFrameOffset / this.spritesheetFrameCountX);
+                        uOffset = frameU / this.spritesheetFrameCountX;
+                        vOffset = frameV / this.spritesheetFrameCountY;
+                        uSize = 1.0 / this.spritesheetFrameCountX;
+                        vSize = 1.0 / this.spritesheetFrameCountY;
+                    }
+
+                    mat4.translate(renderParams.texMtx2, renderParams.texMtx2, [uOffset, vOffset, 0.0]);
+                    mat4.scale(renderParams.texMtx2, renderParams.texMtx2, [uSize, vSize, 1.0]);
+                }
+                else {
+                    mat4.identity(renderParams.texMtx);
+                }
+            }
+            
+            renderParams.disableSpecular = true;
+            
+            this.playerBillboardModel.prepareToRender(ctx, renderParams);
         }
     }
 }

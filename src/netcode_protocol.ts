@@ -135,6 +135,7 @@ export type PlayerProfile = {
   name: string;
   avatarData?: string;
   ball?: BallAppearanceProfile;
+  playerBillboardTexture?: string;
 };
 
 export type PlayerProfileMessage = {

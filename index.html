@@ -592,6 +592,20 @@
                 <button id="profile-ball-hemi2-texture-clear" class="ghost compact" type="button">Clear Hemisphere 2 Texture</button>
               </label>
             </div>
+            <div class="profile-ball-texture-row">
+              <label class="field">
+                <span>Player Texture (4x3 spritesheet)</span>
+                <input
+                  id="profile-player-billboard-texture-input"
+                  class="text-input"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                />
+                <button id="profile-player-billboard-texture-clear" class="ghost compact" type="button">Clear Player Texture</button>
+              </label>
+            </div>
+            <div id="profile-player-billboard-texture-error" class="control-hint hidden"></div>
+            <div class="control-hint">Ball textures sync in multiplayer. Max 512x512 and 100kb per hemisphere, max 1024x768 and 200kb per player spritesheet</div>
             <div class="profile-ball-preview-row">
               <div class="profile-ball-preview-label">Ball Preview</div>
               <div class="profile-ball-preview-window">
@@ -599,7 +613,6 @@
               </div>
             </div>
             <div id="profile-ball-texture-error" class="control-hint hidden"></div>
-            <div class="control-hint">Ball textures sync in multiplayer. Max 512x512 and 100kb per hemisphere.</div>
           </div>
           <div class="panel-section">
             <div class="panel-section-header">

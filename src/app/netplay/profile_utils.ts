@@ -21,6 +21,11 @@ const PROFILE_BALL_TEXTURE_MAX_BYTES = 100 * 1024;
 const PROFILE_BALL_TEXTURE_MAX_DIM = 512;
 const PROFILE_BALL_TEXTURE_MAX_DATA_URL_CHARS = 160000;
 const PROFILE_BALL_TEXTURE_MIME = PROFILE_AVATAR_MIME;
+const PROFILE_BILLBOARD_TEXTURE_MAX_BYTES = 200 * 1024;
+const PROFILE_BILLBOARD_TEXTURE_MAX_WIDTH = 1024;
+const PROFILE_BILLBOARD_TEXTURE_MAX_HEIGHT = 768;
+const PROFILE_BILLBOARD_TEXTURE_MAX_DATA_URL_CHARS = 400000;
+const PROFILE_BILLBOARD_TEXTURE_MIME = PROFILE_AVATAR_MIME;
 const CHAT_MAX_CHARS = 200;
 
 export function sanitizeProfileName(value: string) {
@@ -85,6 +90,15 @@ export function sanitizeBallTextureDataUrl(value?: unknown): string | undefined 
   );
 }
 
+export function sanitizePlayerBillboardTextureDataUrl(value?: unknown): string | undefined {
+  return sanitizeImageDataUrl(
+    value,
+    PROFILE_BILLBOARD_TEXTURE_MAX_DATA_URL_CHARS,
+    PROFILE_BILLBOARD_TEXTURE_MAX_BYTES,
+    PROFILE_BILLBOARD_TEXTURE_MIME,
+  );
+}
+
 function sanitizeImageDataUrl(
   value: unknown,
   maxDataUrlChars: number,
@@ -120,6 +134,7 @@ export function sanitizeBallAppearanceProfile(appearance?: Partial<BallAppearanc
   const hemi2Color = sanitizeBallColorHex(appearance.hemi2Color);
   const hemi1Texture = sanitizeBallTextureDataUrl(appearance.hemi1Texture);
   const hemi2Texture = sanitizeBallTextureDataUrl(appearance.hemi2Texture);
+  const billboardTexture = sanitizeBallTextureDataUrl(appearance.playerBillboardTexture);
   const compact: BallAppearanceProfile = {};
   if (hemi1Color && hemi1Color !== BALL_HEMI1_DEFAULT_COLOR) {
     compact.hemi1Color = hemi1Color;
@@ -132,6 +147,9 @@ export function sanitizeBallAppearanceProfile(appearance?: Partial<BallAppearanc
   }
   if (hemi2Texture) {
     compact.hemi2Texture = hemi2Texture;
+  }
+  if (billboardTexture) {
+    compact.playerBillboardTexture = billboardTexture;
   }
   return Object.keys(compact).length > 0 ? compact : undefined;
 }
@@ -148,6 +166,7 @@ export function sanitizeProfile(profile?: Partial<PlayerProfile>): PlayerProfile
     name: sanitizeProfileName(profile?.name ?? ''),
     avatarData: sanitizeAvatarDataUrl(profile?.avatarData),
     ball: sanitizeBallAppearanceProfile(profile?.ball),
+    playerBillboardTexture: sanitizePlayerBillboardTextureDataUrl(profile?.playerBillboardTexture),
   };
 }
 
@@ -212,6 +231,10 @@ function isAllowedAvatarFile(file: File) {
 
 function isAllowedBallTextureFile(file: File) {
   return isAllowedFileByMime(file, PROFILE_BALL_TEXTURE_MIME);
+}
+
+function isAllowedPlayerBillboardTextureFile(file: File) {
+  return isAllowedFileByMime(file, PROFILE_BILLBOARD_TEXTURE_MIME);
 }
 
 export async function validateAvatarFile(
@@ -283,6 +306,43 @@ export async function validateBallTextureFile(
   const sanitized = sanitizeBallTextureDataUrl(dataUrl);
   if (!sanitized) {
     setError('Ball texture could not be validated.');
+    return null;
+  }
+  return sanitized;
+}
+
+export async function validatePlayerBillboardTextureFile(
+  file: File,
+  setError: (message?: string) => void,
+): Promise<string | null> {
+  setError();
+  if (!isAllowedPlayerBillboardTextureFile(file)) {
+    setError('Player texture must be PNG, JPG, or WebP.');
+    return null;
+  }
+  if (file.size > PROFILE_BILLBOARD_TEXTURE_MAX_BYTES) {
+    setError('Player texture must be smaller than 200kb.');
+    return null;
+  }
+  const dimensions = await loadImageDimensionsFromFile(file);
+  if (!dimensions) {
+    setError('Failed to read player texture.');
+    return null;
+  }
+  if (dimensions.width > PROFILE_BILLBOARD_TEXTURE_MAX_WIDTH || dimensions.height > PROFILE_BILLBOARD_TEXTURE_MAX_HEIGHT) {
+    setError('Player texture must be a spritesheet and smaller than 1024x768.');
+    return null;
+  }
+  let dataUrl = '';
+  try {
+    dataUrl = await readFileAsDataUrl(file);
+  } catch {
+    setError('Failed to read player texture file.');
+    return null;
+  }
+  const sanitized = sanitizePlayerBillboardTextureDataUrl(dataUrl);
+  if (!sanitized) {
+    setError('Player texture could not be validated.');
     return null;
   }
   return sanitized;

@@ -15,8 +15,11 @@ type ProfileUiDeps = {
   profileBallTextureError: HTMLElement | null;
   profileBallHemi1ColorInput: HTMLInputElement | null;
   profileBallHemi2ColorInput: HTMLInputElement | null;
+  profilePlayerBillboardTextureInput: HTMLInputElement | null;
   profileBallHemi1TextureClearButton: HTMLButtonElement | null;
   profileBallHemi2TextureClearButton: HTMLButtonElement | null;
+  profilePlayerBillboardTextureClearButton: HTMLButtonElement | null;
+  profilePlayerBillboardTextureError: HTMLElement | null;
   hidePlayerNamesToggle: HTMLInputElement | null;
   hideLobbyNamesToggle: HTMLInputElement | null;
   hideRemoteBallTexturesToggle: HTMLInputElement | null;
@@ -60,6 +63,22 @@ export class ProfileUiController {
     profileBallTextureError.textContent = '';
     profileBallTextureError.classList.add('hidden');
     profileBallTextureError.classList.remove('error');
+  }
+
+  setPlayerBillboardTextureError(message?: string) {
+    const { profilePlayerBillboardTextureError } = this.deps;
+    if (!profilePlayerBillboardTextureError) {
+      return;
+    }
+    if (message) {
+      profilePlayerBillboardTextureError.textContent = message;
+      profilePlayerBillboardTextureError.classList.remove('hidden');
+      profilePlayerBillboardTextureError.classList.add('error');
+      return;
+    }
+    profilePlayerBillboardTextureError.textContent = '';
+    profilePlayerBillboardTextureError.classList.add('hidden');
+    profilePlayerBillboardTextureError.classList.remove('error');
   }
 
   getAvatarValidationCached(dataUrl: string): Promise<boolean> {
@@ -116,6 +135,9 @@ export class ProfileUiController {
     }
     if (this.deps.profileBallHemi2TextureClearButton) {
       this.deps.profileBallHemi2TextureClearButton.disabled = !appearance.hemi2Texture;
+    }
+    if (this.deps.profilePlayerBillboardTextureClearButton) {
+      this.deps.profilePlayerBillboardTextureClearButton.disabled = !localProfile.playerBillboardTexture;
     }
   }
 }

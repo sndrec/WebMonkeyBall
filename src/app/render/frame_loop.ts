@@ -84,6 +84,9 @@ function applyBallAppearanceFromProfile(
   appearance.hemi2Texture = allowTextures && typeof profileBall?.hemi2Texture === 'string'
     ? profileBall.hemi2Texture
     : undefined;
+  appearance.playerBillboardTexture = allowTextures && typeof profile?.playerBillboardTexture === 'string'
+    ? profile.playerBillboardTexture
+    : undefined;
 }
 
 export function startRenderLoop(deps: FrameLoopDeps) {

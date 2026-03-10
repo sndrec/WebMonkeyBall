@@ -2526,6 +2526,9 @@ export class GameCore {
         },
         radius: this.ball.currRadius,
         visible: (this.ball.flags & BALL_FLAGS.INVISIBLE) === 0,
+        apeYaw: 0,
+        speed: 0,
+        goaled: false,
       };
     }
     const renderState = this.renderBallState;
@@ -2546,6 +2549,10 @@ export class GameCore {
     }
     renderState.radius = this.ball.currRadius;
     renderState.visible = (this.ball.flags & BALL_FLAGS.INVISIBLE) === 0;
+    renderState.apeYaw = this.ball.apeYaw;
+    renderState.speed = this.ball.speed;
+    renderState.goaled = (this.ball.flags & BALL_FLAGS.GOAL) === BALL_FLAGS.GOAL;
+
     return this.renderBallState;
   }
 
@@ -2570,6 +2577,9 @@ export class GameCore {
           },
           radius: ball.currRadius,
           visible: (ball.flags & BALL_FLAGS.INVISIBLE) === 0,
+          apeYaw: 0,
+          speed: 0,
+          goaled: false,
         };
       }
     }
@@ -2596,6 +2606,9 @@ export class GameCore {
       renderState.visible = !player.isSpectator
         && !player.pendingSpawn
         && (ball.flags & BALL_FLAGS.INVISIBLE) === 0;
+      renderState.apeYaw = ball.apeYaw;
+      renderState.speed = ball.speed;
+      renderState.goaled = (ball.flags & BALL_FLAGS.GOAL) === BALL_FLAGS.GOAL;
     }
     return this.renderBallStates;
   }

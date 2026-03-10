@@ -174,6 +174,9 @@ export function collectMainDomRefs() {
   const hidePlayerNamesToggle = document.getElementById('hide-player-names') as HTMLInputElement | null;
   const hideLobbyNamesToggle = document.getElementById('hide-lobby-names') as HTMLInputElement | null;
   const hideRemoteBallTexturesToggle = document.getElementById('hide-remote-ball-textures') as HTMLInputElement | null;
+  const profilePlayerBillboardTextureInput = document.getElementById('profile-player-billboard-texture-input') as HTMLInputElement | null;
+  const profilePlayerBillboardTextureClearButton = document.getElementById('profile-player-billboard-texture-clear') as HTMLButtonElement | null;
+  const profilePlayerBillboardTextureError = document.getElementById('profile-player-billboard-texture-error') as HTMLElement | null;
 
   const nameplateLayer = document.createElement('div');
   nameplateLayer.id = 'nameplate-layer';
@@ -349,6 +352,9 @@ export function collectMainDomRefs() {
     profileBallHemi2TextureClearButton,
     profileBallPreviewCanvas,
     profileBallTextureError,
+    profilePlayerBillboardTextureInput,
+    profilePlayerBillboardTextureClearButton,
+    profilePlayerBillboardTextureError,
     hidePlayerNamesToggle,
     hideLobbyNamesToggle,
     hideRemoteBallTexturesToggle,

@@ -19,6 +19,8 @@ type LobbyBindingsOptions = {
   profileBallHemi2TextureInput: HTMLInputElement | null;
   profileBallHemi1TextureClearButton: HTMLButtonElement | null;
   profileBallHemi2TextureClearButton: HTMLButtonElement | null;
+  profilePlayerBillboardTextureInput: HTMLInputElement | null;
+  profilePlayerBillboardTextureClearButton: HTMLButtonElement | null;
   hidePlayerNamesToggle: HTMLInputElement | null;
   hideLobbyNamesToggle: HTMLInputElement | null;
   hideRemoteBallTexturesToggle: HTMLInputElement | null;
@@ -44,8 +46,10 @@ type LobbyBindingsOptions = {
   onProfileBallHemi2ColorInput: (value: string, input: HTMLInputElement) => void;
   onProfileBallHemi1TextureChange: (file: File | null) => Promise<void>;
   onProfileBallHemi2TextureChange: (file: File | null) => Promise<void>;
+  onProfilePlayerBillboardTextureChange: (file: File | null) => Promise<void>;
   onProfileBallHemi1TextureClear: () => void;
   onProfileBallHemi2TextureClear: () => void;
+  onProfilePlayerBillboardTextureClear: () => void;
   onHidePlayerNamesChange: (checked: boolean) => void;
   onHideLobbyNamesChange: (checked: boolean) => void;
   onHideRemoteBallTexturesChange: (checked: boolean) => void;
@@ -135,11 +139,21 @@ export function bindLobbyEventHandlers(options: LobbyBindingsOptions) {
     }
     await options.onProfileBallHemi2TextureChange(file);
   });
+  options.profilePlayerBillboardTextureInput?.addEventListener('change', async () => {
+    const file = options.profilePlayerBillboardTextureInput?.files?.[0] ?? null;
+    if (options.profilePlayerBillboardTextureInput) {
+      options.profilePlayerBillboardTextureInput.value = '';
+    }
+    await options.onProfilePlayerBillboardTextureChange(file);
+  });
   options.profileBallHemi1TextureClearButton?.addEventListener('click', () => {
     options.onProfileBallHemi1TextureClear();
   });
   options.profileBallHemi2TextureClearButton?.addEventListener('click', () => {
     options.onProfileBallHemi2TextureClear();
+  });
+  options.profilePlayerBillboardTextureClearButton?.addEventListener('click', () => {
+    options.onProfilePlayerBillboardTextureClear();
   });
   options.hidePlayerNamesToggle?.addEventListener('change', () => {
     options.onHidePlayerNamesChange(!!options.hidePlayerNamesToggle?.checked);

@@ -216,6 +216,7 @@ export class NetplayMessageFlowController {
     const baseProfile: PlayerProfile = {
       name: sanitized.name,
       ball: sanitized.ball,
+      playerBillboardTexture: sanitized.playerBillboardTexture,
     };
     this.deps.lobbyProfiles.set(playerId, baseProfile);
     if (broadcast) {
@@ -244,6 +245,7 @@ export class NetplayMessageFlowController {
         name: current?.name ?? sanitized.name,
         ball: current?.ball,
         avatarData,
+        playerBillboardTexture: current?.playerBillboardTexture ?? sanitized.playerBillboardTexture,
       };
       this.deps.lobbyProfiles.set(playerId, finalProfile);
       if (broadcast) {
